@@ -344,7 +344,7 @@ function teammatesInit(spawn) {
 function teammatesTick(dt) {
   for (const m of S.team) {
     if (m.down) continue;
-    m.t = (m.t + dt * 0.04) % 1;
+    m.t = (((m.t + dt * 0.04) % 1) + 1) % 1; // keep in [0, 1) even if dt is ever negative
     const n = m.path.length, f = m.t * n, i = Math.floor(f), a = m.path[i], b = m.path[(i + 1) % n];
     const next = a.clone().lerp(b, f - i);
     m.hdg = norm360(THREE.MathUtils.radToDeg(Math.atan2(next.x - m.pos.x, -(next.z - m.pos.z))));
@@ -763,7 +763,10 @@ addEventListener('resize', layout);
 let last = performance.now();
 let ceilY = Infinity; // set after scale calibration
 function frame(now) {
-  const dt = Math.min(0.1, (now - last) / 1000);
+  // Schedule first, so one bad frame can't stop the loop.
+  requestAnimationFrame(frame);
+  // rAF's timestamp can be slightly earlier than the performance.now() taken at boot.
+  const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
   last = now;
   if (S.view === 'resp' && S.wheel === null) {
     const sp = ((S.keys.has('shift') ? 2.8 : 1.4) * dt) / M;
@@ -796,7 +799,6 @@ function frame(now) {
   // In live responder view the camera feed is the world, so skip the 3D render entirely.
   if (!(S.live && S.view === 'resp')) renderer.render(scene, S.view === 'cmd' ? cmdCam : fpCam);
   drawHUD(now);
-  requestAnimationFrame(frame);
 }
 
 // ---------------------------------------------------------------- boot
