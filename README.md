@@ -1,109 +1,145 @@
 # junction-2026
 
-**A 3D diary of the day for people who can't easily say what happened, and for the people who care for them.**
+**Look at it, nod, and say it.** AI glasses for anyone who knows what they want to say but can't
+find the words. We start with aphasia after a stroke.
 
-Gaussian splatting turns a home into a living 3D record. It keeps updating through the day, so a
-carer can see what's going on now and scrub back to see what happened and what changed. The person
-can point at a place or a moment in the scene, or simply look at something while wearing AI glasses,
-to say what they can't put into words. The app turns that into a sentence they confirm before it is
-spoken.
+The wearer looks at something (their pill box, the kettle, a photo of their daughter) and, if they
+can, adds a word or two: "morning…". The glasses see what they're looking at, and an AI makes its
+best guesses at what they mean, using the time of day and what it knows about their life. Each
+guess plays privately into the glasses' speakers: "Did I take my morning pills?" A **nod** means
+yes, and the phone says the sentence out loud. A **head shake** brings the next guess. There is no
+reading, typing or picture-board hunting, and nothing is ever said without that nod.
 
 ## The problem
 
-- **The words won't come.** Around a third of stroke survivors have aphasia: a median of 30% in acute
-  care and 34% in rehabilitation ([Flowers et al., 2016](https://pubmed.ncbi.nlm.nih.gov/27063364/)).
-  They know what they want to say but can't find the words. People with dementia may not remember
-  what happened at all.
-- **Carers arrive to open questions.** Did she take her morning pills? Did he eat? Did anyone visit?
-  Has something been moved that could cause a fall? Today the answers come from notes, memory or
-  guesswork.
+**When someone with aphasia wants to say something, the people around them have to guess, one
+yes/no question at a time. It's slow, it depends on who's in the room, and when nobody's there,
+they can't say it at all.**
 
-## How it works
+- **Who:** about a third of stroke survivors have aphasia: a median of 30% in acute care and 34% in
+  rehabilitation ([Flowers et al., 2016](https://pubmed.ncbi.nlm.nih.gov/27063364/)). We focus on
+  people who understand well but can't find words (non-fluent aphasia).
+- **Today:** partners are taught to play twenty questions ("pizza, yes [nod] or no [shake]?") or to
+  write options to point at ([aphasia.com](https://www.aphasia.com/?p=3850)). Picture boards and
+  speech devices exist, but they're slow and generic.
+- **Why it matters:** quality of life in aphasia is linked to depression, emotional distress and
+  shrinking social networks ([review](https://openaccess.city.ac.uk/id/eprint/1095/1/APMR-D-10-01160%20Aphasia%20QOL%20Review%20R2%20CLEAN.pdf)).
 
-1. **Capture.** The room is scanned into Gaussian splats: by a phone today, and later by AI glasses or
-   a fixed camera. Each new capture is merged in. Surfaces seen again get sharper and more solid,
-   and things that have gone fade out.
-2. **Timeline.** Each capture is kept as a snapshot. You can scrub through the day in 3D, with what
-   changed since the last snapshot highlighted: the pill box moved, a plate appeared, a chair is out
-   of place.
-3. **Look or point to say it.** The person looks at the pill box (glasses) or taps it in the scene,
-   and adds a fragment such as "morning…". The app suggests sentences like "Did I take my morning
-   pills?", plays them privately first, and speaks one aloud **only after the person confirms it**.
-4. **Carer view.** Shows what's different since the last visit, plus any questions the person
-   flagged.
+**The insight:** the bottleneck is *guessing what they mean*, and yes/no is often the one thing
+they can still do reliably. So the AI does the guessing, and the person only nods or shakes their
+head.
 
-**Why 3D and not video:** a day of video takes hours to watch and has no sense of place. The 3D record
-shows only *what* changed and *where*. Pointing at a place, or looking at it, is a way to communicate
-that doesn't need words.
+## Why AI glasses (Meta challenge: "AI Glasses for Everyone, Everyday")
+
+- **The first-person camera answers "what do you mean?"** Looking at the pill box is the pointing.
+- **The motion sensors turn a nod into "yes".** That's the answer method aphasia therapists already
+  teach.
+- **The open-ear speakers make guesses private,** so only the chosen sentence is said aloud.
+- **It's hands-free and always there,** unlike a tablet left on the table.
+- **It's for everyone, every day.** We start with aphasia, but the same look-and-nod loop helps
+  anyone who can't find the words at times: people with dementia, autistic people who sometimes
+  can't speak, people after a tracheostomy, or a traveller stuck in a foreign language.
+
+## What makes it different
+
+| Today | This project |
+| --- | --- |
+| Partner guesses with yes/no questions | The AI guesses with the context of what you're looking at; you still just say yes/no |
+| Picture boards: generic icons, many taps, reading | Your real objects, no reading or typing |
+| AI keyword-to-sentence prototypes (research): type keywords | Look plus an optional word |
+| Only works when someone is there to guess | Works alone, too |
 
 ## Challenges we're targeting
 
 | Challenge | Fit |
 | --- | --- |
-| **Meta: AI Glasses for Everyone, Everyday** (main) | The first-person view *is* the interaction: look at the pill box, say "morning…", hear the sentence. The glasses also capture the day for the diary. |
-| Google DeepMind: Best Use of Gemini API / Gemma | Gemini: understand the scene ("what changed?") and turn look + fragment into sentences. Gemma: on-device for privacy. |
-| MLH: Best Use of ElevenLabs | Speak the confirmed sentence in a natural voice, or the person's own voice if they consent and have old recordings. |
-| Arduino: Best Use of Arduino UNO Q | Cheap event sensors (pill-box lid, door, motion) that timestamp moments on the timeline. |
-| Verda Compute Track | Full Gaussian-splat training of the day's captures on GPUs, beyond the live phone version. |
+| **Meta: AI Glasses for Everyone, Everyday** (main) | Look, then nod: the glasses' first-person view and motion sensors *are* the interface. |
+| Google DeepMind: Best Use of Gemini API | Gemini turns photo + fragment + personal context into ranked guesses. |
+| MLH: Best Use of ElevenLabs | Natural voice for the spoken sentence, or the person's own voice with consent. |
+| Arduino: Best Use of Arduino UNO Q | Home sensors (pill-box lid, kettle) feed context: "the pill box was opened at 08:12". |
+| Aiven: Best Use of Aiven | Home events and the carer log stored in Aiven PostgreSQL (Bartek). |
+| Modal: Best Use of Modal | Serve the fragment-transcription model on Modal's GPUs. |
+| Cloudinary (only if used for photo handling) | Image capture and processing in the pipeline. |
 
-Tech challenges can be combined with the main challenge. Full list: <https://junction2026.com/challenges>.
+Tech challenges can be combined with the main challenge. Only claim the ones we genuinely use,
+because their judges check. Full list: <https://junction2026.com/challenges>.
 
-## Demo plan
+## How it works
 
-1. Scan a corner set up as a living room in the "morning".
-2. Change things to stand in for the day: move the pill box, leave a cup, push a chair out.
-3. Rescan, then scrub the timeline. The changes light up in 3D.
-4. A teammate playing the patient looks at the pill box and says "morning". The app offers "Did I
-   take my morning pills?"; they confirm, and it is spoken.
-5. Race the same sentence on a picture board against the app, with a stopwatch.
+1. **Look (and maybe say a word).** The glasses take a photo and record a few seconds of audio.
+2. **Guess.** `/guess` sends the photo, the transcribed fragment, the time, recent home events and
+   a small personal profile (names, medicines, routines) to Gemini, which returns three ranked,
+   short, first-person sentences.
+3. **Hear and nod.** Guesses play one at a time into the glasses' speakers. A nod means yes, a
+   shake means next, and "none of these" asks for another word.
+4. **Say it.** The confirmed sentence is spoken from the phone in a natural voice.
+5. **Context and log.** Home sensors add context, and the carer sees a log of what was said and
+   any needs flagged.
 
-## What exists already
+### Shared formats (agree these first, in the "Contracts" issue)
 
-Day-1 prototypes are on branch `feat/rescue-ping-hud` (not merged into `main`):
+```jsonc
+// POST /guess  -> 3 ranked guesses (the server never speaks)
+{ "image": "<jpeg base64>", "fragments": ["morning"], "time": "08:40",
+  "recentEvents": [{ "ts": "…", "label": "pillbox_open", "source": "uno-q" }],
+  "profile": { "names": ["Anna (daughter)"], "meds": ["blood thinner, 8:00"], "places": ["kitchen"] },
+  "rejected": ["Can I have coffee?"] }
+-> { "guesses": [{ "text": "Did I take my morning pills?", "confidence": 0.72 }, …] }
 
-- `demo/live-splat.html`: live Gaussian-splat scanning on a phone. AR mode on Android Chrome uses
-  ARCore depth and tracking; other phones get an AI-depth fallback. It already merges repeat
-  observations and fades what's gone, which is the core of "what changed".
-- `demo/index.html`: a glasses-style pointer display and a 3D overview, from an earlier
-  rescue-pings concept.
-
-To run them:
-
-```bash
-git switch feat/rescue-ping-hud
-python -m http.server 5173
+// Yes/no from the glasses' motion sensor: { "answer": "yes" | "no", "confidence": 0.9 }
+// POST /speak   { "text": "…" } -> audio
+// POST /events  (UNO Q) { "label": "pillbox_open", "ts": "…", "source": "uno-q" }
+// GET  /log     confirmed sentences and flagged needs, for the carer
 ```
 
-Then open <http://localhost:5173/demo/live-splat.html>.
+### Workstreams (one Linear issue each, labelled per `coord/PROTOCOL.md`)
 
-Still to build: snapshots and timeline scrubbing, change highlighting between snapshots,
-look/tap-to-sentence with confirm-before-speaking, and a carer view.
+| Owner | Issue | Done when |
+| --- | --- | --- |
+| all | Contracts: agree the formats above | Everyone has commented "ok" or proposed a change |
+| all (`human-needed`) | Read Meta's challenge page: which glasses we get, and SDK access | We know whether we demo on real glasses or a phone stand-in |
+| Seb | Guesser: `/guess` prompt with Gemini (photo + fragment + context + rejected guesses) | 20 test scenes give the right sentence in the top 3 for most of them (we report the rate) |
+| Seb | Nod/shake detector from the glasses' motion data | Nods and shakes are recognised reliably in a quick test with 3 people |
+| Seb | Fragment transcription that copes with single words and hesitation | "coffee… no… pill… morning" comes through intact |
+| Bartek | API: `/guess` proxy (keys on the server), `/events`, `/log`, one HTTPS URL | The phone app and the UNO Q can both reach it |
+| Bartek | `/speak` with ElevenLabs | The confirmed sentence plays within ~1 s |
+| Ayman | UNO Q home sensors (pill-box lid, kettle) → `POST /events`; stretch: big physical yes/no buttons | Opening the pill box shows up as context for the next guess |
+| Ed | Glasses app: capture photo and audio, play guesses privately, nod/shake loop (phone camera fallback) | The demo happy path works end to end |
+| Ed | Carer log view, pitch, demo script, picture-board race | A rehearsed 90-second demo plus a backup video |
+| all (`human-needed`) | One quote from a speech-language therapist or a carer | The quote is in the pitch |
 
-## Possible split (roles from `coord/PROTOCOL.md`)
+### Milestones
 
-- **Seb (ML):** change detection between snapshots, describing what changed, sentence suggestions
-  from look/tap plus fragments.
-- **Bartek (backend):** storing snapshots and events, serving the timeline.
-- **Ayman (Arduino):** event sensors on the UNO Q (pill-box lid, door, motion).
-- **Ed (general):** timeline and carer UI, the glasses flow, demo and pitch.
+- **Fri night (M0):** formats agreed, glasses access known, skeletons running with dummy data.
+- **Sat 12:00 (M1):** happy path: look at pill box → 3 guesses → nod → spoken.
+- **Sat 20:00 (M2):** nod/shake on the glasses, sensor context, carer log, test-scene hit rate measured.
+- **Sun morning (M3):** polish, rehearse, backup video. Check the official submission deadline.
+
+### Demo script (90 seconds)
+
+1. "A third of stroke survivors lose their words. Today, the people around them have to guess."
+   Start a stopwatch and try one sentence on a picture board.
+2. The teammate playing the patient looks at the pill box and says "morning…". They hear "Did I
+   take my morning pills?", nod, and the phone says it. Stop the stopwatch.
+3. Bonus: the app adds "The pill box was opened at 08:12" (UNO Q sensor). That's a fact, not a
+   medical claim.
+4. "No reading, no typing, and nothing is said without their nod."
+
+### Stretch (only if the core is done)
+
+- **Point at things out of view:** a Gaussian-splat scan of the home (prototype on branch
+  `feat/rescue-ping-hud`, `demo/live-splat.html`) lets the person pick the kettle in the kitchen
+  from the bedroom.
+- **"Show your day":** a timeline of home events to answer "how was your day?".
+- Learning the person's most-used sentences, and their own voice (with consent).
 
 ## Privacy and consent
 
-Recording someone's home all day is sensitive. These are non-negotiable:
-
-- consent from the person, or their legal representative;
-- only the agreed room, with a visible pause;
-- processing on the device where possible;
-- automatic deletion after a set time;
-- nothing spoken without the person's confirmation;
-- voice cloning only with explicit consent.
-
-## Open questions
-
-- Capture: glasses, phone sweeps or a fixed camera? How often?
-- Who can see the timeline: the person, carers, family, nurses?
-- What should be described automatically, and what left for people to look at?
-- Validate with a speech-language therapist or a carer before the pitch.
+- Photos are processed for the guess and not stored by default.
+- Consent from the person, or their legal representative.
+- Nothing spoken without the person's confirmation.
+- Voice cloning only with explicit consent.
+- Sensor data stays in the home where possible.
 
 ## Team coordination
 
