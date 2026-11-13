@@ -15,6 +15,7 @@ Hosted on GitHub Pages (once Pages is enabled for this repo):
 
 - Phone, live camera: <https://thetechjumbo.github.io/junction-2026/demo/?live>
 - Desktop, 3D scan: <https://thetechjumbo.github.io/junction-2026/demo/>
+- Phone, live Gaussian-splat scan: <https://thetechjumbo.github.io/junction-2026/demo/live-splat.html>
 
 Or run it locally from the repo root:
 
@@ -64,6 +65,36 @@ see through the lenses, and the HUD floats on top.
 On the real glasses no camera feed is needed, because you see the world through the lenses. Meta's
 web apps don't get camera access anyway; only the native SDK does.
 
+### Live splat scan (`demo/live-splat.html`)
+
+Point a phone camera around and watch the room turn into Gaussian splats as you go. It runs
+entirely in the phone's browser:
+
+1. **Depth.** Each frame goes through Depth Anything V2 (small) via transformers.js. It runs on the
+   GPU (WebGPU) where available, otherwise on the CPU. The model is 19 MB on phones, cached after
+   the first load.
+2. **Placement.** Every other depth pixel becomes a coloured 3D Gaussian, placed using the phone's
+   orientation sensors. Each one is a flat disc facing the camera.
+3. **Fusion over time.** Points within 2 cm merge into one Gaussian, which averages its colour and
+   position. The more often a spot is seen, the more solid and tighter its Gaussian gets.
+4. **Change.** If the camera now sees *past* a Gaussian (a person walked away, a door opened), it
+   loses weight and fades out.
+
+**Follow** shows the scan from where the phone points. **Orbit** lets you fly around it, with
+the phone's position drawn as a frustum. The **Splat size** slider shrinks the Gaussians so you
+can see the individual blobs.
+
+Limits:
+- **Stand in one spot and pan.** Only rotation is tracked; walking around needs 6-DoF tracking
+  (WebXR on Android, or the glasses' native SDK).
+- **Depth is relative, not metric.** Each frame is rescaled to 0.4–5 m, so sizes are approximate.
+- **This is not full 3DGS training.** It's the first stage of real-time splatting systems: Gaussians
+  placed from depth, then fused. Optimising them against the images takes a desktop GPU.
+
+URL options: `?res=` (model input, multiple of 14), `?fov=` (camera FOV across the long side),
+`?near=` / `?far=` (metres), `?voxel=` (merge size), `?max=` (splat budget),
+`?device=wasm|webgpu` and `?dtype=`.
+
 ## What the wearer sees
 
 Meta's display is small (600×600 px, about 20° diagonal, right eye only), so the HUD shows very little:
@@ -111,7 +142,8 @@ VICTIM ✚ · HAZARD ⚠ · CLEARED ☒ (FEMA "X") · NEED HANDS ◎ · EXIT ↑
 
 ## Repo
 
-- `demo/index.html`: the demo (three.js + [Spark](https://sparkjs.dev) splat renderer, no build step)
+- `demo/index.html`: the ping demo (three.js + [Spark](https://sparkjs.dev) splat renderer, no build step)
+- `demo/live-splat.html`: live camera → depth → Gaussian splat scan
 - `demo/shared/`: ping vocabulary and geo helpers (bearing, distance, clock direction)
 - `server/`: *parked, untested.* A WebSocket ping relay with a drill simulator and TAK/CoT export,
   started before we decided to keep things simple. The demo doesn't use it.

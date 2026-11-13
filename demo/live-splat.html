@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Beacon Live Splat</title>
+<style>
+  :root {
+    --bg: #05070a; --ink: #e8eef5; --dim: #8b98a7; --line: #233040; --panel: rgba(8, 12, 18, .84);
+    --blue: #4fc3ff; --red: #ff6b5b;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; } /* id rules like #gate { display: grid } would otherwise win */
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 8px 12px; }
+  button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+  header { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 12px; right: 12px; display: flex; gap: 8px;
+    flex-wrap: wrap; align-items: center; pointer-events: none; }
+  header > * { pointer-events: auto; }
+  .brand, .seg, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .brand { font-weight: 700; letter-spacing: .08em; padding: 8px 12px; }
+  .brand small { font-weight: 400; letter-spacing: 0; color: var(--dim); margin-left: 6px; }
+  .seg { display: flex; overflow: hidden; }
+  .seg button { color: var(--dim); }
+  .seg button[aria-pressed="true"] { color: var(--ink); background: #13202d; box-shadow: inset 0 -2px 0 var(--blue); }
+  a.back { color: var(--dim); text-decoration: none; padding: 8px 4px; }
+
+  /* The pipeline, left to right: camera frame -> AI depth -> Gaussians (the big view). */
+  .pip { position: fixed; right: 12px; top: 64px; width: min(30vw, 220px); display: flex; flex-direction: column; gap: 8px; }
+  .pip figure { margin: 0; position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #000; }
+  .pip video, .pip canvas { display: block; width: 100%; height: auto; }
+  .pip figcaption { position: absolute; left: 6px; top: 4px; font-size: 11px; color: #fff; text-shadow: 0 1px 2px #000; letter-spacing: .05em; }
+
+  .panel { position: fixed; left: 12px; bottom: max(12px, env(safe-area-inset-bottom)); padding: 10px 12px; display: flex;
+    flex-direction: column; gap: 8px; max-width: min(460px, calc(100vw - 24px)); }
+  .stats { font: 12px/1.5 ui-monospace, "Cascadia Mono", monospace; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .stats b { color: var(--ink); font-weight: 600; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .row button { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  label { font-size: 12px; color: var(--dim); display: flex; gap: 6px; align-items: center; }
+
+  #gate { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 5; padding: 16px; }
+  #gate .box { max-width: 480px; display: flex; flex-direction: column; gap: 10px; }
+  #gate h1 { font-size: 20px; margin: 0; }
+  #gate p, #gate ol { color: var(--dim); margin: 0; }
+  #gate ol { padding-left: 20px; }
+  #start { border: 1px solid var(--blue); border-radius: 6px; align-self: flex-start; padding: 10px 16px; }
+  #start:disabled { opacity: .5; cursor: default; }
+  .bar { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--blue); transition: width .2s; }
+  #gmsg.err { color: var(--red); }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<header>
+  <div class="brand">BEACON<small>live splat</small></div>
+  <div class="seg" role="group" aria-label="View">
+    <button id="vFollow" aria-pressed="true" title="See the scan from where your phone is pointing">Follow</button>
+    <button id="vOrbit" aria-pressed="false" title="Drag to fly around the scan from outside">Orbit</button>
+  </div>
+</header>
+
+<div class="pip">
+  <figure><video id="cam" playsinline muted autoplay></video><figcaption>1 · CAMERA</figcaption></figure>
+  <figure><canvas id="depth" width="2" height="2"></canvas><figcaption>2 · DEPTH (AI)</figcaption></figure>
+</div>
+
+<div class="panel">
+  <div class="stats" id="stats">Waiting for camera…</div>
+  <div class="row">
+    <button id="btnPause">Pause scan</button>
+    <button id="btnClear">Clear</button>
+    <label>Splat size <input id="size" type="range" min="0.15" max="1.6" step="0.05" value="1"></label>
+    <a class="back" href="./?live">← ping demo</a>
+  </div>
+</div>
+
+<div id="gate"><div class="box">
+  <h1>Live Gaussian splat</h1>
+  <p>Turns what your camera sees into a 3D Gaussian-splat scan, live, as you look around.</p>
+  <ol>
+    <li>Each frame, a small AI model (Depth Anything V2) estimates how far away every pixel is.</li>
+    <li>Pixels become coloured 3D Gaussians, placed using the phone's orientation sensors.</li>
+    <li>When a spot is seen again, its Gaussian is merged: it gets more solid and tighter. Gaussians that turn out to be empty space (something moved) fade away.</li>
+  </ol>
+  <p>Stand in one spot and pan slowly. The first start downloads a 20–30 MB model, which is then cached.</p>
+  <button id="start">Start camera</button>
+  <div class="bar" id="mbar" hidden><i id="mfill"></i></div>
+  <p id="gmsg"></p>
+</div></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "@sparkjsdev/spark": "https://cdn.jsdelivr.net/npm/@sparkjsdev/spark@2.4.0/dist/spark.module.js"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { SparkRenderer, SplatMesh, PackedSplats } from '@sparkjsdev/spark';
+
+const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/dist/transformers.min.js';
+const q = new URLSearchParams(location.search);
+const PHONE = matchMedia('(pointer: coarse)').matches;
+const CFG = {
+  model: 'onnx-community/depth-anything-v2-small',
+  res: Number(q.get('res')) || 0, // model input size (multiple of 14); 0 = pick by backend speed
+  fovLong: Number(q.get('fov')) || 65, // camera field of view across the frame's long side, degrees
+  near: Number(q.get('near')) || 0.4, // the model gives relative depth; map it to this metre range
+  far: Number(q.get('far')) || 5,
+  voxel: Number(q.get("voxel")) || 0.02, // metres: observations closer than this merge into one Gaussian
+  stride: 2, // sample every Nth depth pixel
+  maxSplats: Number(q.get('max')) || (PHONE ? 200000 : 300000),
+  memory: 24, // how many observations a Gaussian averages over (lower = adapts faster to change)
+};
+const $ = (id) => document.getElementById(id);
+
+// ------------------------------------------------------------------ renderer + views
+const canvas = $('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, PHONE ? 1.25 : 1.5));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070a);
+scene.add(new SparkRenderer({ renderer }));
+
+const followCam = new THREE.PerspectiveCamera(60, 1, 0.02, 100);
+const orbitCam = new THREE.PerspectiveCamera(60, 1, 0.02, 100);
+orbitCam.position.set(1.6, 1.4, 1.8);
+const orbit = new OrbitControls(orbitCam, canvas);
+orbit.target.set(0, 0, -1.6);
+orbit.enableDamping = true;
+orbit.enabled = false;
+orbit.update();
+
+// Where the phone is and which way it points, shown in the orbit view.
+const proxy = new THREE.PerspectiveCamera(50, 0.75, 0.05, 0.35);
+const camHelper = new THREE.CameraHelper(proxy);
+camHelper.visible = false;
+scene.add(camHelper);
+
+let view = 'follow';
+function setView(v) {
+  view = v;
+  orbit.enabled = v === 'orbit';
+  camHelper.visible = v === 'orbit';
+  $('vFollow').setAttribute('aria-pressed', v === 'follow');
+  $('vOrbit').setAttribute('aria-pressed', v === 'orbit');
+}
+$('vFollow').onclick = () => setView('follow');
+$('vOrbit').onclick = () => setView('orbit');
+
+function layout() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  for (const c of [followCam, orbitCam]) { c.aspect = innerWidth / innerHeight; c.updateProjectionMatrix(); }
+}
+addEventListener('resize', layout);
+layout();
+
+// ------------------------------------------------------------------ the Gaussians
+// Spark draws from a PackedSplats buffer we rewrite as the scan changes.
+const N = CFG.maxSplats;
+const packed = new PackedSplats({ maxSplats: N });
+packed.ensureSplats(N);
+packed.numSplats = 0;
+const mesh = new SplatMesh({ packedSplats: packed });
+mesh.frustumCulled = false;
+scene.add(mesh);
+
+// Fusion store: each Gaussian keeps running sums so it can average new observations.
+const S = {
+  x: new Float32Array(N), y: new Float32Array(N), z: new Float32Array(N),
+  r: new Float32Array(N), g: new Float32Array(N), b: new Float32Array(N),
+  rad: new Float32Array(N), w: new Float32Array(N),
+  qx: new Float32Array(N), qy: new Float32Array(N), qz: new Float32Array(N), qw: new Float32Array(N),
+  key: new Float64Array(N), alive: new Uint8Array(N), dirty: new Uint8Array(N),
+};
+const grid = new Map(); // voxel key -> Gaussian index
+let high = 0; // indices [0, high) have been used
+let live = 0;
+const free = [];
+const dirtyList = [];
+let sizeMul = 1;
+const totals = { added: 0, merged: 0, faded: 0, frames: 0 };
+
+const markDirty = (i) => { if (!S.dirty[i]) { S.dirty[i] = 1; dirtyList.push(i); } };
+const voxelKey = (x, y, z) => {
+  const ix = Math.floor(x / CFG.voxel) + 2048, iy = Math.floor(y / CFG.voxel) + 2048, iz = Math.floor(z / CFG.voxel) + 2048;
+  return (ix * 4096 + iy) * 4096 + iz;
+};
+// Scale a Gaussian's sums so its weight becomes w (keeps the averages, forgets old evidence).
+function reweight(i, w) {
+  const f = w / S.w[i];
+  S.x[i] *= f; S.y[i] *= f; S.z[i] *= f; S.r[i] *= f; S.g[i] *= f; S.b[i] *= f; S.rad[i] *= f;
+  S.w[i] = w;
+}
+
+const zAxis = new THREE.Vector3(0, 0, 1), tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+function observe(x, y, z, r, g, b, rad, nx, ny, nz) {
+  const key = voxelKey(x, y, z);
+  let i = grid.get(key);
+  if (i === undefined) {
+    i = free.length ? free.pop() : high < N ? high++ : -1;
+    if (i < 0) return; // full
+    S.x[i] = x; S.y[i] = y; S.z[i] = z; S.r[i] = r; S.g[i] = g; S.b[i] = b; S.rad[i] = rad; S.w[i] = 1;
+    // Flat disc facing the camera that first saw it (a surfel): Gaussian z axis -> view direction.
+    tmpQ.setFromUnitVectors(zAxis, tmpV.set(nx, ny, nz));
+    S.qx[i] = tmpQ.x; S.qy[i] = tmpQ.y; S.qz[i] = tmpQ.z; S.qw[i] = tmpQ.w;
+    S.key[i] = key; S.alive[i] = 1;
+    grid.set(key, i);
+    live++;
+    totals.added++;
+  } else {
+    if (S.w[i] >= CFG.memory) reweight(i, CFG.memory - 1);
+    S.x[i] += x; S.y[i] += y; S.z[i] += z; S.r[i] += r; S.g[i] += g; S.b[i] += b; S.rad[i] += rad; S.w[i] += 1;
+    totals.merged++;
+  }
+  markDirty(i);
+}
+function kill(i) {
+  S.alive[i] = 0;
+  grid.delete(S.key[i]);
+  free.push(i);
+  live--;
+  totals.faded++;
+  markDirty(i);
+}
+function clearAll() {
+  grid.clear();
+  free.length = 0;
+  S.alive.fill(0);
+  for (let i = 0; i < high; i++) markDirty(i);
+  live = 0;
+  Object.assign(totals, { added: 0, merged: 0, faded: 0 });
+}
+
+// Push changed Gaussians to Spark. More observations -> more opaque and tighter.
+const wC = new THREE.Vector3(), wS = new THREE.Vector3(), wQ = new THREE.Quaternion(), wCol = new THREE.Color();
+function flush() {
+  if (!dirtyList.length) return;
+  for (const i of dirtyList) {
+    S.dirty[i] = 0;
+    const w = S.w[i] || 1;
+    wC.set(S.x[i] / w, S.y[i] / w, S.z[i] / w);
+    wCol.setRGB(S.r[i] / w, S.g[i] / w, S.b[i] / w);
+    wQ.set(S.qx[i], S.qy[i], S.qz[i], S.qw[i]);
+    if (S.alive[i]) {
+      const rad = (S.rad[i] / w) * (0.55 + 0.45 / Math.sqrt(w)) * sizeMul;
+      wS.set(rad, rad, rad * 0.6); // flattened along the view ray (surfel-like)
+      packed.setSplat(i, wC, wS, wQ, Math.min(0.92, 0.18 + 0.1 * w), wCol);
+    } else {
+      wS.set(0, 0, 0);
+      packed.setSplat(i, wC, wS, wQ, 0, wCol);
+    }
+  }
+  dirtyList.length = 0;
+  packed.numSplats = high;
+  packed.needsUpdate = true;
+  mesh.numSplats = high;
+  mesh.updateVersion();
+}
+$('size').oninput = (e) => {
+  sizeMul = Number(e.target.value);
+  for (let i = 0; i < high; i++) if (S.alive[i]) markDirty(i);
+};
+$('btnClear').onclick = clearAll;
+let paused = false;
+$('btnPause').onclick = () => {
+  paused = !paused;
+  $('btnPause').textContent = paused ? 'Resume scan' : 'Pause scan';
+};
+
+// ------------------------------------------------------------------ phone orientation
+// Same maths as three.js DeviceOrientationControls; absolute alpha 0 = north = -Z.
+const devQ = new THREE.Quaternion();
+const qX = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
+const qS = new THREE.Quaternion(), eul = new THREE.Euler(), zee = new THREE.Vector3(0, 0, 1);
+let iosOffset = null, hasMotion = false;
+function onOrient(e) {
+  if (e.alpha == null || e.beta == null) return;
+  let alpha = e.alpha;
+  if (typeof e.webkitCompassHeading === 'number') {
+    if (iosOffset === null) iosOffset = 360 - e.webkitCompassHeading - e.alpha;
+    alpha = e.alpha + iosOffset;
+  }
+  const d2r = THREE.MathUtils.degToRad;
+  const orient = d2r(screen.orientation?.angle ?? window.orientation ?? 0);
+  eul.set(d2r(e.beta), d2r(alpha), -d2r(e.gamma || 0), 'YXZ');
+  devQ.setFromEuler(eul).multiply(qX).multiply(qS.setFromAxisAngle(zee, -orient));
+  hasMotion = true;
+}
+function enableMotion() {
+  addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onOrient);
+  const DO = window.DeviceOrientationEvent;
+  if (typeof DO?.requestPermission === 'function') DO.requestPermission().catch(() => {});
+}
+
+// ------------------------------------------------------------------ depth model
+let T, model, processor, device = 'wasm', dtype = 'q8', onProgress = () => {};
+
+// Pick the fastest backend this device has. Phones get the 4-bit model (19 MB) to keep
+// the download small; desktops get fp16 (50 MB). Anything that fails drops to the CPU.
+async function pickBackend() {
+  if (q.get('device')) return [q.get('device'), q.get('dtype') || (q.get('device') === 'webgpu' ? 'fp16' : 'q8')];
+  try {
+    const adapter = navigator.gpu && (await navigator.gpu.requestAdapter());
+    if (adapter?.features.has('shader-f16')) return ['webgpu', q.get('dtype') || (PHONE ? 'q4f16' : 'fp16')];
+    if (adapter) return ['webgpu', q.get('dtype') || 'q4']; // no fp16 shaders: 4-bit weights, fp32 maths
+  } catch {}
+  return ['wasm', 'q8'];
+}
+async function loadModel(dev, dt) {
+  [device, dtype] = [dev, dt];
+  model = await T.AutoModel.from_pretrained(CFG.model, {
+    device,
+    dtype,
+    progress_callback: (p) => p.status === 'progress' && p.file?.endsWith('.onnx') && onProgress(p.progress),
+  });
+  // The model expects 518 px; much less keeps it live (and the CPU path needs it smaller still).
+  const res = CFG.res || (device === 'webgpu' ? 252 : 182);
+  const ip = processor.image_processor ?? processor.feature_extractor ?? processor;
+  ip.size = { width: res, height: res };
+  CFG.activeRes = res;
+}
+// The browser remembers a failed module load for the whole page, so on a flaky network
+// retry with a fresh URL instead of the same one.
+async function importTransformers() {
+  for (let i = 0; ; i++) {
+    try {
+      return await import(i ? `${TRANSFORMERS}?retry=${i}` : TRANSFORMERS);
+    } catch (err) {
+      if (i >= 2) throw err;
+      await sleep(1000);
+    }
+  }
+}
+async function initDepth(progress) {
+  onProgress = progress;
+  T = await importTransformers();
+  processor = await T.AutoProcessor.from_pretrained(CFG.model);
+  const [dev, dt] = await pickBackend();
+  try {
+    await loadModel(dev, dt);
+  } catch (err) {
+    if (dev === 'wasm') throw err;
+    console.warn('GPU model failed to load, using CPU', err);
+    await loadModel('wasm', 'q8');
+  }
+}
+// Run the model; if the GPU path fails at run time (some mobile drivers do), switch to CPU once.
+async function runDepth(inputs) {
+  try {
+    return await model(inputs);
+  } catch (err) {
+    if (device === 'wasm') throw err;
+    console.warn('GPU inference failed, using CPU', err);
+    setStats('GPU failed here; switching to CPU (slower)…');
+    await loadModel('wasm', 'q8');
+    return await model(inputs);
+  }
+}
+
+function halfToFloat(u16) {
+  const out = new Float32Array(u16.length);
+  for (let i = 0; i < u16.length; i++) {
+    const h = u16[i], s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, f = h & 1023;
+    out[i] = e === 0 ? s * 2 ** -14 * (f / 1024) : e === 31 ? (f ? NaN : s * Infinity) : s * 2 ** (e - 15) * (1 + f / 1024);
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ capture -> depth -> fuse
+const cam = $('cam');
+const grab = document.createElement('canvas');
+const gctx = grab.getContext('2d', { willReadFrequently: true });
+const depthCanvas = $('depth');
+const dctx = depthCanvas.getContext('2d');
+let lo = null, hi = null; // smoothed disparity range (the model's depth is relative, not metres)
+let depthM = new Float32Array(0);
+const rot = new THREE.Matrix4();
+let lastMs = 0, fps = 0, fov = { tanH: 1, tanV: 1, vfovDeg: 60, aspect: 1 };
+
+async function step() {
+  if (paused || cam.readyState < 2 || !model) return;
+  const vw = cam.videoWidth, vh = cam.videoHeight;
+  if (!vw || !vh) return;
+  const t0 = performance.now();
+  const cw = 256, ch = Math.round((256 * vh) / vw);
+  if (grab.width !== cw || grab.height !== ch) { grab.width = cw; grab.height = ch; }
+  gctx.drawImage(cam, 0, 0, cw, ch);
+  const frame = gctx.getImageData(0, 0, cw, ch);
+  const pose = devQ.clone(); // orientation at capture time
+
+  const inputs = await processor(new T.RawImage(frame.data, cw, ch, 4).rgb());
+  const { predicted_depth: out } = await runDepth(inputs);
+  let disp = out.data;
+  if (disp instanceof Uint16Array) disp = halfToFloat(disp);
+  const dh = out.dims.at(-2), dw = out.dims.at(-1);
+
+  // Field of view of the captured frame.
+  const tLong = Math.tan(THREE.MathUtils.degToRad(CFG.fovLong / 2));
+  const portrait = vh > vw;
+  const tanH = portrait ? (tLong * vw) / vh : tLong;
+  const tanV = portrait ? tLong : (tLong * vh) / vw;
+  fov = { tanH, tanV, vfovDeg: THREE.MathUtils.radToDeg(2 * Math.atan(tanV)), aspect: vw / vh };
+
+  // Relative inverse depth -> metres. Use robust percentiles, smoothed over frames so the
+  // scale doesn't jump, then map [far..near] onto the range.
+  const n = disp.length, step = Math.max(1, Math.floor(n / 3000));
+  const sample = [];
+  for (let i = 0; i < n; i += step) sample.push(disp[i]);
+  sample.sort((a, b) => a - b);
+  const p2 = sample[Math.floor(sample.length * 0.02)], p98 = sample[Math.floor(sample.length * 0.98)];
+  lo = lo === null ? p2 : lo + (p2 - lo) * 0.3;
+  hi = hi === null ? p98 : hi + (p98 - hi) * 0.3;
+  const span = hi - lo || 1, iNear = 1 / CFG.near, iFar = 1 / CFG.far;
+  if (depthM.length !== n) depthM = new Float32Array(n);
+  const img = dctx.createImageData(dw, dh);
+  for (let i = 0; i < n; i++) {
+    const dn = Math.min(1, Math.max(0, (disp[i] - lo) / span));
+    depthM[i] = 1 / (iFar + dn * (iNear - iFar));
+    const c = TURBO[(dn * 255) | 0];
+    img.data[i * 4] = c[0]; img.data[i * 4 + 1] = c[1]; img.data[i * 4 + 2] = c[2]; img.data[i * 4 + 3] = 255;
+  }
+  if (depthCanvas.width !== dw || depthCanvas.height !== dh) { depthCanvas.width = dw; depthCanvas.height = dh; }
+  dctx.putImageData(img, 0, 0);
+
+  rot.makeRotationFromQuaternion(pose);
+  const e = rot.elements; // column-major: world = R * cam
+  carve(e, dw, dh, tanH, tanV);
+
+  // Back-project pixels into 3D and fuse them into the Gaussians.
+  const fd = frame.data, st = CFG.stride, foot = (2 * tanH) / dw * st;
+  for (let v = 0; v < dh; v += st) {
+    for (let u = 0; u < dw; u += st) {
+      const i = v * dw + u, z = depthM[i];
+      // Skip depth edges, where the model blends foreground and background ("flying pixels").
+      const zr = depthM[u + st < dw ? i + st : i], zd = depthM[v + st < dh ? i + st * dw : i];
+      if (Math.abs(zr - z) > 0.07 * z || Math.abs(zd - z) > 0.07 * z) continue;
+      const xn = ((u + 0.5) / dw) * 2 - 1, yn = 1 - ((v + 0.5) / dh) * 2;
+      const cx = xn * tanH * z, cy = yn * tanV * z, cz = -z;
+      const wx = e[0] * cx + e[4] * cy + e[8] * cz;
+      const wy = e[1] * cx + e[5] * cy + e[9] * cz;
+      const wz = e[2] * cx + e[6] * cy + e[10] * cz;
+      const pu = Math.min(cw - 1, (((u + 0.5) / dw) * cw) | 0), pv = Math.min(ch - 1, (((v + 0.5) / dh) * ch) | 0);
+      const p = (pv * cw + pu) * 4;
+      const len = Math.hypot(wx, wy, wz) || 1;
+      // Size: the pixel's footprint, but never smaller than the merge cell, so neighbours overlap.
+      const rad = Math.max(z * foot, CFG.voxel * 0.9);
+      observe(wx, wy, wz, fd[p] / 255, fd[p + 1] / 255, fd[p + 2] / 255, rad, -wx / len, -wy / len, -wz / len);
+    }
+  }
+  flush();
+  totals.frames++;
+  const ms = performance.now() - t0;
+  lastMs = ms;
+  fps = fps ? fps * 0.8 + (1000 / ms) * 0.2 : 1000 / ms;
+}
+
+// Free-space carving: if the camera now sees *past* a Gaussian, that spot is empty
+// (a person walked away, a door opened), so it loses weight and eventually fades.
+function carve(e, dw, dh, tanH, tanV) {
+  for (let i = 0; i < high; i++) {
+    if (!S.alive[i]) continue;
+    const w = S.w[i], x = S.x[i] / w, y = S.y[i] / w, z = S.z[i] / w;
+    const cx = e[0] * x + e[1] * y + e[2] * z; // R^T * world
+    const cy = e[4] * x + e[5] * y + e[6] * z;
+    const d = -(e[8] * x + e[9] * y + e[10] * z);
+    if (d < 0.15) continue;
+    const xn = cx / (d * tanH), yn = cy / (d * tanV);
+    if (xn < -1 || xn > 1 || yn < -1 || yn > 1) continue;
+    const obs = depthM[(((1 - yn) / 2) * (dh - 1) | 0) * dw + (((xn + 1) / 2) * (dw - 1) | 0)];
+    if (d < obs * 0.78 - CFG.voxel) {
+      if (w <= 1.5) kill(i);
+      else { reweight(i, w - 1); markDirty(i); }
+    }
+  }
+}
+
+// Turbo-ish colour ramp for the depth preview (blue = far, red = near).
+const TURBO = (() => {
+  const stops = [[48, 18, 59], [65, 105, 225], [36, 185, 235], [50, 240, 150], [165, 250, 60], [240, 205, 55], [250, 125, 35], [205, 45, 10], [120, 5, 5]];
+  return Array.from({ length: 256 }, (_, k) => {
+    const f = (k / 255) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(f)), t = f - i;
+    return stops[i].map((c, j) => Math.round(c + (stops[i + 1][j] - c) * t));
+  });
+})();
+
+async function captureLoop() {
+  for (;;) {
+    try { await step(); } catch (err) { console.error(err); setStats(`Depth error: ${err.message || err}`); await sleep(1000); }
+    await sleep(20);
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ------------------------------------------------------------------ stats + render loop
+const fmt = (n) => n.toLocaleString('en-US');
+function setStats(html) { $('stats').innerHTML = html; }
+function statsLine() {
+  setStats(
+    `Gaussians <b>${fmt(live)}</b> · added ${fmt(totals.added)} · merged ${fmt(totals.merged)} · faded ${fmt(totals.faded)}<br>` +
+    `Depth <b>${fps.toFixed(1)} fps</b> (${Math.round(lastMs)} ms) · ${device === 'webgpu' ? 'GPU' : 'CPU'} ${dtype} · ${CFG.activeRes}px · ` +
+    `${hasMotion ? 'orientation: sensors' : 'orientation: fixed (no sensors)'}${paused ? ' · <b>paused</b>' : ''}`,
+  );
+}
+setInterval(() => model && statsLine(), 500);
+
+function frameLoop() {
+  requestAnimationFrame(frameLoop);
+  followCam.quaternion.slerp(devQ, 0.3);
+  if (Math.abs(followCam.fov - fov.vfovDeg) > 0.5) { followCam.fov = fov.vfovDeg; followCam.updateProjectionMatrix(); }
+  proxy.quaternion.copy(devQ);
+  proxy.fov = fov.vfovDeg;
+  proxy.aspect = fov.aspect;
+  proxy.updateProjectionMatrix();
+  proxy.updateMatrixWorld();
+  camHelper.update();
+  if (view === 'orbit') orbit.update();
+  renderer.render(scene, view === 'orbit' ? orbitCam : followCam);
+}
+requestAnimationFrame(frameLoop);
+window.__live = { S, CFG, totals, devQ, get live() { return live; }, get fps() { return fps; }, get device() { return `${device} ${dtype}`; } };
+
+// ------------------------------------------------------------------ start (needs a tap)
+$('start').onclick = async () => {
+  const btn = $('start'), msg = $('gmsg');
+  btn.disabled = true;
+  msg.className = '';
+  enableMotion(); // before any await, while the tap still counts (iOS)
+  try {
+    msg.textContent = 'Starting camera…';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    cam.srcObject = stream;
+    await cam.play();
+  } catch (err) {
+    msg.className = 'err';
+    msg.textContent = `Camera unavailable (${err.name || err}). It needs HTTPS and camera permission.`;
+    btn.disabled = false;
+    return;
+  }
+  try {
+    msg.textContent = 'Downloading depth model…';
+    $('mbar').hidden = false;
+    await initDepth((pct) => ($('mfill').style.width = `${pct}%`));
+  } catch (err) {
+    msg.className = 'err';
+    msg.textContent = `Couldn't load the depth model (${err.message || err}).`;
+    btn.disabled = false;
+    return;
+  }
+  $('gate').hidden = true;
+  captureLoop();
+};
+</script>
+</body>
+</html>
