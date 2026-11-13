@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon — Rescue Ping Demo</title>
+<style>
+  :root {
+    --bg: #05070a; --ink: #e8eef5; --dim: #8b98a7; --line: #233040; --panel: rgba(8, 12, 18, .82);
+    --blue: #4fc3ff; --red: #ff3b3b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #world { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+  #world:active { cursor: grabbing; }
+
+  /* The glasses display. Black is transparent on an additive display, so we blend with
+     "screen" over the world view: black adds nothing, bright pixels add light. */
+  /* The blend must sit on the fixed element itself: position:fixed makes its own stacking
+     context, so a blend on the inner canvas would only see an empty backdrop. */
+  #glass { position: fixed; pointer-events: none; mix-blend-mode: screen; }
+  #glass canvas { width: 100%; height: 100%; display: block; }
+  #glass::after { content: ""; position: absolute; inset: -1px; border: 1px dashed rgba(255,255,255,.22); border-radius: 6px; }
+  #glass .tag { position: absolute; left: 0; top: 100%; margin-top: 6px; font-size: 11px; color: var(--dim); letter-spacing: .04em; white-space: nowrap; }
+  body.cmd #glass { mix-blend-mode: normal; }
+
+  /* Live camera mode: the camera feed stands in for what you'd see through the glasses. */
+  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; background: #000; }
+  body.live:not(.cmd) #cam { display: block; }
+  body.live:not(.cmd) #world { visibility: hidden; }
+  #loader button { all: unset; cursor: pointer; margin-top: 14px; padding: 8px 14px; border: 1px solid var(--blue); border-radius: 6px; }
+  #loader a { color: var(--blue); }
+  body.cmd #glass::after { border: 1px solid var(--line); }
+
+  header { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; pointer-events: none; }
+  header > * { pointer-events: auto; }
+  .brand { font-weight: 700; letter-spacing: .08em; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .brand small { font-weight: 400; color: var(--dim); letter-spacing: 0; margin-left: 6px; }
+  .seg { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button, .tools button { all: unset; cursor: pointer; padding: 8px 12px; color: var(--dim); }
+  .seg button[aria-pressed="true"] { color: var(--ink); background: #13202d; box-shadow: inset 0 -2px 0 var(--blue); }
+  .seg button:focus-visible, .tools button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+  .tools { position: fixed; left: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; width: 230px; }
+  .tools h3 { margin: 0 0 2px; font-size: 11px; color: var(--dim); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  .tools .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tools button { padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); font-size: 12px; display: inline-flex; gap: 6px; align-items: center; }
+  .tools button[aria-pressed="true"] { border-color: currentColor; }
+  .tools button .sw { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
+  .tools .danger { color: var(--red); }
+  .keys { font-size: 12px; color: var(--dim); line-height: 1.6; }
+  kbd { font: 11px ui-monospace, monospace; color: var(--ink); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+
+  #loader { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 5; transition: opacity .4s; }
+  #loader.done { opacity: 0; pointer-events: none; }
+  #loader .box { width: min(420px, 80vw); }
+  #loader .bar { height: 3px; background: var(--line); margin-top: 10px; border-radius: 2px; overflow: hidden; }
+  #loader .bar i { display: block; height: 100%; width: 0; background: var(--blue); transition: width .2s; }
+  #loader p { color: var(--dim); margin: 6px 0 0; font-size: 12px; }
+
+  @media (max-width: 760px) { .tools { width: auto; right: 12px; } .keys { display: none; } }
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="world"></canvas>
+
+<div id="glass"><canvas id="hud" width="600" height="600"></canvas><span class="tag">META RAY-BAN DISPLAY · 600×600 · RIGHT EYE (SIMULATED)</span></div>
+
+<header>
+  <div class="brand">BEACON<small>rescue pings · demo</small></div>
+  <div class="seg" role="group" aria-label="View">
+    <button id="vResp" aria-pressed="true">Responder view (glasses)</button>
+    <button id="vCmd" aria-pressed="false">Command view (3D splat twin)</button>
+  </div>
+  <div class="seg" role="group" aria-label="World">
+    <button id="wScan" aria-pressed="true">World: splat scan</button>
+    <button id="wLive" aria-pressed="false">Live camera</button>
+  </div>
+</header>
+
+<div class="tools">
+  <h3>Drop a ping</h3>
+  <div class="row" id="palette"></div>
+  <div class="row"><button class="danger" id="btnMayday">Simulate teammate MAYDAY</button></div>
+  <h3 style="margin-top:6px">Glasses gestures</h3>
+  <div class="keys">
+    <kbd>Enter</kbd> pinch: open ping wheel, then <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> swipe to drop<br>
+    <kbd>←</kbd><kbd>→</kbd> cycle pings · <kbd>↑</kbd> respond (en route → resolved)<br>
+    <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · drag to look · <kbd>V</kbd> switch view
+  </div>
+</div>
+
+<div id="loader"><div class="box">
+  <div id="loadTitle">Loading Gaussian splat scene…</div>
+  <div class="bar" id="loadBar"><i id="bar"></i></div>
+  <p id="loadMsg">Stand-in for a site scan captured by a drone or a responder's phone.
+    <br><a href="?live">Skip the scan and use your camera instead</a></p>
+  <button id="btnStart" hidden>Start camera</button>
+</div></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "@sparkjsdev/spark": "https://cdn.jsdelivr.net/npm/@sparkjsdev/spark@2.4.0/dist/spark.module.js"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+import { PING_TYPES, WHEEL, pingRank, TEAM_COLOR } from './shared/pings.js';
+import { norm360, norm180, cardinal, clock, fmtDist, fmtAge, speakDist, speakCallsign } from './shared/geo.js';
+
+// ---------------------------------------------------------------- config
+const q = new URLSearchParams(location.search);
+const DEFAULT_SCENE = 'https://huggingface.co/cakewalk/splat-data/resolve/main/room.splat';
+const SCENE = {
+  url: q.get('scene') || DEFAULT_SCENE,
+  spawn: (q.get('spawn') || '0,0,0').split(',').map(Number),
+  yaw: Number(q.get('yaw') || 0),
+  eye: 1.6, // metres; the scene's scale is calibrated so the spawn is this high above the floor
+  // Photogrammetry scans are not gravity-aligned. This quaternion levels the default room
+  // (found by fitting a plane to raycast floor hits). Pass ?level=x,y,z,w for other scans.
+  level: (q.get('level') || (q.get('scene') ? '0,0,0,1' : '-0.23169,0,-0.01839,0.97261')).split(',').map(Number),
+  isDefault: !q.get('scene'),
+};
+const ME = 'ALPHA-1';
+let M = Number(q.get('scale')) || 1; // metres per scene unit (calibrated after load)
+
+// ---------------------------------------------------------------- three + spark
+const canvas = document.getElementById('world');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070a);
+scene.add(new SparkRenderer({ renderer }));
+
+const fpCam = new THREE.PerspectiveCamera(70, 1, 0.01, 500);
+fpCam.rotation.order = 'YXZ';
+const cmdCam = new THREE.PerspectiveCamera(55, 1, 0.01, 1000);
+const orbit = new OrbitControls(cmdCam, canvas);
+orbit.enabled = false;
+orbit.enableDamping = true;
+
+// ?live skips the scan entirely: camera feed + compass only (works on a phone, no 50 MB download).
+const LIVE_ONLY = q.has('live');
+const bar = document.getElementById('bar');
+let splat = null;
+if (!LIVE_ONLY) {
+  splat = new SplatMesh({
+    url: SCENE.url,
+    raycastable: true,
+    onProgress: (e) => e.total && (bar.style.width = `${(100 * e.loaded) / e.total}%`),
+  });
+  // COLMAP (y-down) -> three (y-up), then level the floor.
+  splat.quaternion.copy(new THREE.Quaternion(...SCENE.level).normalize().multiply(new THREE.Quaternion(1, 0, 0, 0)));
+  scene.add(splat);
+} else {
+  const grid = new THREE.PolarGridHelper(15, 8, 6, 64, 0x2a4055, 0x1a2a38); // metres, around you
+  grid.position.y = -SCENE.eye;
+  scene.add(grid);
+}
+
+const markers = new THREE.Group(); // 3D overlays, only shown in command view
+markers.renderOrder = 10;
+scene.add(markers);
+
+// ---------------------------------------------------------------- state
+const S = {
+  view: 'resp',
+  yaw: THREE.MathUtils.degToRad(SCENE.yaw),
+  pitch: -0.25,
+  pings: [],
+  team: [],
+  focusId: null,
+  wheel: null, // null | 0 | 1 (page)
+  toast: null,
+  palette: 'victim',
+  keys: new Set(),
+  live: false, // camera feed instead of the splat
+  hasMotion: false, // heading/tilt coming from device sensors
+};
+window.__demo = { S, THREE, fpCam, cmdCam, splat, get M() { return M; } }; // for console poking
+
+const ray = new THREE.Raycaster();
+const tmp = new THREE.Vector3();
+
+/** First splat surface hit along a ray, or null. */
+function hitSplat(origin, dir, maxDist = 60 / M) {
+  if (!splat) return null;
+  ray.set(origin, dir.clone().normalize());
+  ray.far = maxDist;
+  const hits = [];
+  splat.raycast(ray, hits);
+  hits.sort((a, b) => a.distance - b.distance);
+  return hits[0] || null;
+}
+const dirFrom = (yawDeg, pitchDeg) => {
+  const y = THREE.MathUtils.degToRad(yawDeg), p = THREE.MathUtils.degToRad(pitchDeg);
+  return new THREE.Vector3(-Math.sin(y) * Math.cos(p), Math.sin(p), -Math.cos(y) * Math.cos(p));
+};
+
+// Compass convention for the scene: north = -Z, east = +X.
+const headingDeg = () => norm360(-THREE.MathUtils.radToDeg(S.yaw));
+function polar(pos, from = fpCam.position) {
+  const v = tmp.copy(pos).sub(from);
+  const dist = Math.hypot(v.x, v.z) * M;
+  const brg = norm360(THREE.MathUtils.radToDeg(Math.atan2(v.x, -v.z)));
+  return { dist, brg, rel: norm180(brg - headingDeg()), dy: v.y * M };
+}
+
+let seq = 0;
+function addPing(type, pos, by = ME, extra = {}) {
+  const p = { id: `p${++seq}`, type, pos: pos.clone(), by, ts: Date.now(), status: 'open', resp: null, ...extra };
+  S.pings.push(p);
+  p.marker = makeMarker(p);
+  markers.add(p.marker);
+  return p;
+}
+function removePing(p) {
+  S.pings = S.pings.filter((x) => x !== p);
+  markers.remove(p.marker);
+  if (S.focusId === p.id) S.focusId = null;
+}
+
+/** "Look and ping": drop where the wearer is looking. */
+function dropAtGaze(type) {
+  const dir = new THREE.Vector3();
+  fpCam.getWorldDirection(dir);
+  let pos;
+  if (S.live) {
+    // No 3D model of the real room, so range by head tilt: looking down at a spot on a flat
+    // floor from eye height gives its distance. Looking level or up assumes 5 m.
+    const metres = dir.y < -0.08 ? Math.min(25, SCENE.eye / -dir.y) : 5;
+    pos = fpCam.position.clone().addScaledVector(dir, metres / M);
+  } else {
+    // Scan available: pin it on the actual surface under the centre of view.
+    const hit = hitSplat(fpCam.position, dir, 25 / M);
+    pos = hit ? hit.point : fpCam.position.clone().addScaledVector(dir, 3 / M);
+  }
+  dropPing(type, pos);
+}
+
+// ---------------------------------------------------------------- live camera + device sensors
+const cam = document.getElementById('cam');
+let stream = null;
+const liveFov = () => Number(q.get('camfov')) || (innerHeight > innerWidth ? 65 : 45); // vertical, degrees
+
+async function setLive(on) {
+  if (on === S.live) return;
+  if (on) {
+    enableMotion(); // ask first, while we still hold the click's user activation (iOS needs it)
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      cam.srcObject = stream;
+      await cam.play();
+    } catch (err) {
+      toast(`NO CAMERA: ${err.name || err}`, '#ff9f1c', 5000);
+      return false;
+    }
+  } else {
+    stream?.getTracks().forEach((t) => t.stop());
+    stream = null;
+  }
+  S.live = on;
+  document.body.classList.toggle('live', on);
+  document.getElementById('wLive').setAttribute('aria-pressed', on);
+  document.getElementById('wScan').setAttribute('aria-pressed', !on);
+  fpCam.fov = on ? liveFov() : 70;
+  fpCam.updateProjectionMatrix();
+  return true;
+}
+
+// Phone orientation -> camera orientation (the classic three.js DeviceOrientationControls maths).
+// With an absolute alpha, 0 = north, which matches this scene's convention (north = -Z).
+const motionQ = new THREE.Quaternion();
+window.__demo.motionQ = motionQ;
+const qX =new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2); // look out of the back of the phone
+const qS = new THREE.Quaternion();
+const eul = new THREE.Euler();
+const zee = new THREE.Vector3(0, 0, 1);
+let iosOffset = null;
+function onOrient(e) {
+  if (e.alpha == null || e.beta == null) return;
+  let alpha = e.alpha;
+  if (typeof e.webkitCompassHeading === 'number') {
+    // iOS reports a relative alpha; anchor it to the compass once.
+    if (iosOffset === null) iosOffset = 360 - e.webkitCompassHeading - e.alpha;
+    alpha = e.alpha + iosOffset;
+  }
+  const d2r = THREE.MathUtils.degToRad;
+  const orient = d2r(screen.orientation?.angle ?? window.orientation ?? 0);
+  eul.set(d2r(e.beta), d2r(alpha), -d2r(e.gamma || 0), 'YXZ');
+  motionQ.setFromEuler(eul).multiply(qX).multiply(qS.setFromAxisAngle(zee, -orient));
+  S.hasMotion = true;
+}
+let motionOn = false;
+function enableMotion() {
+  if (motionOn) return;
+  motionOn = true;
+  // Android/desktop deliver events without asking. iOS (and Meta's glasses browser) need
+  // requestPermission() from a tap; if that fails, allow a retry on the next tap.
+  addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onOrient);
+  const DO = window.DeviceOrientationEvent;
+  if (typeof DO?.requestPermission === 'function') {
+    DO.requestPermission().then((s) => s === 'granted' || (motionOn = false), () => (motionOn = false));
+  }
+}
+function dropPing(type, pos) {
+  if (type === 'mayday') return selfMayday();
+  const p = addPing(type, pos);
+  S.focusId = p.id;
+  const { dist } = polar(pos);
+  toast(`${PING_TYPES[type].label} SENT · ${fmtDist(dist)}`, PING_TYPES[type].color);
+  // A teammate answers, so the ack loop is visible in a solo demo.
+  if (['victim', 'backup', 'hazard'].includes(type)) {
+    setTimeout(() => respond(p, 'BRAVO-1', 'enroute'), 2500);
+  }
+}
+function respond(p, who, state) {
+  if (!S.pings.includes(p)) return;
+  p.resp = { who, state };
+  p.status = state;
+  if (who !== ME) {
+    toast(`${who}: ${state === 'enroute' ? 'EN ROUTE' : state.toUpperCase()} → ${PING_TYPES[p.type].label}`, TEAM_COLOR);
+    say(`${speakCallsign(who)} ${state === 'enroute' ? 'en route' : state} to ${PING_TYPES[p.type].label.toLowerCase()}`);
+  }
+  if (state === 'resolved') setTimeout(() => removePing(p), 2500);
+  refreshMarker(p);
+}
+
+// ---------------------------------------------------------------- teammates + scripted MAYDAY
+function teammatesInit(spawn) {
+  const at = (dx, dz) => spawn.clone().add(new THREE.Vector3(dx / M, 0, dz / M));
+  S.team = [
+    { cs: 'ALPHA-2', path: [at(2.5, -2.0), at(-2.0, -2.5), at(-2.5, 1.5)], t: 0, pos: at(2.5, -2), hdg: 0, down: false },
+    { cs: 'BRAVO-1', path: [at(-1.5, 2.5), at(2.0, 2.0)], t: 0.5, pos: at(-1.5, 2.5), hdg: 0, down: false },
+  ];
+  for (const m of S.team) { m.marker = makeTeamMarker(m); markers.add(m.marker); }
+}
+function teammatesTick(dt) {
+  for (const m of S.team) {
+    if (m.down) continue;
+    m.t = (m.t + dt * 0.04) % 1;
+    const n = m.path.length, f = m.t * n, i = Math.floor(f), a = m.path[i], b = m.path[(i + 1) % n];
+    const next = a.clone().lerp(b, f - i);
+    m.hdg = norm360(THREE.MathUtils.radToDeg(Math.atan2(next.x - m.pos.x, -(next.z - m.pos.z))));
+    m.pos.copy(next);
+    m.marker.position.copy(m.pos);
+  }
+}
+function teammateMayday() {
+  const m = S.team[0];
+  if (m.down) return;
+  m.down = true;
+  const p = addPing('mayday', m.pos, m.cs, { note: 'NO MOTION (auto)' });
+  S.focusId = p.id;
+  const { dist, rel } = polar(p.pos);
+  say(`Mayday. ${speakCallsign(m.cs)}. ${clock(rel)} o'clock, ${speakDist(dist)}.`, true);
+}
+function selfMayday() {
+  toast('MAYDAY SENT · TEAM NOTIFIED', PING_TYPES.mayday.color, 4000);
+  say('Mayday sent.', true);
+}
+
+// ---------------------------------------------------------------- 3D markers (command view)
+function glyph(g, shape, x, y, s, color, lw = 3) {
+  g.save();
+  g.translate(x, y);
+  g.strokeStyle = g.fillStyle = color;
+  g.lineWidth = lw;
+  g.lineJoin = 'round';
+  g.beginPath();
+  switch (shape) {
+    case 'diamond': g.moveTo(0, -s); g.lineTo(s, 0); g.lineTo(0, s); g.lineTo(-s, 0); g.closePath(); g.stroke(); break;
+    case 'cross': { const w = s * 0.38; g.rect(-w, -s, 2 * w, 2 * s); g.rect(-s, -w, 2 * s, 2 * w); g.fill(); break; }
+    case 'triangle': g.moveTo(0, -s); g.lineTo(s, s * 0.8); g.lineTo(-s, s * 0.8); g.closePath(); g.stroke();
+      g.fillRect(-lw / 2, -s * 0.35, lw, s * 0.6); g.fillRect(-lw / 2, s * 0.42, lw, lw); break;
+    case 'x': g.rect(-s * 0.85, -s * 0.85, s * 1.7, s * 1.7); g.moveTo(-s * 0.85, -s * 0.85); g.lineTo(s * 0.85, s * 0.85);
+      g.moveTo(s * 0.85, -s * 0.85); g.lineTo(-s * 0.85, s * 0.85); g.stroke(); break;
+    case 'rings': g.arc(0, 0, s, 0, 7); g.moveTo(s * 0.5, 0); g.arc(0, 0, s * 0.5, 0, 7); g.stroke(); break;
+    case 'flag': g.moveTo(-s * 0.6, s); g.lineTo(-s * 0.6, -s); g.lineTo(s * 0.8, -s * 0.5); g.lineTo(-s * 0.6, 0); g.stroke(); break;
+    case 'arrow': g.moveTo(0, s); g.lineTo(0, -s); g.moveTo(-s * 0.7, -s * 0.3); g.lineTo(0, -s); g.lineTo(s * 0.7, -s * 0.3); g.stroke(); break;
+    case 'sos': g.moveTo(0, -s); g.lineTo(s, 0); g.lineTo(0, s); g.lineTo(-s, 0); g.closePath(); g.fill();
+      g.fillStyle = '#000'; g.fillRect(-lw / 2, -s * 0.5, lw, s * 0.6); g.fillRect(-lw / 2, s * 0.25, lw, lw); break;
+    case 'team': g.moveTo(0, -s); g.lineTo(s * 0.75, s * 0.75); g.lineTo(0, s * 0.35); g.lineTo(-s * 0.75, s * 0.75); g.closePath(); g.fill(); break;
+  }
+  g.restore();
+}
+
+function labelSprite(draw, w = 256, h = 96) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+  const sp = new THREE.Sprite(mat);
+  sp.renderOrder = 11;
+  return sp;
+}
+function makeMarker(p) {
+  const t = PING_TYPES[p.type];
+  const grp = new THREE.Group();
+  grp.position.copy(p.pos);
+  const lift = 0.6 / M;
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, lift, 0)]),
+    new THREE.LineBasicMaterial({ color: t.color, depthTest: false, transparent: true }),
+  );
+  line.renderOrder = 10;
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(0.05 / M, 12, 8), new THREE.MeshBasicMaterial({ color: t.color, depthTest: false }));
+  dot.renderOrder = 10;
+  grp.add(line, dot);
+  grp.userData = { lift };
+  grp.add(markerLabel(p, lift));
+  grp.visible = S.view === 'cmd';
+  return grp;
+}
+function markerLabel(p, lift) {
+  const t = PING_TYPES[p.type];
+  const sp = labelSprite((g, w, h) => {
+    g.fillStyle = 'rgba(5,7,10,.78)'; g.fillRect(0, 10, w, h - 20);
+    g.fillStyle = t.color; g.fillRect(0, 10, 5, h - 20);
+    glyph(g, t.shape, 36, h / 2, 16, t.color, 4);
+    g.fillStyle = '#fff'; g.font = 'bold 30px system-ui'; g.fillText(t.label, 66, 46);
+    g.fillStyle = '#9fb0c0'; g.font = '22px system-ui';
+    g.fillText(p.resp ? `${p.resp.who} ${p.resp.state === 'enroute' ? 'EN ROUTE' : 'RESOLVED'}` : `by ${p.by}`, 66, 74);
+  });
+  sp.center.set(0.1, 0);
+  sp.scale.set(1.2 / M, 0.45 / M, 1);
+  sp.position.y = lift;
+  sp.name = 'label';
+  return sp;
+}
+function refreshMarker(p) {
+  const old = p.marker.getObjectByName('label');
+  p.marker.remove(old);
+  old.material.map.dispose();
+  p.marker.add(markerLabel(p, p.marker.userData.lift));
+}
+function makeTeamMarker(m) {
+  const grp = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18 / M, 0.18 / M, 1.7 / M, 12), new THREE.MeshBasicMaterial({ color: TEAM_COLOR, transparent: true, opacity: 0.55, depthTest: false }));
+  body.position.y = -0.8 / M;
+  body.renderOrder = 10;
+  const tag = labelSprite((g, w, h) => {
+    g.fillStyle = 'rgba(5,7,10,.78)'; g.fillRect(0, 20, w, 56);
+    glyph(g, 'team', 30, 48, 14, TEAM_COLOR); g.fillStyle = TEAM_COLOR; g.font = 'bold 30px system-ui'; g.fillText(m.cs, 56, 59);
+  });
+  tag.scale.set(1.0 / M, 0.375 / M, 1);
+  tag.position.y = 0.45 / M;
+  grp.add(body, tag);
+  grp.position.copy(m.pos);
+  grp.visible = S.view === 'cmd';
+  return grp;
+}
+let meMarker;
+function makeMeMarker() {
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.22 / M, 0.6 / M, 16), new THREE.MeshBasicMaterial({ color: '#ffffff', depthTest: false }));
+  cone.geometry.rotateX(-Math.PI / 2); // point along -Z (camera forward)
+  cone.renderOrder = 12;
+  const tag = labelSprite((g, w, h) => {
+    g.fillStyle = 'rgba(5,7,10,.78)'; g.fillRect(0, 20, w, 56);
+    g.fillStyle = '#fff'; g.font = 'bold 30px system-ui'; g.fillText(`${ME} (YOU)`, 14, 59);
+  });
+  tag.scale.set(1.0 / M, 0.375 / M, 1);
+  tag.position.y = 0.4 / M;
+  meMarker = new THREE.Group();
+  meMarker.add(cone, tag);
+  meMarker.visible = false;
+  scene.add(meMarker);
+}
+
+// ---------------------------------------------------------------- the glasses HUD (600x600 canvas)
+const hud = document.getElementById('hud');
+const g = hud.getContext('2d');
+const glass = document.getElementById('glass');
+const FONT = 'ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+const TAPE = { span: 120, x0: 40, x1: 560 };
+const ppd = (TAPE.x1 - TAPE.x0) / TAPE.span;
+
+function text(str, x, y, { size = 20, color = '#fff', align = 'left', weight = 600 } = {}) {
+  g.font = `${weight} ${size}px ${FONT}`;
+  g.textAlign = align;
+  g.fillStyle = color;
+  g.fillText(str, x, y);
+}
+function ranked() {
+  return S.pings
+    .map((p) => ({ p, ...polar(p.pos) }))
+    .sort((a, b) => pingRank(a.p, a.dist) - pingRank(b.p, b.dist));
+}
+function focused(list) {
+  return list.find((x) => x.p.id === S.focusId) || list[0] || null;
+}
+
+function drawHUD(now) {
+  g.textBaseline = 'alphabetic';
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, 600, 600);
+  const list = ranked();
+  const foc = focused(list);
+  const hdg = headingDeg();
+  const flash = Math.floor(now / 350) % 2 === 0;
+
+  // Compass tape ------------------------------------------------------------
+  g.strokeStyle = 'rgba(255,255,255,.75)';
+  g.lineWidth = 2;
+  for (let d = Math.ceil((hdg - TAPE.span / 2) / 5) * 5; d <= hdg + TAPE.span / 2; d += 5) {
+    const x = 300 + (d - hdg) * ppd;
+    const n = norm360(d);
+    const major = n % 15 === 0;
+    g.beginPath(); g.moveTo(x, 58); g.lineTo(x, major ? 46 : 52); g.stroke();
+    if (n % 45 === 0) text(cardinal(n), x, 40, { size: n % 90 === 0 ? 22 : 17, align: 'center', color: n === 0 ? '#ffd60a' : '#fff' });
+  }
+  g.beginPath(); g.moveTo(TAPE.x0, 58); g.lineTo(TAPE.x1, 58); g.stroke();
+  // heading box
+  g.fillStyle = '#000'; g.fillRect(266, 4, 68, 26);
+  g.strokeStyle = '#fff'; g.strokeRect(266, 4, 68, 26);
+  text(String(Math.round(hdg) % 360).padStart(3, '0'), 300, 25, { size: 20, align: 'center', weight: 700 });
+
+  // teammates (blue force) on a lane just under the tape
+  for (const m of S.team) {
+    const { rel } = polar(m.pos);
+    if (Math.abs(rel) > TAPE.span / 2) continue;
+    glyph(g, m.down ? 'sos' : 'team', 300 + rel * ppd, 70, 7, m.down ? PING_TYPES.mayday.color : TEAM_COLOR, 2);
+  }
+  // pings on the tape, off-tape counts at the ends
+  let left = 0, right = 0;
+  for (const x of list) {
+    const t = PING_TYPES[x.p.type];
+    if (x.rel < -TAPE.span / 2) { left++; continue; }
+    if (x.rel > TAPE.span / 2) { right++; continue; }
+    const px = 300 + x.rel * ppd;
+    const isF = foc && x.p === foc.p;
+    if (x.p.type === 'mayday' && !flash) continue;
+    glyph(g, t.shape, px, 98, isF ? 12 : 9, t.color, isF ? 3 : 2);
+    text(fmtDist(x.dist), px, 128, { size: 15, align: 'center', color: t.color });
+  }
+  if (left) text(`◀ ${left}`, 8, 104, { size: 18 });
+  if (right) text(`${right} ▶`, 592, 104, { size: 18, align: 'right' });
+
+  // World-locked brackets: project each ping through the wearer's actual view ------
+  if (S.view === 'resp') {
+    const r = glass.getBoundingClientRect();
+    for (const x of list) {
+      const v = x.p.pos.clone().project(fpCam);
+      if (v.z > 1 || v.z < -1) continue;
+      const sx = ((v.x + 1) / 2) * innerWidth, sy = ((1 - v.y) / 2) * innerHeight;
+      const hx = ((sx - r.left) / r.width) * 600, hy = ((sy - r.top) / r.height) * 600;
+      if (hx < 20 || hx > 580 || hy < 150 || hy > 450) continue;
+      const t = PING_TYPES[x.p.type];
+      const isF = foc && x.p === foc.p;
+      const s = Math.max(14, Math.min(36, 44 - x.dist * 3));
+      if (x.p.type === 'mayday' && !flash) continue;
+      g.strokeStyle = t.color;
+      g.lineWidth = isF ? 3 : 2;
+      for (const [sx2, sy2] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        g.beginPath();
+        g.moveTo(hx + sx2 * s, hy + sy2 * (s - 8));
+        g.lineTo(hx + sx2 * s, hy + sy2 * s);
+        g.lineTo(hx + sx2 * (s - 8), hy + sy2 * s);
+        g.stroke();
+      }
+      glyph(g, t.shape, hx, hy, 8, t.color, 2);
+      const elev = Math.abs(x.dy) > 2.2 ? `  ${x.dy > 0 ? '▲' : '▼'}${Math.abs(x.dy).toFixed(0)}m` : '';
+      text(`${t.label} ${fmtDist(x.dist)}${elev}`, hx, hy + s + 20, { size: 16, align: 'center', color: t.color });
+    }
+  }
+
+  // MAYDAY banner ------------------------------------------------------------
+  const md = list.find((x) => x.p.type === 'mayday' && x.p.status !== 'resolved');
+  if (md) {
+    g.fillStyle = flash ? PING_TYPES.mayday.color : '#000';
+    g.fillRect(70, 140, 460, 40);
+    g.strokeStyle = PING_TYPES.mayday.color; g.lineWidth = 2; g.strokeRect(70, 140, 460, 40);
+    const msg = md.p.status === 'enroute' ? `MAYDAY ${md.p.by} · YOU'RE EN ROUTE · ${fmtDist(md.dist)}` : `MAYDAY ${md.p.by} · ${clock(md.rel)} O'CLOCK · ${fmtDist(md.dist)}`;
+    text(msg, 300, 168, { size: 20, align: 'center', weight: 800, color: flash ? '#000' : PING_TYPES.mayday.color });
+  }
+  if (S.toast && now < S.toast.until) {
+    text(S.toast.text, 300, md ? 212 : 172, { size: 19, align: 'center', color: S.toast.color, weight: 700 });
+  }
+
+  // Focus card ----------------------------------------------------------------
+  if (foc && S.wheel === null) {
+    const t = PING_TYPES[foc.p.type];
+    g.strokeStyle = t.color; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(24, 462); g.lineTo(576, 462); g.stroke();
+    glyph(g, t.shape, 46, 496, 15, t.color, 3);
+    text(t.label, 76, 508, { size: 30, weight: 800, color: t.color });
+    text(fmtDist(foc.dist), 576, 508, { size: 30, weight: 800, align: 'right' });
+    // relative direction arrow next to the distance
+    g.save(); g.translate(470, 497); g.rotate((foc.rel * Math.PI) / 180);
+    g.fillStyle = '#fff'; g.beginPath(); g.moveTo(0, -13); g.lineTo(9, 9); g.lineTo(0, 4); g.lineTo(-9, 9); g.closePath(); g.fill(); g.restore();
+    const elev = Math.abs(foc.dy) > 2.2 ? ` · ${foc.dy > 0 ? 'ABOVE' : 'BELOW'} ${Math.abs(foc.dy).toFixed(0)}m` : '';
+    text(`${clock(foc.rel)} O'CLOCK · ${cardinal(foc.brg)}${elev} · ${foc.p.by} · ${fmtAge(now - foc.p.ts)}`, 24, 540, { size: 17, color: '#cfd8e3', weight: 500 });
+    const st = foc.p.resp ? `${foc.p.resp.who} ${foc.p.resp.state === 'enroute' ? 'EN ROUTE' : 'RESOLVED'}` : foc.p.note || 'OPEN · ↑ TO RESPOND';
+    text(st, 24, 566, { size: 17, color: foc.p.resp ? TEAM_COLOR : '#cfd8e3', weight: 600 });
+  }
+  const pos = S.live ? (S.hasMotion ? 'HDG: COMPASS' : 'HDG: DRAG TO TURN') : 'POS: SPLAT MAP';
+  text(`${ME} · LINK OK · ${pos} · ${S.team.length} TEAM`, 300, 594, { size: 13, align: 'center', color: '#8fa3b5', weight: 500 });
+
+  // Ping wheel ----------------------------------------------------------------
+  if (S.wheel !== null) {
+    g.fillStyle = '#000'; g.fillRect(150, 196, 300, 280);
+    g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 1; g.strokeRect(150, 196, 300, 280);
+    const page = WHEEL[S.wheel];
+    const slot = { up: [300, 240], right: [395, 336], down: [300, 432], left: [205, 336], center: [300, 336] };
+    for (const [k, [x, y]] of Object.entries(slot)) {
+      const id = page[k];
+      if (id === 'MORE') { text('MORE ▾', x, y + 6, { size: 18, align: 'center', color: '#cfd8e3' }); continue; }
+      const t = PING_TYPES[id];
+      glyph(g, t.shape, x, y - 12, 12, t.color, 3);
+      text(t.label, x, y + 24, { size: k === 'center' ? 15 : 17, align: 'center', color: t.color, weight: 700 });
+    }
+    text('swipe to drop · pinch = MARK', 300, 470, { size: 13, align: 'center', color: '#8fa3b5', weight: 500 });
+    // aim point (centre of view): the ping lands where you are looking
+    g.strokeStyle = '#fff'; g.lineWidth = 2;
+    g.beginPath(); g.arc(300, 300, 3, 0, 7); g.stroke();
+  }
+}
+
+function toast(textStr, color = '#fff', ms = 2600) {
+  S.toast = { text: textStr, color, until: performance.now() + ms };
+}
+function say(str, urgent = false) {
+  try {
+    if (!('speechSynthesis' in window)) return;
+    if (urgent) speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(str);
+    u.rate = 1.05;
+    speechSynthesis.speak(u);
+  } catch {}
+}
+
+// ---------------------------------------------------------------- input
+function setView(v) {
+  S.view = v;
+  document.body.classList.toggle('cmd', v === 'cmd');
+  document.getElementById('vResp').setAttribute('aria-pressed', v === 'resp');
+  document.getElementById('vCmd').setAttribute('aria-pressed', v === 'cmd');
+  orbit.enabled = v === 'cmd';
+  for (const o of markers.children) o.visible = v === 'cmd';
+  if (meMarker) meMarker.visible = v === 'cmd';
+  if (v === 'cmd') {
+    // Look down at the responder from above and behind ("dollhouse" view).
+    const back = dirFrom(norm360(THREE.MathUtils.radToDeg(S.yaw)) + 180, 0);
+    orbit.target.copy(fpCam.position).add(new THREE.Vector3(0, -1.2 / M, 0));
+    cmdCam.position.copy(orbit.target).addScaledVector(back, 3.5 / M).add(new THREE.Vector3(0, 7 / M, 0));
+    orbit.update();
+  }
+  layout();
+}
+document.getElementById('vResp').onclick = () => setView('resp');
+document.getElementById('vCmd').onclick = () => setView('cmd');
+document.getElementById('btnMayday').onclick = teammateMayday;
+document.getElementById('wLive').onclick = () => setLive(true);
+document.getElementById('wScan').onclick = () => (LIVE_ONLY ? (location.search = '') : setLive(false));
+
+const palette = document.getElementById('palette');
+for (const id of ['victim', 'hazard', 'clear', 'backup', 'exit', 'mark']) {
+  const t = PING_TYPES[id];
+  const b = document.createElement('button');
+  b.style.color = t.color;
+  b.innerHTML = `<span class="sw"></span>${t.label}`;
+  b.title = `${t.hint}. Responder view: drops where you look. Command view: click the scene.`;
+  b.onclick = () => {
+    S.palette = id;
+    for (const x of palette.children) x.setAttribute('aria-pressed', x === b);
+    if (S.view === 'resp') dropAtGaze(id);
+  };
+  b.setAttribute('aria-pressed', id === S.palette);
+  palette.appendChild(b);
+}
+
+addEventListener('keydown', (e) => {
+  if (e.target.closest && e.target.closest('button') && e.key === 'Enter') return; // let buttons click
+  const k = e.key;
+  if (S.wheel !== null) {
+    const page = WHEEL[S.wheel];
+    const dir = { ArrowUp: 'up', ArrowRight: 'right', ArrowDown: 'down', ArrowLeft: 'left', Enter: 'center' }[k];
+    if (dir) {
+      e.preventDefault();
+      const id = page[dir];
+      if (id === 'MORE') S.wheel = 1;
+      else { S.wheel = null; dropAtGaze(id); }
+      return;
+    }
+    if (k === 'Escape' || k === 'Backspace') { S.wheel = null; return; }
+  }
+  if (k === 'Enter') { e.preventDefault(); S.wheel = 0; return; }
+  if (k === 'ArrowLeft' || k === 'ArrowRight') {
+    e.preventDefault();
+    const list = ranked();
+    if (!list.length) return;
+    const i = Math.max(0, list.findIndex((x) => x.p.id === S.focusId));
+    S.focusId = list[(i + (k === 'ArrowRight' ? 1 : list.length - 1)) % list.length].p.id;
+    return;
+  }
+  if (k === 'ArrowUp') {
+    e.preventDefault();
+    const foc = focused(ranked());
+    if (!foc) return;
+    const next = foc.p.status === 'enroute' && foc.p.resp?.who === ME ? 'resolved' : 'enroute';
+    respond(foc.p, ME, next);
+    toast(`YOU: ${next === 'enroute' ? 'EN ROUTE' : 'RESOLVED'} → ${PING_TYPES[foc.p.type].label}`, TEAM_COLOR);
+    if (foc.p.type === 'mayday' && next === 'resolved') S.team.find((m) => m.cs === foc.p.by).down = false;
+    return;
+  }
+  if (k === 'v' || k === 'V') return setView(S.view === 'resp' ? 'cmd' : 'resp');
+  if (k === 'm' || k === 'M') return teammateMayday();
+  S.keys.add(k.toLowerCase());
+});
+addEventListener('keyup', (e) => S.keys.delete(e.key.toLowerCase()));
+addEventListener('blur', () => S.keys.clear());
+
+// Drag to look (responder view); click to place a ping (command view).
+let drag = null;
+canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, moved: 0 }; if (S.view === 'resp') canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.moved += Math.abs(dx) + Math.abs(dy);
+  drag.x = e.clientX; drag.y = e.clientY;
+  if (S.view === 'resp') {
+    S.yaw -= dx * 0.004;
+    S.pitch = THREE.MathUtils.clamp(S.pitch - dy * 0.004, -1.3, 1.3);
+  }
+});
+canvas.addEventListener('pointerup', (e) => {
+  if (drag && drag.moved < 5 && S.view === 'cmd') {
+    const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    ray.setFromCamera(ndc, cmdCam);
+    const dir = ray.ray.direction.clone();
+    const hit = hitSplat(cmdCam.position.clone(), dir, 200 / M);
+    // No scan (live-only mode): drop on the floor plane instead.
+    const floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(fpCam.position.y - SCENE.eye / M));
+    const onFloor = hit ? null : ray.ray.intersectPlane(floor, new THREE.Vector3());
+    if (hit || onFloor) dropPing(S.palette, hit ? hit.point : onFloor);
+  }
+  drag = null;
+});
+
+// ---------------------------------------------------------------- layout + loop
+function layout() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  if (S.live) fpCam.fov = liveFov(); // portrait vs landscape changes the camera's vertical FOV
+  for (const c of [fpCam, cmdCam]) { c.aspect = w / h; c.updateProjectionMatrix(); }
+  // Glasses view: the display sits in the middle of what the wearer sees.
+  // Command view: the same HUD is mirrored in a corner so the commander sees what the responder sees.
+  const size = S.view === 'resp' ? Math.min(600, h * 0.62, w * 0.62) : Math.min(300, w * 0.4);
+  Object.assign(glass.style, S.view === 'resp'
+    ? { width: `${size}px`, height: `${size}px`, left: `${(w - size) / 2}px`, top: `${(h - size) / 2}px`, right: '', bottom: '' }
+    : { width: `${size}px`, height: `${size}px`, left: '', top: '', right: '16px', bottom: '36px' });
+}
+addEventListener('resize', layout);
+
+let last = performance.now();
+let ceilY = Infinity; // set after scale calibration
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (S.view === 'resp' && S.wheel === null) {
+    const sp = ((S.keys.has('shift') ? 2.8 : 1.4) * dt) / M;
+    const f = (S.keys.has('w') ? 1 : 0) - (S.keys.has('s') ? 1 : 0);
+    const r = (S.keys.has('d') ? 1 : 0) - (S.keys.has('a') ? 1 : 0);
+    fpCam.position.x += (-Math.sin(S.yaw) * f + Math.cos(S.yaw) * r) * sp;
+    fpCam.position.z += (-Math.cos(S.yaw) * f - Math.sin(S.yaw) * r) * sp;
+  }
+  if (S.live && S.hasMotion) {
+    // Phone sensors drive the view (smoothed), and the HUD reads heading/tilt back from it.
+    fpCam.quaternion.slerp(motionQ, 0.3);
+    S.yaw = fpCam.rotation.y;
+    S.pitch = fpCam.rotation.x;
+  } else {
+    fpCam.rotation.set(S.pitch, S.yaw, 0);
+  }
+  teammatesTick(dt);
+  if (meMarker) {
+    meMarker.position.copy(fpCam.position);
+    meMarker.rotation.set(0, S.yaw, 0);
+  }
+  if (S.view === 'cmd') {
+    orbit.update();
+    // Cutaway: push the near plane down to just under the ceiling so the room opens up.
+    const dir = cmdCam.getWorldDirection(new THREE.Vector3());
+    const t = dir.y < -0.05 ? (cmdCam.position.y - ceilY) / -dir.y : 0;
+    cmdCam.near = Math.max(0.01, t);
+    cmdCam.updateProjectionMatrix();
+  }
+  // In live responder view the camera feed is the world, so skip the 3D render entirely.
+  if (!(S.live && S.view === 'resp')) renderer.render(scene, S.view === 'cmd' ? cmdCam : fpCam);
+  drawHUD(now);
+  requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- boot
+layout();
+requestAnimationFrame(frame);
+const spawn = new THREE.Vector3(...SCENE.spawn);
+fpCam.position.copy(spawn);
+if (splat) {
+  await splat.initialized;
+  splat.updateMatrixWorld(true);
+  // The splat only becomes raycastable after its first render updates; wait for that.
+  for (let i = 0; i < 100 && !hitSplat(spawn, new THREE.Vector3(0, -1, 0), 1e4); i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  // Self-calibrate scale: assume the spawn point is at eye height above the floor.
+  if (!q.get('scale')) {
+    const down = hitSplat(spawn, new THREE.Vector3(0, -1, 0), 1e4);
+    if (down && down.distance > 1e-3) M = SCENE.eye / down.distance;
+  }
+}
+ceilY = splat ? spawn.y + 0.75 / M : Infinity;
+orbit.maxPolarAngle = 1.25;
+makeMeMarker();
+teammatesInit(spawn);
+// Seed a few pings by casting rays from the spawn point onto real surfaces in the scan.
+// Without a scan they go on the floor at a fixed distance in that direction.
+// [type, yaw offset (deg, + = left), pitch (deg), author, note, fallback distance (m)]
+const seeds = [
+  ['victim', -8, -17, 'ALPHA-2', 'Conscious, can\'t stand', 6],
+  ['hazard', -42, -28, 'BRAVO-1', 'Exposed cables', 4],
+  ['clear', 50, -30, 'BRAVO-1', 'Sofa checked', 3],
+  ['exit', 153, -8, 'CMD', 'Way out', 12],
+];
+for (const [type, yawOff, pitch, by, note, dist] of seeds) {
+  const hit = hitSplat(spawn, dirFrom(SCENE.yaw + yawOff, pitch));
+  const pos = hit
+    ? hit.point
+    : spawn.clone().addScaledVector(dirFrom(SCENE.yaw + yawOff, 0), dist / M).setY(spawn.y - SCENE.eye / M);
+  addPing(type, pos, by, { note, ts: Date.now() - 60e3 * (1 + Math.random() * 4) });
+}
+const loader = document.getElementById('loader');
+if (LIVE_ONLY) {
+  // Camera + sensor permissions need a tap, so gate on a button.
+  document.getElementById('loadTitle').textContent = 'Live camera mode';
+  document.getElementById('loadBar').hidden = true;
+  document.getElementById('loadMsg').innerHTML =
+    'Hold your phone up like you\'re wearing the glasses. Pings stay put as you turn (compass + tilt sensors).' +
+    '<br><a href="./">Use the 3D scan instead</a>';
+  const btn = document.getElementById('btnStart');
+  btn.hidden = false;
+  btn.onclick = async () => {
+    await setLive(true);
+    loader.classList.add('done');
+  };
+} else {
+  loader.classList.add('done');
+}
+</script>
+</body>
+</html>
