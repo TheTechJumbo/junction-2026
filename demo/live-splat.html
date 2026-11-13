@@ -28,10 +28,10 @@
   .seg button[aria-pressed="true"] { color: var(--ink); background: #13202d; box-shadow: inset 0 -2px 0 var(--blue); }
   a.back { color: var(--dim); text-decoration: none; padding: 8px 4px; }
 
-  /* The pipeline, left to right: camera frame -> AI depth -> Gaussians (the big view). */
+  /* The pipeline: camera frame -> depth -> Gaussians (the big view). */
   .pip { position: fixed; right: 12px; top: 64px; width: min(30vw, 220px); display: flex; flex-direction: column; gap: 8px; }
   .pip figure { margin: 0; position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #000; }
-  .pip video, .pip canvas { display: block; width: 100%; height: auto; }
+  .pip video, .pip canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
   .pip figcaption { position: absolute; left: 6px; top: 4px; font-size: 11px; color: #fff; text-shadow: 0 1px 2px #000; letter-spacing: .05em; }
 
   .panel { position: fixed; left: 12px; bottom: max(12px, env(safe-area-inset-bottom)); padding: 10px 12px; display: flex;
@@ -42,13 +42,20 @@
   .row button { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
   label { font-size: 12px; color: var(--dim); display: flex; gap: 6px; align-items: center; }
 
-  #gate { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 5; padding: 16px; }
+  /* In AR the camera passthrough is the background, so only show AR controls. */
+  .ar-only { display: none; }
+  body.ar .ar-only { display: revert; }
+  body.ar .no-ar { display: none; }
+
+  #gate { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 5; padding: 16px; overflow: auto; }
   #gate .box { max-width: 480px; display: flex; flex-direction: column; gap: 10px; }
   #gate h1 { font-size: 20px; margin: 0; }
+  #gate h2 { font-size: 14px; margin: 6px 0 0; }
   #gate p, #gate ol { color: var(--dim); margin: 0; }
   #gate ol { padding-left: 20px; }
-  #start { border: 1px solid var(--blue); border-radius: 6px; align-self: flex-start; padding: 10px 16px; }
-  #start:disabled { opacity: .5; cursor: default; }
+  .go { border: 1px solid var(--blue); border-radius: 6px; align-self: flex-start; padding: 10px 16px; }
+  .go.primary { background: #0f2a3b; }
+  .go:disabled { opacity: .5; cursor: default; }
   .bar { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--blue); transition: width .2s; }
   #gmsg.err { color: var(--red); }
@@ -57,41 +64,49 @@
 <body>
 <canvas id="view"></canvas>
 
-<header>
-  <div class="brand">BEACON<small>live splat</small></div>
-  <div class="seg" role="group" aria-label="View">
-    <button id="vFollow" aria-pressed="true" title="See the scan from where your phone is pointing">Follow</button>
-    <button id="vOrbit" aria-pressed="false" title="Drag to fly around the scan from outside">Orbit</button>
+<!-- Everything inside #ui stays visible in AR (WebXR DOM overlay). -->
+<div id="ui">
+  <header>
+    <div class="brand">BEACON<small>live splat</small></div>
+    <div class="seg no-ar" role="group" aria-label="View">
+      <button id="vFollow" aria-pressed="true" title="See the scan from where your phone is pointing">Follow</button>
+      <button id="vOrbit" aria-pressed="false" title="Drag to fly around the scan from outside">Orbit</button>
+    </div>
+    <div class="seg ar-only"><button id="btnHideCam" aria-pressed="false">Hide camera</button></div>
+  </header>
+
+  <div class="pip">
+    <figure class="no-ar"><video id="cam" playsinline muted autoplay></video><figcaption>1 · CAMERA</figcaption></figure>
+    <figure><canvas id="depth" width="2" height="2"></canvas><figcaption id="depthCap">2 · DEPTH</figcaption></figure>
   </div>
-</header>
 
-<div class="pip">
-  <figure><video id="cam" playsinline muted autoplay></video><figcaption>1 · CAMERA</figcaption></figure>
-  <figure><canvas id="depth" width="2" height="2"></canvas><figcaption>2 · DEPTH (AI)</figcaption></figure>
-</div>
-
-<div class="panel">
-  <div class="stats" id="stats">Waiting for camera…</div>
-  <div class="row">
-    <button id="btnPause">Pause scan</button>
-    <button id="btnClear">Clear</button>
-    <label>Splat size <input id="size" type="range" min="0.15" max="1.6" step="0.05" value="1"></label>
-    <a class="back" href="./?live">← ping demo</a>
+  <div class="panel">
+    <div class="stats" id="stats">Waiting to start…</div>
+    <div class="row">
+      <button id="btnPause">Pause scan</button>
+      <button id="btnClear">Clear</button>
+      <label>Splat size <input id="size" type="range" min="0.15" max="1.6" step="0.05" value="1"></label>
+      <button id="btnExit" class="ar-only">Exit AR</button>
+      <a class="back no-ar" href="./?live">← ping demo</a>
+    </div>
   </div>
 </div>
 
 <div id="gate"><div class="box">
   <h1>Live Gaussian splat</h1>
-  <p>Turns what your camera sees into a 3D Gaussian-splat scan, live, as you look around.</p>
-  <ol>
-    <li>Each frame, a small AI model (Depth Anything V2) estimates how far away every pixel is.</li>
-    <li>Pixels become coloured 3D Gaussians, placed using the phone's orientation sensors.</li>
-    <li>When a spot is seen again, its Gaussian is merged: it gets more solid and tighter. Gaussians that turn out to be empty space (something moved) fade away.</li>
-  </ol>
-  <p>Stand in one spot and pan slowly. The first start downloads a 20–30 MB model, which is then cached.</p>
-  <button id="start">Start camera</button>
+  <p>Turns the real room into a 3D Gaussian-splat scan, live, as you move your phone.</p>
+  <h2 id="arTitle" hidden>AR scan (recommended on this phone)</h2>
+  <p id="arText" hidden>Uses the phone's own AR tracking and depth (ARCore): real-time, true metres, and you can walk around.
+    Splats appear on top of the real room as they are created.</p>
+  <button id="startAR" class="go primary" hidden>Start AR scan</button>
+  <h2>AI depth scan</h2>
+  <p>Works on any phone: a small AI model (Depth Anything V2) guesses depth from the camera image a few times a second.
+    Stand in one spot and pan. First start downloads a 20–30 MB model.</p>
+  <button id="start" class="go">Start AI depth scan</button>
   <div class="bar" id="mbar" hidden><i id="mfill"></i></div>
   <p id="gmsg"></p>
+  <p style="font-size:12px">In both modes, points within 2 cm merge into one Gaussian: seen again, it gets more solid and
+    tighter; if the camera now sees past it (something moved), it fades.</p>
 </div></div>
 
 <script type="importmap">
@@ -111,23 +126,28 @@ const q = new URLSearchParams(location.search);
 const PHONE = matchMedia('(pointer: coarse)').matches;
 const CFG = {
   model: 'onnx-community/depth-anything-v2-small',
-  res: Number(q.get('res')) || 0, // model input size (multiple of 14); 0 = pick by backend speed
-  fovLong: Number(q.get('fov')) || 65, // camera field of view across the frame's long side, degrees
-  near: Number(q.get('near')) || 0.4, // the model gives relative depth; map it to this metre range
+  res: Number(q.get('res')) || 0, // AI model input size (multiple of 14); 0 = pick by device
+  fovLong: Number(q.get('fov')) || 65, // AI mode: camera FOV across the frame's long side, degrees
+  near: Number(q.get('near')) || 0.4, // AI mode maps relative depth onto this metre range
   far: Number(q.get('far')) || 5,
-  voxel: Number(q.get("voxel")) || 0.02, // metres: observations closer than this merge into one Gaussian
-  stride: 2, // sample every Nth depth pixel
-  maxSplats: Number(q.get('max')) || (PHONE ? 200000 : 300000),
-  memory: 24, // how many observations a Gaussian averages over (lower = adapts faster to change)
+  arFar: Number(q.get('arfar')) || 4, // AR mode: ignore depth beyond this (metres); ARCore gets noisy
+  arGrid: Number(q.get('grid')) || 56, // AR mode: depth samples across the view per update
+  voxel: Number(q.get('voxel')) || 0.02, // metres: observations closer than this merge into one Gaussian
+  stride: 2, // AI mode: sample every Nth depth pixel
+  maxSplats: Number(q.get('max')) || (PHONE ? 150000 : 300000),
+  memory: 24, // observations a Gaussian averages over (lower = adapts faster to change)
+  carveBudget: 15000, // Gaussians checked for "now empty" per update (round-robin)
 };
 const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ------------------------------------------------------------------ renderer + views
 const canvas = $('view');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
-renderer.setPixelRatio(Math.min(devicePixelRatio, PHONE ? 1.25 : 1.5));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true }); // alpha: AR passthrough
+renderer.setPixelRatio(Math.min(devicePixelRatio, PHONE ? 1 : 1.5));
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x05070a);
+const BG = new THREE.Color(0x05070a);
+scene.background = BG;
 scene.add(new SparkRenderer({ renderer }));
 
 const followCam = new THREE.PerspectiveCamera(60, 1, 0.02, 100);
@@ -157,6 +177,7 @@ $('vFollow').onclick = () => setView('follow');
 $('vOrbit').onclick = () => setView('orbit');
 
 function layout() {
+  if (renderer.xr.isPresenting) return; // XR owns the framebuffer size
   renderer.setSize(innerWidth, innerHeight, false);
   for (const c of [followCam, orbitCam]) { c.aspect = innerWidth / innerHeight; c.updateProjectionMatrix(); }
 }
@@ -184,6 +205,7 @@ const S = {
 const grid = new Map(); // voxel key -> Gaussian index
 let high = 0; // indices [0, high) have been used
 let live = 0;
+let carveCursor = 0;
 const free = [];
 const dirtyList = [];
 let sizeMul = 1;
@@ -231,6 +253,11 @@ function kill(i) {
   totals.faded++;
   markDirty(i);
 }
+// The camera sees past this Gaussian now: it's empty space, so it loses weight and fades.
+function seenThrough(i) {
+  if (S.w[i] <= 1.5) kill(i);
+  else { reweight(i, S.w[i] - 1); markDirty(i); }
+}
 function clearAll() {
   grid.clear();
   free.length = 0;
@@ -276,8 +303,196 @@ $('btnPause').onclick = () => {
   $('btnPause').textContent = paused ? 'Resume scan' : 'Pause scan';
 };
 
-// ------------------------------------------------------------------ phone orientation
-// Same maths as three.js DeviceOrientationControls; absolute alpha 0 = north = -Z.
+// Turbo-ish colour ramp for the depth previews (blue = far, red = near).
+const TURBO = (() => {
+  const stops = [[48, 18, 59], [65, 105, 225], [36, 185, 235], [50, 240, 150], [165, 250, 60], [240, 205, 55], [250, 125, 35], [205, 45, 10], [120, 5, 5]];
+  return Array.from({ length: 256 }, (_, k) => {
+    const f = (k / 255) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(f)), t = f - i;
+    return stops[i].map((c, j) => Math.round(c + (stops[i + 1][j] - c) * t));
+  });
+})();
+const depthCanvas = $('depth');
+const dctx = depthCanvas.getContext('2d');
+function sizeDepthCanvas(w, h) {
+  if (depthCanvas.width !== w || depthCanvas.height !== h) { depthCanvas.width = w; depthCanvas.height = h; }
+}
+
+// ================================================================== AR MODE (Android Chrome)
+// WebXR immersive-ar + ARCore: per-frame metric depth, full 6-DoF pose, optional camera image.
+const AR = {
+  session: null, ref: null, binding: null, frames: 0, every: 2, updates: 0, ups: 0, ms: 0,
+  valid: 0, samples: 0, colours: 'none', err: '', lastRate: performance.now(),
+};
+// Camera colours: draw the XR camera image into a tiny render target and read it back.
+const camTex = new THREE.ExternalTexture();
+const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quadScene = new THREE.Scene();
+quadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+  uniforms: { map: { value: camTex } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: 'uniform sampler2D map; varying vec2 vUv; void main() { gl_FragColor = texture2D(map, vUv); }',
+  depthTest: false,
+  depthWrite: false,
+})));
+let camRT = null, camPixels = null;
+function readCamera(glTexture, w, h) {
+  if (!camRT || camRT.width !== w || camRT.height !== h) {
+    camRT?.dispose();
+    camRT = new THREE.WebGLRenderTarget(w, h, { depthBuffer: false });
+    camPixels = new Uint8Array(w * h * 4);
+  }
+  camTex.sourceTexture = glTexture;
+  const prevXr = renderer.xr.enabled, prevRT = renderer.getRenderTarget();
+  renderer.xr.enabled = false; // otherwise three swaps in the XR camera
+  renderer.setRenderTarget(camRT);
+  renderer.render(quadScene, quadCam);
+  renderer.readRenderTargetPixels(camRT, 0, 0, w, h, camPixels); // row 0 = bottom of the view
+  renderer.setRenderTarget(prevRT);
+  renderer.xr.enabled = prevXr;
+  return camPixels;
+}
+
+let arDepth = new Float32Array(0);
+function arUpdate(frame) {
+  const pose = frame.getViewerPose(AR.ref);
+  if (!pose) return;
+  const v = pose.views[0];
+  const depth = frame.getDepthInformation(v);
+  if (!depth) { AR.err = 'waiting for depth (move the phone a little)'; return; }
+  AR.err = '';
+  const t0 = performance.now();
+  const P = v.projectionMatrix, M = v.transform.matrix, V = v.transform.inverse.matrix;
+  const aspect = P[5] / P[0]; // view width / height
+  const gw = CFG.arGrid, gh = Math.max(8, Math.round(gw / aspect));
+
+  let colours = null;
+  if (AR.binding && v.camera) {
+    try {
+      const tex = AR.binding.getCameraImage(v.camera);
+      if (tex) colours = readCamera(tex, gw, gh);
+    } catch (err) {
+      AR.err = `camera: ${err.message || err}`;
+    }
+  }
+  AR.colours = colours ? 'camera' : 'depth-tinted';
+
+  // 1. Fade Gaussians the camera can now see past (round-robin so the cost stays flat).
+  const budget = Math.min(high, CFG.carveBudget);
+  for (let k = 0; k < budget; k++) {
+    const i = carveCursor;
+    carveCursor = (carveCursor + 1) % high;
+    if (!S.alive[i]) continue;
+    const w = S.w[i], x = S.x[i] / w, y = S.y[i] / w, z = S.z[i] / w;
+    const X = V[0] * x + V[4] * y + V[8] * z + V[12];
+    const Y = V[1] * x + V[5] * y + V[9] * z + V[13];
+    const d = -(V[2] * x + V[6] * y + V[10] * z + V[14]);
+    if (d < 0.2) continue;
+    const xn = (P[0] * X) / d - P[8], yn = (P[5] * Y) / d - P[9];
+    if (xn <= -0.98 || xn >= 0.98 || yn <= -0.98 || yn >= 0.98) continue;
+    const obs = depth.getDepthInMeters((xn + 1) / 2, (1 - yn) / 2);
+    if (obs > 0 && d < obs * 0.85 - CFG.voxel) seenThrough(i);
+  }
+
+  // 2. Back-project a grid of depth samples to world space and fuse them.
+  if (arDepth.length !== gw * gh) arDepth = new Float32Array(gw * gh);
+  const foot = 2 / (P[0] * gw); // sample spacing per metre of depth
+  const cx = M[12], cy = M[13], cz = M[14];
+  let valid = 0;
+  for (let j = 0; j < gh; j++) {
+    const vy = (j + 0.5) / gh;
+    for (let i = 0; i < gw; i++) {
+      const vx = (i + 0.5) / gw;
+      const d = depth.getDepthInMeters(vx, vy); // distance from the view plane, metres
+      arDepth[j * gw + i] = d;
+      if (!(d > 0.15 && d < CFG.arFar)) continue;
+      valid++;
+      const X = (d * (vx * 2 - 1 + P[8])) / P[0], Y = (d * (1 - vy * 2 + P[9])) / P[5], Z = -d;
+      const wx = M[0] * X + M[4] * Y + M[8] * Z + M[12];
+      const wy = M[1] * X + M[5] * Y + M[9] * Z + M[13];
+      const wz = M[2] * X + M[6] * Y + M[10] * Z + M[14];
+      let r, g, b;
+      if (colours) {
+        const p = ((gh - 1 - j) * gw + i) * 4;
+        r = colours[p] / 255; g = colours[p + 1] / 255; b = colours[p + 2] / 255;
+      } else {
+        const c = TURBO[Math.max(0, Math.min(255, (255 * (1 - d / CFG.arFar)) | 0))];
+        r = c[0] / 255; g = c[1] / 255; b = c[2] / 255;
+      }
+      const nx = cx - wx, ny = cy - wy, nz = cz - wz, len = Math.hypot(nx, ny, nz) || 1;
+      observe(wx, wy, wz, r, g, b, Math.max(d * foot, CFG.voxel * 0.9), nx / len, ny / len, nz / len);
+    }
+  }
+  AR.valid = valid;
+  AR.samples = gw * gh;
+  flush();
+  totals.frames++;
+
+  // Depth preview (cheap: it's the sample grid we already have).
+  sizeDepthCanvas(gw, gh);
+  const img = dctx.createImageData(gw, gh);
+  for (let k = 0; k < gw * gh; k++) {
+    const d = arDepth[k], c = d > 0 ? TURBO[Math.max(0, Math.min(255, (255 * (1 - d / CFG.arFar)) | 0))] : [0, 0, 0];
+    img.data[k * 4] = c[0]; img.data[k * 4 + 1] = c[1]; img.data[k * 4 + 2] = c[2]; img.data[k * 4 + 3] = 255;
+  }
+  dctx.putImageData(img, 0, 0);
+
+  // Keep the view real-time: if fusing got slow, fuse less often (and vice versa).
+  AR.ms = performance.now() - t0;
+  if (AR.ms > 22 && AR.every < 6) AR.every++;
+  else if (AR.ms < 9 && AR.every > 1) AR.every--;
+  AR.updates++;
+}
+
+async function startAR() {
+  const msg = $('gmsg');
+  msg.className = '';
+  msg.textContent = 'Starting AR…';
+  try {
+    const session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['depth-sensing'],
+      optionalFeatures: ['camera-access', 'dom-overlay'],
+      depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] },
+      domOverlay: { root: $('ui') },
+    });
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType('local');
+    renderer.xr.setFramebufferScaleFactor(PHONE ? 0.8 : 1); // fewer pixels = faster splat drawing
+    await renderer.xr.setSession(session);
+    AR.session = session;
+    AR.ref = renderer.xr.getReferenceSpace();
+    AR.binding = session.enabledFeatures?.includes('camera-access') ? renderer.xr.getBinding() : null;
+    AR.frames = 0;
+    session.addEventListener('end', endAR);
+    clearAll();
+    scene.background = null; // let the camera passthrough show
+    document.body.classList.add('ar');
+    $('depthCap').textContent = 'DEPTH (ARCore)';
+    $('gate').hidden = true;
+  } catch (err) {
+    msg.className = 'err';
+    msg.textContent = `AR couldn't start (${err.message || err}). This phone may not support ARCore depth; try the AI depth scan.`;
+  }
+}
+function endAR() {
+  AR.session = null;
+  renderer.xr.enabled = false;
+  scene.background = BG;
+  document.body.classList.remove('ar');
+  $('btnHideCam').setAttribute('aria-pressed', 'false');
+  layout();
+  setView('orbit'); // after walking around, the overview is the interesting view
+  $('gmsg').textContent = '';
+}
+$('btnExit').onclick = () => AR.session?.end();
+$('btnHideCam').onclick = () => {
+  const hide = scene.background === null;
+  scene.background = hide ? new THREE.Color(0x000000) : null;
+  $('btnHideCam').setAttribute('aria-pressed', hide);
+  $('btnHideCam').textContent = hide ? 'Show camera' : 'Hide camera';
+};
+
+// ================================================================== AI DEPTH MODE (any phone)
+// Phone orientation (rotation only) + per-frame depth from Depth Anything V2.
 const devQ = new THREE.Quaternion();
 const qX = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
 const qS = new THREE.Quaternion(), eul = new THREE.Euler(), zee = new THREE.Vector3(0, 0, 1);
@@ -301,17 +516,14 @@ function enableMotion() {
   if (typeof DO?.requestPermission === 'function') DO.requestPermission().catch(() => {});
 }
 
-// ------------------------------------------------------------------ depth model
 let T, model, processor, device = 'wasm', dtype = 'q8', onProgress = () => {};
-
-// Pick the fastest backend this device has. Phones get the 4-bit model (19 MB) to keep
-// the download small; desktops get fp16 (50 MB). Anything that fails drops to the CPU.
+// Fastest backend this device has. Phones get the 4-bit model (19 MB); anything failing drops to CPU.
 async function pickBackend() {
   if (q.get('device')) return [q.get('device'), q.get('dtype') || (q.get('device') === 'webgpu' ? 'fp16' : 'q8')];
   try {
     const adapter = navigator.gpu && (await navigator.gpu.requestAdapter());
     if (adapter?.features.has('shader-f16')) return ['webgpu', q.get('dtype') || (PHONE ? 'q4f16' : 'fp16')];
-    if (adapter) return ['webgpu', q.get('dtype') || 'q4']; // no fp16 shaders: 4-bit weights, fp32 maths
+    if (adapter) return ['webgpu', q.get('dtype') || 'q4'];
   } catch {}
   return ['wasm', 'q8'];
 }
@@ -322,14 +534,13 @@ async function loadModel(dev, dt) {
     dtype,
     progress_callback: (p) => p.status === 'progress' && p.file?.endsWith('.onnx') && onProgress(p.progress),
   });
-  // The model expects 518 px; much less keeps it live (and the CPU path needs it smaller still).
-  const res = CFG.res || (device === 'webgpu' ? 252 : 182);
+  // The model expects 518 px; far smaller keeps it live, smallest on a phone CPU.
+  const res = CFG.res || (device === 'webgpu' ? (PHONE ? 182 : 252) : PHONE ? 126 : 168);
   const ip = processor.image_processor ?? processor.feature_extractor ?? processor;
   ip.size = { width: res, height: res };
   CFG.activeRes = res;
 }
-// The browser remembers a failed module load for the whole page, so on a flaky network
-// retry with a fresh URL instead of the same one.
+// A failed module load is remembered for the whole page, so retry with a fresh URL.
 async function importTransformers() {
   for (let i = 0; ; i++) {
     try {
@@ -353,19 +564,16 @@ async function initDepth(progress) {
     await loadModel('wasm', 'q8');
   }
 }
-// Run the model; if the GPU path fails at run time (some mobile drivers do), switch to CPU once.
 async function runDepth(inputs) {
   try {
     return await model(inputs);
   } catch (err) {
     if (device === 'wasm') throw err;
     console.warn('GPU inference failed, using CPU', err);
-    setStats('GPU failed here; switching to CPU (slower)…');
     await loadModel('wasm', 'q8');
     return await model(inputs);
   }
 }
-
 function halfToFloat(u16) {
   const out = new Float32Array(u16.length);
   for (let i = 0; i < u16.length; i++) {
@@ -375,23 +583,21 @@ function halfToFloat(u16) {
   return out;
 }
 
-// ------------------------------------------------------------------ capture -> depth -> fuse
 const cam = $('cam');
 const grab = document.createElement('canvas');
 const gctx = grab.getContext('2d', { willReadFrequently: true });
-const depthCanvas = $('depth');
-const dctx = depthCanvas.getContext('2d');
 let lo = null, hi = null; // smoothed disparity range (the model's depth is relative, not metres)
 let depthM = new Float32Array(0);
 const rot = new THREE.Matrix4();
-let lastMs = 0, fps = 0, fov = { tanH: 1, tanV: 1, vfovDeg: 60, aspect: 1 };
+let aiMs = 0, aiFps = 0, fov = { tanH: 1, tanV: 1, vfovDeg: 60, aspect: 1 };
+let aiRunning = false;
 
-async function step() {
-  if (paused || cam.readyState < 2 || !model) return;
+async function aiStep() {
+  if (paused || cam.readyState < 2 || !model || AR.session) return;
   const vw = cam.videoWidth, vh = cam.videoHeight;
   if (!vw || !vh) return;
   const t0 = performance.now();
-  const cw = 256, ch = Math.round((256 * vh) / vw);
+  const cw = 192, ch = Math.round((192 * vh) / vw);
   if (grab.width !== cw || grab.height !== ch) { grab.width = cw; grab.height = ch; }
   gctx.drawImage(cam, 0, 0, cw, ch);
   const frame = gctx.getImageData(0, 0, cw, ch);
@@ -403,24 +609,23 @@ async function step() {
   if (disp instanceof Uint16Array) disp = halfToFloat(disp);
   const dh = out.dims.at(-2), dw = out.dims.at(-1);
 
-  // Field of view of the captured frame.
   const tLong = Math.tan(THREE.MathUtils.degToRad(CFG.fovLong / 2));
   const portrait = vh > vw;
   const tanH = portrait ? (tLong * vw) / vh : tLong;
   const tanV = portrait ? tLong : (tLong * vh) / vw;
   fov = { tanH, tanV, vfovDeg: THREE.MathUtils.radToDeg(2 * Math.atan(tanV)), aspect: vw / vh };
 
-  // Relative inverse depth -> metres. Use robust percentiles, smoothed over frames so the
-  // scale doesn't jump, then map [far..near] onto the range.
-  const n = disp.length, step = Math.max(1, Math.floor(n / 3000));
+  // Relative inverse depth -> metres via robust percentiles, smoothed so the scale doesn't jump.
+  const n = disp.length, st = Math.max(1, Math.floor(n / 2000));
   const sample = [];
-  for (let i = 0; i < n; i += step) sample.push(disp[i]);
+  for (let i = 0; i < n; i += st) sample.push(disp[i]);
   sample.sort((a, b) => a - b);
   const p2 = sample[Math.floor(sample.length * 0.02)], p98 = sample[Math.floor(sample.length * 0.98)];
   lo = lo === null ? p2 : lo + (p2 - lo) * 0.3;
   hi = hi === null ? p98 : hi + (p98 - hi) * 0.3;
   const span = hi - lo || 1, iNear = 1 / CFG.near, iFar = 1 / CFG.far;
   if (depthM.length !== n) depthM = new Float32Array(n);
+  sizeDepthCanvas(dw, dh);
   const img = dctx.createImageData(dw, dh);
   for (let i = 0; i < n; i++) {
     const dn = Math.min(1, Math.max(0, (disp[i] - lo) / span));
@@ -428,108 +633,61 @@ async function step() {
     const c = TURBO[(dn * 255) | 0];
     img.data[i * 4] = c[0]; img.data[i * 4 + 1] = c[1]; img.data[i * 4 + 2] = c[2]; img.data[i * 4 + 3] = 255;
   }
-  if (depthCanvas.width !== dw || depthCanvas.height !== dh) { depthCanvas.width = dw; depthCanvas.height = dh; }
   dctx.putImageData(img, 0, 0);
 
   rot.makeRotationFromQuaternion(pose);
   const e = rot.elements; // column-major: world = R * cam
-  carve(e, dw, dh, tanH, tanV);
+  // Fade Gaussians the camera now sees past (round-robin budget keeps this cheap).
+  const budget = Math.min(high, CFG.carveBudget);
+  for (let k = 0; k < budget; k++) {
+    const i = carveCursor;
+    carveCursor = (carveCursor + 1) % high;
+    if (!S.alive[i]) continue;
+    const w = S.w[i], x = S.x[i] / w, y = S.y[i] / w, z = S.z[i] / w;
+    const cxx = e[0] * x + e[1] * y + e[2] * z; // R^T * world
+    const cyy = e[4] * x + e[5] * y + e[6] * z;
+    const d = -(e[8] * x + e[9] * y + e[10] * z);
+    if (d < 0.15) continue;
+    const xn = cxx / (d * tanH), yn = cyy / (d * tanV);
+    if (xn < -1 || xn > 1 || yn < -1 || yn > 1) continue;
+    const obs = depthM[(((1 - yn) / 2) * (dh - 1) | 0) * dw + (((xn + 1) / 2) * (dw - 1) | 0)];
+    if (d < obs * 0.78 - CFG.voxel) seenThrough(i);
+  }
 
   // Back-project pixels into 3D and fuse them into the Gaussians.
-  const fd = frame.data, st = CFG.stride, foot = (2 * tanH) / dw * st;
-  for (let v = 0; v < dh; v += st) {
-    for (let u = 0; u < dw; u += st) {
+  const fd = frame.data, sd = CFG.stride, foot = ((2 * tanH) / dw) * sd;
+  for (let v = 0; v < dh; v += sd) {
+    for (let u = 0; u < dw; u += sd) {
       const i = v * dw + u, z = depthM[i];
       // Skip depth edges, where the model blends foreground and background ("flying pixels").
-      const zr = depthM[u + st < dw ? i + st : i], zd = depthM[v + st < dh ? i + st * dw : i];
+      const zr = depthM[u + sd < dw ? i + sd : i], zd = depthM[v + sd < dh ? i + sd * dw : i];
       if (Math.abs(zr - z) > 0.07 * z || Math.abs(zd - z) > 0.07 * z) continue;
       const xn = ((u + 0.5) / dw) * 2 - 1, yn = 1 - ((v + 0.5) / dh) * 2;
-      const cx = xn * tanH * z, cy = yn * tanV * z, cz = -z;
-      const wx = e[0] * cx + e[4] * cy + e[8] * cz;
-      const wy = e[1] * cx + e[5] * cy + e[9] * cz;
-      const wz = e[2] * cx + e[6] * cy + e[10] * cz;
+      const cxx = xn * tanH * z, cyy = yn * tanV * z, czz = -z;
+      const wx = e[0] * cxx + e[4] * cyy + e[8] * czz;
+      const wy = e[1] * cxx + e[5] * cyy + e[9] * czz;
+      const wz = e[2] * cxx + e[6] * cyy + e[10] * czz;
       const pu = Math.min(cw - 1, (((u + 0.5) / dw) * cw) | 0), pv = Math.min(ch - 1, (((v + 0.5) / dh) * ch) | 0);
       const p = (pv * cw + pu) * 4;
       const len = Math.hypot(wx, wy, wz) || 1;
-      // Size: the pixel's footprint, but never smaller than the merge cell, so neighbours overlap.
-      const rad = Math.max(z * foot, CFG.voxel * 0.9);
-      observe(wx, wy, wz, fd[p] / 255, fd[p + 1] / 255, fd[p + 2] / 255, rad, -wx / len, -wy / len, -wz / len);
+      observe(wx, wy, wz, fd[p] / 255, fd[p + 1] / 255, fd[p + 2] / 255, Math.max(z * foot, CFG.voxel * 0.9), -wx / len, -wy / len, -wz / len);
     }
   }
   flush();
   totals.frames++;
-  const ms = performance.now() - t0;
-  lastMs = ms;
-  fps = fps ? fps * 0.8 + (1000 / ms) * 0.2 : 1000 / ms;
+  aiMs = performance.now() - t0;
+  aiFps = aiFps ? aiFps * 0.8 + (1000 / aiMs) * 0.2 : 1000 / aiMs;
 }
-
-// Free-space carving: if the camera now sees *past* a Gaussian, that spot is empty
-// (a person walked away, a door opened), so it loses weight and eventually fades.
-function carve(e, dw, dh, tanH, tanV) {
-  for (let i = 0; i < high; i++) {
-    if (!S.alive[i]) continue;
-    const w = S.w[i], x = S.x[i] / w, y = S.y[i] / w, z = S.z[i] / w;
-    const cx = e[0] * x + e[1] * y + e[2] * z; // R^T * world
-    const cy = e[4] * x + e[5] * y + e[6] * z;
-    const d = -(e[8] * x + e[9] * y + e[10] * z);
-    if (d < 0.15) continue;
-    const xn = cx / (d * tanH), yn = cy / (d * tanV);
-    if (xn < -1 || xn > 1 || yn < -1 || yn > 1) continue;
-    const obs = depthM[(((1 - yn) / 2) * (dh - 1) | 0) * dw + (((xn + 1) / 2) * (dw - 1) | 0)];
-    if (d < obs * 0.78 - CFG.voxel) {
-      if (w <= 1.5) kill(i);
-      else { reweight(i, w - 1); markDirty(i); }
-    }
-  }
-}
-
-// Turbo-ish colour ramp for the depth preview (blue = far, red = near).
-const TURBO = (() => {
-  const stops = [[48, 18, 59], [65, 105, 225], [36, 185, 235], [50, 240, 150], [165, 250, 60], [240, 205, 55], [250, 125, 35], [205, 45, 10], [120, 5, 5]];
-  return Array.from({ length: 256 }, (_, k) => {
-    const f = (k / 255) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(f)), t = f - i;
-    return stops[i].map((c, j) => Math.round(c + (stops[i + 1][j] - c) * t));
-  });
-})();
-
-async function captureLoop() {
+async function aiLoop() {
+  if (aiRunning) return;
+  aiRunning = true;
   for (;;) {
-    try { await step(); } catch (err) { console.error(err); setStats(`Depth error: ${err.message || err}`); await sleep(1000); }
-    await sleep(20);
+    try { await aiStep(); } catch (err) { console.error(err); setStats(`Depth error: ${err.message || err}`); await sleep(1000); }
+    await sleep(15);
   }
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ------------------------------------------------------------------ stats + render loop
-const fmt = (n) => n.toLocaleString('en-US');
-function setStats(html) { $('stats').innerHTML = html; }
-function statsLine() {
-  setStats(
-    `Gaussians <b>${fmt(live)}</b> · added ${fmt(totals.added)} · merged ${fmt(totals.merged)} · faded ${fmt(totals.faded)}<br>` +
-    `Depth <b>${fps.toFixed(1)} fps</b> (${Math.round(lastMs)} ms) · ${device === 'webgpu' ? 'GPU' : 'CPU'} ${dtype} · ${CFG.activeRes}px · ` +
-    `${hasMotion ? 'orientation: sensors' : 'orientation: fixed (no sensors)'}${paused ? ' · <b>paused</b>' : ''}`,
-  );
-}
-setInterval(() => model && statsLine(), 500);
-
-function frameLoop() {
-  requestAnimationFrame(frameLoop);
-  followCam.quaternion.slerp(devQ, 0.3);
-  if (Math.abs(followCam.fov - fov.vfovDeg) > 0.5) { followCam.fov = fov.vfovDeg; followCam.updateProjectionMatrix(); }
-  proxy.quaternion.copy(devQ);
-  proxy.fov = fov.vfovDeg;
-  proxy.aspect = fov.aspect;
-  proxy.updateProjectionMatrix();
-  proxy.updateMatrixWorld();
-  camHelper.update();
-  if (view === 'orbit') orbit.update();
-  renderer.render(scene, view === 'orbit' ? orbitCam : followCam);
-}
-requestAnimationFrame(frameLoop);
-window.__live = { S, CFG, totals, devQ, get live() { return live; }, get fps() { return fps; }, get device() { return `${device} ${dtype}`; } };
-
-// ------------------------------------------------------------------ start (needs a tap)
-$('start').onclick = async () => {
+async function startAI() {
   const btn = $('start'), msg = $('gmsg');
   btn.disabled = true;
   msg.className = '';
@@ -558,9 +716,63 @@ $('start').onclick = async () => {
     btn.disabled = false;
     return;
   }
+  $('depthCap').textContent = '2 · DEPTH (AI)';
   $('gate').hidden = true;
-  captureLoop();
-};
+  aiLoop();
+}
+
+// ================================================================== stats + render loop
+const fmt = (n) => n.toLocaleString('en-US');
+function setStats(html) { $('stats').innerHTML = html; }
+function statsLine() {
+  const now = performance.now();
+  if (now - AR.lastRate > 1000) { AR.ups = (AR.updates * 1000) / (now - AR.lastRate); AR.updates = 0; AR.lastRate = now; }
+  const head = `Gaussians <b>${fmt(live)}</b> · added ${fmt(totals.added)} · merged ${fmt(totals.merged)} · faded ${fmt(totals.faded)}<br>`;
+  if (AR.session) {
+    setStats(head + `AR depth <b>${AR.ups.toFixed(0)} updates/s</b> (${AR.ms.toFixed(0)} ms) · ${AR.valid}/${AR.samples} samples · ` +
+      `colours: ${AR.colours}${AR.err ? ` · <b>${AR.err}</b>` : ''}${paused ? ' · <b>paused</b>' : ''}`);
+  } else if (model) {
+    setStats(head + `AI depth <b>${aiFps.toFixed(1)} fps</b> (${Math.round(aiMs)} ms) · ${device === 'webgpu' ? 'GPU' : 'CPU'} ${dtype} · ` +
+      `${CFG.activeRes}px · ${hasMotion ? 'orientation: sensors' : 'orientation: fixed'}${paused ? ' · <b>paused</b>' : ''}`);
+  }
+}
+setInterval(statsLine, 500);
+
+renderer.setAnimationLoop((time, frame) => {
+  if (frame && AR.session) {
+    // AR: three renders with the XR camera; we only fuse new depth every few frames.
+    AR.frames++;
+    if (!paused && AR.frames % AR.every === 0) {
+      try { arUpdate(frame); } catch (err) { AR.err = err.message || String(err); }
+    }
+    renderer.render(scene, followCam);
+    return;
+  }
+  followCam.quaternion.slerp(devQ, 0.3);
+  if (Math.abs(followCam.fov - fov.vfovDeg) > 0.5) { followCam.fov = fov.vfovDeg; followCam.updateProjectionMatrix(); }
+  proxy.quaternion.copy(devQ);
+  proxy.fov = fov.vfovDeg;
+  proxy.aspect = fov.aspect;
+  proxy.updateProjectionMatrix();
+  proxy.updateMatrixWorld();
+  camHelper.update();
+  if (view === 'orbit') orbit.update();
+  renderer.render(scene, view === 'orbit' ? orbitCam : followCam);
+});
+// Console/test hooks (arUpdate and readCamera can be exercised with a fake XR frame).
+window.__live = { S, CFG, totals, devQ, AR, arUpdate, readCamera, renderer, THREE, get high() { return high; }, get live() { return live; }, get fps() { return aiFps; }, get device() { return `${device} ${dtype}`; } };
+
+// ================================================================== start buttons
+$('start').onclick = startAI;
+$('startAR').onclick = startAR;
+(async () => {
+  try {
+    if (navigator.xr && (await navigator.xr.isSessionSupported('immersive-ar'))) {
+      for (const id of ['arTitle', 'arText', 'startAR']) $(id).hidden = false;
+      $('start').classList.remove('primary');
+    }
+  } catch {}
+})();
 </script>
 </body>
 </html>

@@ -67,33 +67,47 @@ web apps don't get camera access anyway; only the native SDK does.
 
 ### Live splat scan (`demo/live-splat.html`)
 
-Point a phone camera around and watch the room turn into Gaussian splats as you go. It runs
-entirely in the phone's browser:
+Move a phone around and watch the real room turn into Gaussian splats in real time. It runs
+entirely in the phone's browser and has two modes, which share the same splat fusion.
 
-1. **Depth.** Each frame goes through Depth Anything V2 (small) via transformers.js. It runs on the
-   GPU (WebGPU) where available, otherwise on the CPU. The model is 19 MB on phones, cached after
-   the first load.
-2. **Placement.** Every other depth pixel becomes a coloured 3D Gaussian, placed using the phone's
-   orientation sensors. Each one is a flat disc facing the camera.
-3. **Fusion over time.** Points within 2 cm merge into one Gaussian, which averages its colour and
-   position. The more often a spot is seen, the more solid and tighter its Gaussian gets.
-4. **Change.** If the camera now sees *past* a Gaussian (a person walked away, a door opened), it
-   loses weight and fades out.
+**AR scan (Android Chrome with ARCore). Use this one.**
 
-**Follow** shows the scan from where the phone points. **Orbit** lets you fly around it, with
-the phone's position drawn as a frustum. The **Splat size** slider shrinks the Gaussians so you
-can see the individual blobs.
+1. A WebXR `immersive-ar` session supplies real-time **metric depth** (ARCore Depth API),
+   **full 6-DoF tracking** (walk around freely) and the **camera image** for colours.
+2. Every few frames, a grid of depth samples (56 across) is back-projected through the real camera
+   pose into world space.
+3. The splats are drawn **on top of the live camera view**, so you watch the room turn into splats
+   where you look. **Hide camera** shows the splats alone; **Exit AR** opens the Orbit overview.
+4. Fusion cost is measured every update, and updates become less frequent if it gets slow, so
+   drawing stays smooth.
+
+**AI depth scan (any phone, fallback).** Depth Anything V2 (small) estimates depth from the camera
+image via transformers.js: GPU (WebGPU) if available, else CPU. It's a few updates per second,
+relative depth only, and rotation only (stand still and pan).
+
+How the splats behave in both modes:
+- **Merging:** points within 2 cm merge into one Gaussian, averaging colour and position. The more
+  often a spot is seen, the more solid and tighter its Gaussian gets.
+- **Fading:** if the camera now sees *past* a Gaussian (a person walked away, a door opened), it loses
+  weight and fades out.
+- **Splat size** slider: shrink the Gaussians to see the individual blobs.
+
+Testing note: the AR maths (back-projection, turning, walking, fading) and the camera-colour
+readback were checked with a simulated XR frame in a desktop browser. The real ARCore session
+has not been run from here, so test on the phone.
 
 Limits:
-- **Stand in one spot and pan.** Only rotation is tracked; walking around needs 6-DoF tracking
-  (WebXR on Android, or the glasses' native SDK).
-- **Depth is relative, not metric.** Each frame is rescaled to 0.4–5 m, so sizes are approximate.
+- **AR mode needs ARCore depth:** Chrome on Android with Google Play Services for AR, on a
+  depth-capable phone (most mid/high-end Android). Camera colours need the camera-access
+  permission; without it, splats are tinted by distance.
 - **This is not full 3DGS training.** It's the first stage of real-time splatting systems: Gaussians
   placed from depth, then fused. Optimising them against the images takes a desktop GPU.
 
-URL options: `?res=` (model input, multiple of 14), `?fov=` (camera FOV across the long side),
-`?near=` / `?far=` (metres), `?voxel=` (merge size), `?max=` (splat budget),
-`?device=wasm|webgpu` and `?dtype=`.
+URL options:
+- AR: `?grid=` (depth samples across), `?arfar=` (max depth, m).
+- AI: `?res=` (model input, multiple of 14), `?fov=`, `?near=` / `?far=`, `?device=wasm|webgpu`,
+  `?dtype=`.
+- Both: `?voxel=` (merge size), `?max=` (splat budget).
 
 ## What the wearer sees
 
