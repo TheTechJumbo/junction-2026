@@ -1,145 +1,162 @@
 # junction-2026
 
-**Look at it, nod, and say it.** AI glasses for anyone who knows what they want to say but can't
-find the words. We start with aphasia after a stroke.
+**A safety net for people with memory problems, and for the families who look out for them.**
 
-The wearer looks at something (their pill box, the kettle, a photo of their daughter) and, if they
-can, adds a word or two: "morning…". The glasses see what they're looking at, and an AI makes its
-best guesses at what they mean, using the time of day and what it knows about their life. Each
-guess plays privately into the glasses' speakers: "Did I take my morning pills?" A **nod** means
-yes, and the phone says the sentence out loud. A **head shake** brings the next guess. There is no
-reading, typing or picture-board hunting, and nothing is ever said without that nod.
+Meta is building memory into AI glasses. We built the safety net around it. The person wears the
+glasses and gets help in the moment: "You already took your morning pills at 08:00." A few cheap
+home sensors make sure the important things are never missed. Their family gets a calm daily
+summary, and an alert only when something is really off. Each condition has its own **profile**
+(dementia, Parkinson's, after a stroke), so the same system follows the rules that matter for it.
+It supports people; it does not diagnose them.
 
 ## The problem
 
-**When someone with aphasia wants to say something, the people around them have to guess, one
-yes/no question at a time. It's slow, it depends on who's in the room, and when nobody's there,
-they can't say it at all.**
+- **Medication goes wrong at home.** In one study of 615 older people living at home who were at
+  risk of moving into care, 49% had at least one medication problem
+  ([summary](https://jhm.qa00.mdedge.com/psychiatry/article/21697/geriatrics/nearly-half-elderly-may-have-prescription-errors)).
+  With memory problems, the classic risks are a forgotten dose and a double dose.
+- **Some conditions need precise timing.** Parkinson's UK advises taking Parkinson's medication
+  within 30 minutes of the prescribed time. Late or missed doses can worsen walking, talking and
+  swallowing ([Parkinson's UK](https://www.parkinsons.org.uk/news/2025/campaign-success-new-nhs-england-programme-launches-to-get-medication-delivered-time)).
+- **Families worry from a distance.** Did Mum take her pills? Did she lock the door? Why was the
+  front door open at 3 a.m.? Today they find out by phoning, guessing, or too late.
+- **Meta is exploring memory help, but not the care side.** Meta's own work with veterans with memory loss found that
+  glasses could help remember tasks and where things were left, and one participant mentioned
+  forgetting medication ([Meta, Feb 2026](https://about.fb.com/news/2026/02/helping-people-with-memory-loss-with-ai-glasses/)).
+  That work is about the wearer. Nobody connects it to the family, the medication rules or the
+  home.
 
-- **Who:** about a third of stroke survivors have aphasia: a median of 30% in acute care and 34% in
-  rehabilitation ([Flowers et al., 2016](https://pubmed.ncbi.nlm.nih.gov/27063364/)). We focus on
-  people who understand well but can't find words (non-fluent aphasia).
-- **Today:** partners are taught to play twenty questions ("pizza, yes [nod] or no [shake]?") or to
-  write options to point at ([aphasia.com](https://www.aphasia.com/?p=3850)). Picture boards and
-  speech devices exist, but they're slow and generic.
-- **Why it matters:** quality of life in aphasia is linked to depression, emotional distress and
-  shrinking social networks ([review](https://openaccess.city.ac.uk/id/eprint/1095/1/APMR-D-10-01160%20Aphasia%20QOL%20Review%20R2%20CLEAN.pdf)).
+## What it does
 
-**The insight:** the bottleneck is *guessing what they mean*, and yes/no is often the one thing
-they can still do reliably. So the AI does the guessing, and the person only nods or shakes their
-head.
+| Side | What it is | Built with |
+| --- | --- | --- |
+| **The person** | Glasses that answer "Did I lock the door?" or "Did I take my pills?" with the moment as evidence, and step in at the right time: "You already took them at 08:00", "It's 3 a.m., do you want to go back to bed?" | Meta glasses app, phone as fallback |
+| **The home** | Sensors as ground truth, because a camera can miss things: pill-box lid, front door, motion. Stretch: a dispenser that releases only the scheduled dose | Arduino UNO Q + Modulino |
+| **The family / carer** | Today against a normal day, a plain-language daily summary, and alerts only when something's off | Web dashboard |
 
-## Why AI glasses (Meta challenge: "AI Glasses for Everyone, Everyday")
+**Condition profiles** set the rules for each person:
 
-- **The first-person camera answers "what do you mean?"** Looking at the pill box is the pointing.
-- **The motion sensors turn a nod into "yes".** That's the answer method aphasia therapists already
-  teach.
-- **The open-ear speakers make guesses private,** so only the chosen sentence is said aloud.
-- **It's hands-free and always there,** unlike a tablet left on the table.
-- **It's for everyone, every day.** We start with aphasia, but the same look-and-nod loop helps
-  anyone who can't find the words at times: people with dementia, autistic people who sometimes
-  can't speak, people after a tracheostomy, or a traveller stuck in a foreign language.
+| Profile | What it watches for |
+| --- | --- |
+| **Everyone** | Door, hob, keys, vitamins: the autopilot moments you forget |
+| **Dementia** (main demo) | Double or missed doses, the front door opening at night, a missing morning routine; daily summary to family |
+| **Parkinson's** (demo switch) | Doses on time: a green/red due/late prompt and an alert after 30 minutes |
+| Stroke, insulin diabetes (slides) | Blood-thinner doses and rehab check-ins; "Did I inject?" with a double-dose warning |
 
 ## What makes it different
 
-| Today | This project |
+| Already exists | This project |
 | --- | --- |
-| Partner guesses with yes/no questions | The AI guesses with the context of what you're looking at; you still just say yes/no |
-| Picture boards: generic icons, many taps, reading | Your real objects, no reading or typing |
-| AI keyword-to-sentence prototypes (research): type keywords | Look plus an optional word |
-| Only works when someone is there to guess | Works alone, too |
+| Meta's memory research and reported always-on tests: help for the wearer only | A safety net that connects the wearer, the home and the family |
+| Smart pill dispensers: reminders, but no idea what's going on around them | Medication rules per condition, plus context from the glasses and the home |
+| Camera monitoring: records everything, feels like surveillance | No cameras in the home: sensors, plus only key moments from the wearer's own glasses, with faces blurred and deleted after a day |
 
 ## Challenges we're targeting
 
 | Challenge | Fit |
 | --- | --- |
-| **Meta: AI Glasses for Everyone, Everyday** (main) | Look, then nod: the glasses' first-person view and motion sensors *are* the interface. |
-| Google DeepMind: Best Use of Gemini API | Gemini turns photo + fragment + personal context into ranked guesses. |
-| MLH: Best Use of ElevenLabs | Natural voice for the spoken sentence, or the person's own voice with consent. |
-| Arduino: Best Use of Arduino UNO Q | Home sensors (pill-box lid, kettle) feed context: "the pill box was opened at 08:12". |
-| Aiven: Best Use of Aiven | Home events and the carer log stored in Aiven PostgreSQL (Bartek). |
-| Modal: Best Use of Modal | Serve the fragment-transcription model on Modal's GPUs. |
-| Cloudinary (only if used for photo handling) | Image capture and processing in the pipeline. |
+| **Meta: AI Glasses for Everyone, Everyday** (main) | The first-person view catches the moment (pills in hand, door being locked) and gives help right then. |
+| Google DeepMind: Best Use of Gemini API | Spots key actions in glasses frames, answers "did I…?" from the log, writes the daily summary. |
+| Arduino: Best Use of Arduino UNO Q | The pill box and door sensors are the ground truth; the debouncing runs on the device. |
+| MLH: Best Use of ElevenLabs | Calm, natural spoken prompts in the glasses. |
+| Aiven: Best Use of Aiven | Events, timeline and profiles in Aiven PostgreSQL. |
+| Cloudinary: Best Use of Cloudinary | Blurring bystanders' faces in stored moments. |
 
-Tech challenges can be combined with the main challenge. Only claim the ones we genuinely use,
-because their judges check. Full list: <https://junction2026.com/challenges>.
+Tech challenges can be combined with the main challenge. Only claim the ones we genuinely use.
+Full list: <https://junction2026.com/challenges>.
 
 ## How it works
 
-1. **Look (and maybe say a word).** The glasses take a photo and record a few seconds of audio.
-2. **Guess.** `/guess` sends the photo, the transcribed fragment, the time, recent home events and
-   a small personal profile (names, medicines, routines) to Gemini, which returns three ranked,
-   short, first-person sentences.
-3. **Hear and nod.** Guesses play one at a time into the glasses' speakers. A nod means yes, a
-   shake means next, and "none of these" asks for another word.
-4. **Say it.** The confirmed sentence is spoken from the phone in a natural voice.
-5. **Context and log.** Home sensors add context, and the carer sees a log of what was said and
-   any needs flagged.
+1. **Moments.** While the glasses are worn, they grab a frame every few seconds. Gemini keeps only
+   key actions (pills taken, door locked, keys put down, hob turned off) as events with a photo.
+   No video is stored.
+2. **Sensors.** The UNO Q posts pill-box, door and motion events.
+3. **Rules.** The person's profile turns events into prompts ("already taken"), timing checks
+   ("due" or "late") and alerts ("door open at night").
+4. **Normal day.** A baseline per time of day is learned from past days (simulated for the demo),
+   so the system can flag "no kitchen activity by 10:30".
+5. **Ask.** "Did I…?" and "Where's my…?" questions are answered from the log, with the evidence
+   moment.
+6. **Family.** A dashboard with the timeline, alerts, a daily summary from Gemini, and the profile
+   switch.
 
-### Shared formats (agree these first, in the "Contracts" issue)
+### Shared formats (agree these first, in JUN-6)
 
 ```jsonc
-// POST /guess  -> 3 ranked guesses (the server never speaks)
-{ "image": "<jpeg base64>", "fragments": ["morning"], "time": "08:40",
-  "recentEvents": [{ "ts": "…", "label": "pillbox_open", "source": "uno-q" }],
-  "profile": { "names": ["Anna (daughter)"], "meds": ["blood thinner, 8:00"], "places": ["kitchen"] },
-  "rejected": ["Can I have coffee?"] }
--> { "guesses": [{ "text": "Did I take my morning pills?", "confidence": 0.72 }, …] }
+// Event: from the glasses, the UNO Q, or the rules engine
+{ "id": "e17", "ts": "2026-11-14T08:00:00Z", "kind": "action" | "sensor" | "alert",
+  "label": "pills_taken" | "door_locked" | "keys_down" | "pillbox_open" | "door_open" | "double_dose_prevented",
+  "source": "glasses" | "uno-q" | "rules", "evidence": { "imageUrl": "…" } | null }
 
-// Yes/no from the glasses' motion sensor: { "answer": "yes" | "no", "confidence": 0.9 }
-// POST /speak   { "text": "…" } -> audio
-// POST /events  (UNO Q) { "label": "pillbox_open", "ts": "…", "source": "uno-q" }
-// GET  /log     confirmed sentences and flagged needs, for the carer
+// Profile: one per person, picked from a template
+{ "id": "dementia", "person": "Anna",
+  "meds": [{ "name": "morning pills", "times": ["08:00", "20:00"], "windowMin": 30, "minGapH": 6, "maxPerDay": 2 }],
+  "alerts": [{ "rule": "door_open_between", "from": "23:00", "to": "06:00", "notify": ["Sara (daughter)"] }],
+  "summaryTo": ["Sara (daughter)"] }
+
+// POST /events     Event (from the UNO Q or the glasses)
+// POST /ask        { "question": "Did I lock the door?" } -> { "answer": "Yes, at 08:14.", "evidence": [Event] }
+// GET  /timeline   ?day=… -> { "events": [Event], "baseline": …, "alerts": [Event] }
+// GET  /summary    ?day=… -> { "text": "Anna had a normal morning…" }
+// POST /speak      { "text": "…" } -> audio
 ```
 
-### Workstreams (one Linear issue each, labelled per `coord/PROTOCOL.md`)
+### Workstreams (Linear team JUN, labelled per `coord/PROTOCOL.md`)
 
 | Owner | Issue | Done when |
 | --- | --- | --- |
-| all | Contracts: agree the formats above | Everyone has commented "ok" or proposed a change |
-| all (`human-needed`) | Read Meta's challenge page: which glasses we get, and SDK access | We know whether we demo on real glasses or a phone stand-in |
-| Seb | Guesser: `/guess` prompt with Gemini (photo + fragment + context + rejected guesses) | 20 test scenes give the right sentence in the top 3 for most of them (we report the rate) |
-| Seb | Nod/shake detector from the glasses' motion data | Nods and shakes are recognised reliably in a quick test with 3 people |
-| Seb | Fragment transcription that copes with single words and hesitation | "coffee… no… pill… morning" comes through intact |
-| Bartek | API: `/guess` proxy (keys on the server), `/events`, `/log`, one HTTPS URL | The phone app and the UNO Q can both reach it |
-| Bartek | `/speak` with ElevenLabs | The confirmed sentence plays within ~1 s |
-| Ayman | UNO Q home sensors (pill-box lid, kettle) → `POST /events`; stretch: big physical yes/no buttons | Opening the pill box shows up as context for the next guess |
-| Ed | Glasses app: capture photo and audio, play guesses privately, nod/shake loop (phone camera fallback) | The demo happy path works end to end |
-| Ed | Carer log view, pitch, demo script, picture-board race | A rehearsed 90-second demo plus a backup video |
-| all (`human-needed`) | One quote from a speech-language therapist or a carer | The quote is in the pitch |
+| all | JUN-6 Contracts: agree the formats above | Everyone has commented "ok" or proposed a change |
+| Ed (`human-needed`) | JUN-7 Which Meta glasses we get, and SDK access | We know whether we demo on real glasses or a phone stand-in |
+| Seb | JUN-8 Moments and answers: key actions from frames (Gemini), "did I…?" with evidence | "Did I take my pills?" returns the 08:00 moment |
+| Seb | New: Normal day, alerts and daily summary, all driven by the profile | The simulated week gives a baseline; double dose, night door and late Parkinson's dose all alert |
+| Seb | JUN-10 Voice questions: transcribe short spoken questions | "Did I lock the door?" comes through reliably |
+| Seb (stretch) | JUN-9 Nod to confirm a prompt | Only once everything else works |
+| Bartek | JUN-11 API: events, profiles, timeline, ask, summary on one HTTPS URL (Aiven PostgreSQL) | The glasses app, the UNO Q and the dashboard can all reach it |
+| Bartek | JUN-12 `/speak` with ElevenLabs | Prompts play within about 1 s |
+| Bartek | New: Privacy: blur faces in stored moments (Cloudinary), delete moments after 24 h | No unblurred bystander faces are stored |
+| Ayman | JUN-13 UNO Q sensors: pill-box lid and front door (motion is a stretch) | Opening the pill box or the door shows up on the timeline |
+| Ed | JUN-14 Glasses app: capture moments, ask questions, play prompts (phone fallback) | The demo's person-side steps all work |
+| Ed | JUN-15 Family dashboard with profile switch, pitch and demo | A rehearsed demo plus a backup video |
+| Ed (`human-needed`) | JUN-16 One quote from a carer, nurse, or dementia or Parkinson's organisation | The quote is in the pitch |
 
 ### Milestones
 
 - **Fri night (M0):** formats agreed, glasses access known, skeletons running with dummy data.
-- **Sat 12:00 (M1):** happy path: look at pill box → 3 guesses → nod → spoken.
-- **Sat 20:00 (M2):** nod/shake on the glasses, sensor context, carer log, test-scene hit rate measured.
-- **Sun morning (M3):** polish, rehearse, backup video. Check the official submission deadline.
+- **Sat 12:00 (M1):** opening the pill box is logged; reaching for it again gets the "already
+  taken" prompt; it shows on the dashboard.
+- **Sat 20:00 (M2):** "Did I…?" answers with evidence, the night-door alert, the normal-day
+  baseline, the daily summary, and the Parkinson's switch.
+- **Sun morning (M3):** polish, rehearse, record a backup video. Check the official submission deadline.
 
-### Demo script (90 seconds)
+### Demo script (about 2 minutes)
 
-1. "A third of stroke survivors lose their words. Today, the people around them have to guess."
-   Start a stopwatch and try one sentence on a picture board.
-2. The teammate playing the patient looks at the pill box and says "morning…". They hear "Did I
-   take my morning pills?", nod, and the phone says it. Stop the stopwatch.
-3. Bonus: the app adds "The pill box was opened at 08:12" (UNO Q sensor). That's a fact, not a
-   medical claim.
-4. "No reading, no typing, and nothing is said without their nod."
-
-### Stretch (only if the core is done)
-
-- **Point at things out of view:** a Gaussian-splat scan of the home (prototype on branch
-  `feat/rescue-ping-hud`, `demo/live-splat.html`) lets the person pick the kettle in the kitchen
-  from the bedroom.
-- **"Show your day":** a timeline of home events to answer "how was your day?".
-- Learning the person's most-used sentences, and their own voice (with consent).
+1. "Meet Anna, 78, with early dementia, who lives alone. Her daughter Sara lives an hour away."
+2. Anna takes her pills at 08:00, logged by the pill box and the glasses.
+3. At 08:40 she reaches for them again. The glasses say: "You already took your morning pills at
+   08:00." Sara's dashboard shows "double dose prevented".
+4. Anna asks "Did I lock the door?" and hears "Yes, at 08:14", with the moment as evidence.
+5. A simulated 03:10: the front door opens. Sara gets an alert, and Anna's glasses ask whether
+   she wants to go back to bed.
+6. Switch the profile to Parkinson's. The same pill box now shows due and late, and alerts after
+   30 minutes.
+7. The daily summary reads like a note from a nurse.
+8. "It supports, it doesn't diagnose. There are no cameras in the home: just sensors and key moments
+   from her own glasses, with faces blurred and deleted after a day."
 
 ## Privacy and consent
 
-- Photos are processed for the guess and not stored by default.
-- Consent from the person, or their legal representative.
-- Nothing spoken without the person's confirmation.
-- Voice cloning only with explicit consent.
-- Sensor data stays in the home where possible.
+- Consent from the person, or their legal representative, and from whoever receives the alerts.
+- No cameras in the home. Glasses capture only while worn, only key moments are kept, faces are
+  blurred, and moments are deleted after 24 hours.
+- Alerts go only to people the person has chosen.
+- Framed as support, not diagnosis: medical-purpose software can be a regulated medical device in
+  the EU, so this demo avoids clinical claims.
+
+## What exists already
+
+Day-1 prototypes are on branch `feat/rescue-ping-hud` (not merged): live Gaussian-splat scanning
+on a phone (`demo/live-splat.html`) and a glasses-style pointer display (`demo/index.html`). They're
+not part of this plan, but the splat scan could later show where in the home an event happened.
 
 ## Team coordination
 
