@@ -161,6 +161,15 @@ next to it:
   frames on the example scene, the same named place moved by at most 1.4 cm and a baseline
   camera by at most 1.8 cm (cameras span 4.8 m), because every fix builds its map from the same
   baseline photos.
+- *Watched spots.* The room-wide change check misses small and flat changes (5% of small ones).
+  A spot that is marked once in a baseline picture is checked far more closely (`watch.py`,
+  `eval/WATCH_RESULTS.md`): each check and each position fix answers `same`, `changed` or
+  `not_seen` for every spot in `baselines/<zone>/watch.json`
+  (`[{"name", "frame", "box": [u0, v0, u1, v1]}]`, at most 20), in the result's `watch` list, with
+  a before and a now crop. The dashboard shows them under the check. On held-out benchmark scenes
+  it catches 74% of small changes at about 9% false alarms, against 7% for the room-wide check.
+  Live on the lounge scene with its 20 labelled spots: 19 right, 1 wrong, 16 s for the whole
+  check, of which the spots took 2 s.
 - `/hud?k=KEY&demo=1` rehearses all of it with stand-ins and no backend: "Remind me" and "Open
   the pill box" play the reminder and the sensor.
 - `python live/test_care_flow.py` tests the relay side offline, with a stand-in gateway and a
