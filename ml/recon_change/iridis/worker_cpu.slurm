@@ -18,6 +18,11 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 export HF_HOME="${HF_HOME:-/scratch/$USER/.cache/huggingface}" HF_HUB_OFFLINE=1
+# Lost items (items.py): the packages and weights that iridis/setup_items.sh put in a folder, if it is there.
+ITEMS_ENV="$(realpath -m "${RECON_ITEMS_ENV:-items-env}")"
+if [ -d "$ITEMS_ENV/pkgs" ]; then
+    export PYTHONPATH="$ITEMS_ENV/pkgs${PYTHONPATH:+:$PYTHONPATH}" RECON_ITEMS_CACHE="${RECON_ITEMS_CACHE:-$ITEMS_ENV/hf/hub}"
+fi
 export RECON_DEVICE=cpu RECON_FRAMES="${RECON_FRAMES:-8,4}" RECON_LONG_SIDE="${RECON_LONG_SIDE:-518}"
 export CUDA_VISIBLE_DEVICES=""
 echo "== $(hostname) $(date +%T) | $(lscpu | grep 'Model name' | sed 's/.*: *//') | $SLURM_CPUS_PER_TASK cores | frames $RECON_FRAMES at $RECON_LONG_SIDE px"

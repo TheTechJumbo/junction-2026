@@ -143,9 +143,10 @@ next to it:
   last saw them ("last seen at 10:42 near the pill box, about 2 m to your left"), and the arrow
   points there. This needs the item finder in the worker (`items.py`: an open-vocabulary
   detector, OWLv2, looking for `keys, glasses, wallet, phone, remote control`, or the list in
-  `RECON_ITEMS`). It is not in the base environment: run `bash iridis/setup_items.sh <folder>`
-  once on a login node, then start the worker with
-  `PYTHONPATH=<folder>/pkgs RECON_ITEMS_CACHE=<folder>/hf/hub sbatch iridis/worker.slurm`.
+  `RECON_ITEMS`). It is not in the base environment: run `bash iridis/setup_items.sh` once on
+  a login node (it fills `items-env/` next to `.venv-recon` and leaves `.venv-recon` alone),
+  then start the worker as usual; for another folder, `RECON_ITEMS_ENV=<folder> sbatch
+  iridis/worker.slurm`.
   A worker without it still gives fixes, and the answer is "I cannot look for your keys yet."
   The finder says nothing rather than guess: no false detection on 324 photos without the
   items, and it misses most things that are small in the picture, so expect it to see keys

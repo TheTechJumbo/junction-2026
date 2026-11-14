@@ -5,9 +5,10 @@
 # 0.6 GB) go into a Hugging Face cache.
 #   bash iridis/setup_items.sh                 # into ./items-env next to .venv-recon
 #   bash iridis/setup_items.sh /some/folder    # somewhere else
-# Then start a worker with these set (HF_HOME stays where VGGT is; the detector has its own cache):
-#   export PYTHONPATH=<folder>/pkgs RECON_ITEMS_CACHE=<folder>/hf/hub
-#   sbatch iridis/worker.slurm        # sbatch passes the environment on
+# The worker scripts pick the default folder (./items-env) up by themselves. For another folder:
+#   RECON_ITEMS_ENV=/some/folder sbatch iridis/worker.slurm
+# which is the same as setting PYTHONPATH=<folder>/pkgs RECON_ITEMS_CACHE=<folder>/hf/hub yourself
+# (HF_HOME stays where VGGT is; the detector has its own cache).
 # RECON_ITEMS="keys, glasses" changes the list; RECON_ITEMS="" turns the feature off.
 # The pins: torch here is 2.3.1, so transformers stays on 4.x; that needs huggingface_hub below
 # 1.0, which then shadows the newer one in .venv-recon for this process only (VGGT loads fine with it).
