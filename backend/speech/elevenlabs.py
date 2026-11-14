@@ -16,32 +16,46 @@ import httpx
 from contracts.interfaces import SpeechUnavailable
 
 
-def _has_mp3_frame(data: bytes) -> bool:
-    """Structural check, not a substitute for a live decoder/playback acceptance test."""
+def _has_mp3_frame(audio: bytes) -> bool:
+    """Check complete Layer III frame structure, not just MIME or ID3 magic.
+
+    This is a structural gate, not a decoder or proof of audible speech. Reject
+    free-format/reserved headers and truncated frames. Optional ID3 tags are okay.
+    """
     offset = 0
-    if data.startswith(b"ID3"):
-        if len(data) < 10 or any(b & 0x80 for b in data[6:10]):
+    if audio.startswith(b"ID3"):
+        if len(audio) < 10 or audio[3] not in (2, 3, 4) or any(b & 128 for b in audio[6:10]):
             return False
-        size = sum(b << shift for b, shift in zip(data[6:10], (21, 14, 7, 0), strict=True))
-        offset = 10 + size + (10 if data[5] & 0x10 else 0)
-    if len(data) < offset + 4:
-        return False
-    a, b, c, _ = data[offset:offset + 4]
-    version = (b >> 3) & 3
-    layer = (b >> 1) & 3
-    rate_index = (c >> 2) & 3
-    bitrate_index = c >> 4
-    if a != 0xFF or b & 0xE0 != 0xE0 or version == 1 or layer != 1:
-        return False
-    if rate_index == 3 or bitrate_index in (0, 15):
-        return False
-    rates = (44100, 48000, 32000)
-    rate = rates[rate_index] // (1 if version == 3 else 2 if version == 2 else 4)
-    bitrates = ((0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
-                if version == 3 else (0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160))
-    length = (144 if version == 3 else 72) * bitrates[bitrate_index] * 1000 // rate
-    length += (c >> 1) & 1
-    return len(data) >= offset + length
+        size = sum(b << shift for b, shift in zip(audio[6:10], (21, 14, 7, 0), strict=True))
+        offset = 10 + size + (10 if audio[3] == 4 and audio[5] & 16 else 0)
+    frames = 0
+    while offset + 4 <= len(audio):
+        if len(audio) - offset == 128 and audio[offset : offset + 3] == b"TAG":
+            offset += 128
+            break
+        header = int.from_bytes(audio[offset : offset + 4], "big")
+        version, layer = (header >> 19) & 3, (header >> 17) & 3
+        bitrate, rate = (header >> 12) & 15, (header >> 10) & 3
+        if (
+            header >> 21 != 2047
+            or version == 1
+            or layer != 1
+            or bitrate in (0, 15)
+            or rate == 3
+            or header & 3 == 2
+        ):
+            return False
+        rates = (44100, 48000, 32000)
+        sample_rate = rates[rate] // (1 if version == 3 else 2 if version == 2 else 4)
+        bitrates = (
+            (32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
+            if version == 3
+            else (8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160)
+        )
+        size = (144000 if version == 3 else 72000) * bitrates[bitrate - 1] // sample_rate
+        offset += size + ((header >> 9) & 1)
+        frames += 1
+    return offset == len(audio) and frames >= 2
 
 
 class ElevenLabsSpeechService:
@@ -54,8 +68,13 @@ class ElevenLabsSpeechService:
     ):
         if (not math.isfinite(timeout_seconds) or timeout_seconds <= 0
                 or not math.isfinite(cache_ttl_seconds) or cache_ttl_seconds < 0
+                or any(not isinstance(value, int) or isinstance(value, bool)
+                       for value in (cache_entries, cache_bytes, max_audio_bytes))
                 or cache_entries < 0 or cache_bytes < 0 or max_audio_bytes <= 0):
             raise ValueError("Invalid speech deadline or cache limits")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", model_id):
+            raise ValueError("Invalid speech model identifier")
+        self._closed = False
         self.api_key = api_key
         self.voice_id = voice_id
         self.model_id = model_id
@@ -101,9 +120,11 @@ class ElevenLabsSpeechService:
             self._cached_bytes -= len(self._cache.popitem(last=False)[1][1])
 
     async def synthesize(self, text: str) -> bytes:
+        if self._closed:
+            raise SpeechUnavailable("Speech service is closed")
         if not isinstance(text, str) or not text.strip() or len(text) > 2000:
             raise SpeechUnavailable("Speech text is empty or too long")
-        if not self.api_key or not self.voice_id:
+        if not self.api_key or not self.api_key.strip() or not self.voice_id:
             raise SpeechUnavailable("Speech is not configured; use phone speech")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", self.voice_id):
             raise SpeechUnavailable("Speech voice is not configured correctly")
@@ -149,20 +170,26 @@ class ElevenLabsSpeechService:
                         content_type = response.headers.get("content-type", "").split(";")[0].lower()
                         if content_type not in {"audio/mpeg", "audio/mp3", "application/octet-stream"}:
                             raise SpeechUnavailable("Speech provider returned invalid audio")
+                        length = response.headers.get("content-length")
+                        if length is not None and (int(length) < 0 or int(length) > self.max_audio_bytes):
+                            raise SpeechUnavailable("Speech audio exceeded size limit")
                         audio = bytearray()
                         async for chunk in response.aiter_bytes():
-                            audio.extend(chunk)
-                            if len(audio) > self.max_audio_bytes:
+                            if len(audio) + len(chunk) > self.max_audio_bytes:
                                 raise SpeechUnavailable("Speech audio exceeded size limit")
+                            audio.extend(chunk)
                         result = bytes(audio)
                         if not _has_mp3_frame(result):
                             raise SpeechUnavailable("Speech provider returned invalid audio")
+                        if self._closed:
+                            raise SpeechUnavailable("Speech service is closed")
                         self._cache_put(key, result)
                         return result
-        except (TimeoutError, httpx.HTTPError):
+        except (TimeoutError, httpx.HTTPError, ValueError):
             raise SpeechUnavailable("Speech unavailable; use phone speech") from None
 
     async def aclose(self):
+        self._closed = True
         tasks = list(self._inflight.values())
         for task in tasks:
             task.cancel()

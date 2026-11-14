@@ -9,7 +9,7 @@ from backend.speech import ElevenLabsSpeechService
 from contracts.interfaces import SpeechUnavailable
 
 # Complete synthetic MPEG1 Layer III frame; no claim of human-audited speech.
-MP3 = b'\xff\xfb\x90\x64' + bytes(413)
+MP3 = (b'\xff\xfb\x90\x64' + bytes(413)) * 2
 
 
 def run(coro):
