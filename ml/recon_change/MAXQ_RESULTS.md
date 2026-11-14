@@ -89,9 +89,10 @@ Unchanged scenes, false clusters (appeared / gone) without and with the check:
 
 | Case | Frames | Without | With | Reach | Analysis time without / with |
 | --- | --- | --- | --- | --- | --- |
-| Colosseum_crop | 36 | 32, 14 / 34 | none | 12.1% | see below |
+| Colosseum_crop | 36 | 32, 14 / 34 | none | 12.1% | |
 | Colosseum_crop | 72 | 32, 16, 11 / 29 | none | 12.0% | 21.4 / 23.2 s |
 | Colosseum_crop | 96 | 33, 17, 12 / 31 | none | 12.2% | 38.1 / 40.9 s |
+| Colosseum_crop | 144 | 37, 17, 12 / 30 | none | 12.1% | 84.9 / 91.3 s |
 | great_wall_land | 36 | none | none | 8.8% | |
 | great_wall_land | 72 | - / 21 | none | 10.3% | 11.4 / 12.2 s |
 | great_wall_land | 96 | - / 39 | none | 10.1% | 20.2 / 21.2 s |
@@ -113,22 +114,27 @@ Objects are still found. Virtual boxes written into depth and colour; cluster si
 | Colosseum_land | off by itself | 5% | found (34) | found (28) |
 | Colosseum_crop | on, reach 14% | 10% | found (130 to 133), false clusters gone | found (99 to 100), false clusters gone |
 | Colosseum_crop | on, reach 13% | 5% | found (32 to 34), false clusters gone | found (30), false clusters gone |
+| kitchen | forced on, reach 12% | 10% | found (221 to 227) | found (227 to 231) |
+| kitchen | forced on, reach 12% | 5% | found (44 to 47) | found (38 to 41) |
+| Colosseum_land | forced on, reach 12% | 10% | found (154 to 158) | found (97 to 98) |
+| Colosseum_land | forced on, reach 12% | 5% | found (34 to 36) | found (27 to 30) |
 
-For Colosseum_crop the patch features were recomputed on the GPU from the painted frames, with
-three textures: flat blue, a texture from another scene, and a texture cut from the same scene
-(camouflage). All three were found at both sizes and in both directions.
+For the rows with the check on, the patch features were recomputed on the GPU from the painted
+frames, with three textures: flat blue, a texture from another scene, and a texture cut from
+the same scene (camouflage). All 36 variants (three scenes, two sizes, two directions, three
+textures) were found. The "forced on" rows switch the check on where it is normally off, to
+see whether it would eat objects there: cluster sizes are within a few voxels of the run with
+the check off.
 
-The same GPU run forces the check on (reach 12%) in the kitchen, where it is normally off, to
-see whether it would eat real objects there: 10% boxes are found in both
-directions with all three textures (221 to 233 voxels, the same as with the check off), and 5%
-boxes in the after clip are found (44 to 47 voxels). The remaining 5% variants and the same test
-on Colosseum_land had not finished when this was written.
+The committed `recon_change.py` was also run once end to end on the L4 (kitchen photos, 32 s
+for the whole job): `recon.npz` holds the features as (frames, 25, 37, 256) float16 and
+`report.json` has `lookalike_check`.
 
 ## Criteria
 
 | Criterion | Status |
 | --- | --- |
-| Five hard video cases and kitchen: zero clusters when nothing changed | Met at 36 frames, and at 72 and 96 frames where run |
+| Five hard video cases and kitchen: zero clusters when nothing changed | Met at 36 frames; also at 72 and 96 frames (five video cases) and 144 frames (Colosseum_crop) |
 | Boxes of 5% and 10% found in kitchen and Colosseum_land, both directions | Met |
 | `python test_synthetic.py` passes | Met, with four new checks for the look-alike check |
 
