@@ -13,7 +13,9 @@ with optional matching quotes, no expansion/execution. Exported environment wins
 The file is Git-ignored. Keep its permissions owner-only. Never commit credentials.
 ElevenLabs key + voice ID may be added there; an absent provider fails with explicit 503.
 
-The live provider is not exercised by CI. CI intentionally supplies empty provider keys.
+Optional Gemini open-question wiring requires an explicit key/model pair; see
+[Gemini setup](GEMINI_SETUP.md). With no keys, deterministic answers and fixed fallbacks
+continue working. Neither live provider is exercised by CI, which supplies empty keys.
 The household observations remain authoritative locally; optional DATABASE_URL enables
 metadata replication, not remote image upload or automatic disaster restore.
 
@@ -32,7 +34,10 @@ This is a one-shot metadata transfer. It validates the complete export, sends ba
 of at most 100 events and validates acceptance receipts. Retries preserve producer IDs
 and are idempotent. A later batch failure can leave earlier acknowledged batches; retry
 is safe. Images are never fetched. Maximum export: 8 MiB / 10,000 records; a larger history
-needs a future paginated source export, not silent truncation. For synthetic rehearsal,
+needs a future paginated source export, not silent truncation. An operator may explicitly
+attach one selected local artifact through [Local evidence import](LOCAL_EVIDENCE_IMPORT.md);
+that path processes the image for privacy before storage. It never fetches remote photos.
+For synthetic rehearsal,
 Ayman's `demo/ayman/replay.py` already sends Bearer-authenticated canonical events and
 can target the central API directly.
 
@@ -75,9 +80,11 @@ injected; this verifies integration contracts, not model quality or real speech 
 `.github/workflows/bartek-ci.yml` adds a clean Linux installation, PostgreSQL 17, isolated
 assembled HTTP server and explicit mandatory-source integration gate. Missing source
 objects and skipped required integration tests fail CI. The workflow never deploys or
-uses live provider secrets. Local full verification before publication: 306 Python
-checks + 8 marked service-integration checks + 10 Node checks, followed by 2 new private
-config loader checks. See the final CI run for the exact published-head result.
+uses live provider secrets. Latest assembled local verification: 430 Python checks,
+9 marked PostgreSQL/HTTP/actual-source integration checks, and 10 Node checks passed.
+A built wheel was extracted outside the checkout and successfully redacted the public
+face fixture with its packaged model. Browser verification displayed the processed
+photo in the authenticated evidence dialog. See CI for the published-head result.
 
 ## Remaining release gates
 
@@ -85,8 +92,11 @@ config loader checks. See the final CI run for the exact published-head result.
 - Current Ed dementia phone/voice/camera implementation is absent from inspected remote
   refs. `feat/rescue-ping-hud` is an older responder/ping application, not that client.
 - Aiven endpoint and approved HTTPS/device credentials for team hardware.
-- JUN-18 face-blurring requirement is not implemented; local-only/24-hour expiry is not
-  equivalent. Use synthetic imagery until the team resolves/implements that gate.
+- JUN-18 now has offline detected-face blurring, metadata removal and SQLite/WAL expiry
+  cleanup. Detector misses remain possible: zero detections does not prove face-free,
+  and the categorical requirement that no unblurred bystander is ever stored remains
+  unproven. Review [privacy limitations](../backend/privacy/README.md) and
+  [storage guarantees](EVIDENCE_STORAGE.md) before any real-household-image trial.
 - Actual sensor hardware and room/glasses navigation accuracy. Confirm thresholds/zones.
 
 Bartek's decision is observation-only: opening evidence never establishes ingestion,

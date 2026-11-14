@@ -4,7 +4,12 @@ The central upload endpoint accepts bounded JPEG/PNG or a single multipart file.
 parsing stays in memory even above the parser’s usual disk-spooling threshold. After full
 decoding, EXIF orientation is applied and a new RGB image is encoded without source EXIF,
 GPS, comments, profiles, or trailing bytes. The normalized output also has a 5 MiB limit.
-Metadata removal does not anonymize visible content and is not face redaction.
+Metadata removal alone does not anonymize visible content. The API then runs the
+[local face redactor](../backend/privacy/README.md) in a bounded child process, before
+writing any image bytes. Failed, busy or timed-out processing returns 503 without an
+attachment; deterministic answers remain available. Successful upload headers report
+X-Privacy-Status and X-Faces-Redacted. No detections is not a face-free guarantee.
+The API accepts up to 16 megapixels and 5 MiB and stores only the processed output.
 
 Images remain in the local SQLite database; PostgreSQL receives event metadata only.
 Expiration removes the blob, clears current/replay references and makes download return

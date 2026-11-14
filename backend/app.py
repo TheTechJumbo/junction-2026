@@ -27,6 +27,7 @@ from starlette.exceptions import HTTPException
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.middleware.cors import CORSMiddleware
 
+from backend.privacy import LocalFaceRedactor, RedactionUnavailable
 from backend.storage import (
     CursorExpired,
     IdentityConflict,
@@ -162,10 +163,11 @@ def verify_image(data, claimed_type):
     return normalized, detected
 
 
-def create_app(settings=None, *, clock=None, engine=None, speech=None, store=None):
+def create_app(settings=None, *, clock=None, engine=None, speech=None, store=None, redactor=None):
     settings = settings or Settings.from_env()
     if not settings.api_token:
         raise ValueError("API_TOKEN must be configured before starting the API")
+    redactor = redactor if redactor is not None else LocalFaceRedactor()
     zone = ZoneInfo(settings.timezone)
     now = clock or (lambda: datetime.now(UTC))
     if engine is None:
@@ -324,7 +326,7 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.post("/events/{event_id}/evidence", response_model=EvidenceResponse, dependencies=auth)
-    async def evidence(event_id: str, request: Request):
+    async def evidence(event_id: str, request: Request, response: Response):
         if settings.evidence_mode != "local_only":
             raise APIError(503, "evidence_unavailable", "Evidence storage is local-only.")
         await run_in_threadpool(store.get, event_id)
@@ -357,6 +359,14 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
         else:
             raise APIError(415, "unsupported_media", "Supply JPEG, PNG or a multipart file.")
         data, media_type = await run_in_threadpool(verify_image, data, media_type)
+        try:
+            redacted = await run_in_threadpool(redactor.redact, data)
+        except RedactionUnavailable as exc:
+            raise APIError(503, "privacy_unavailable",
+                           "Image privacy processing is unavailable; no image was stored.") from exc
+        data, media_type = redacted.image_bytes, redacted.content_type
+        response.headers["X-Privacy-Status"] = redacted.status
+        response.headers["X-Faces-Redacted"] = str(redacted.faces_redacted)
         url = await run_in_threadpool(store.attach_evidence, event_id, data, media_type,
                                      now() + timedelta(seconds=settings.evidence_retention_seconds))
         return EvidenceResponse(evidence_url=url)

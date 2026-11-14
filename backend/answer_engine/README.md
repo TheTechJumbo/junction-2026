@@ -8,6 +8,10 @@ observations. Pass an aware `now` to `answer`. Optionally inject `clock=lambda: 
 for consistent `derive_alerts` / `summarize` tests. All timestamps compare by UTC instant;
 presentation, calendar days and night rules use the supplied IANA timezone.
 
+Recognized clinical and dosing questions return a fixed refusal and never call the
+optional provider. These are conservative English rules, not exhaustive intent detection.
+The optional provider prompt also prohibits diagnosis, treatment and dosing decisions.
+
 Core questions make no network calls and do not import network adapters. A pill box
 opening supports only an opening statement. A door opening/closing supports only that
 observation, never ingestion or locking. Only configured sensor objects with confidence

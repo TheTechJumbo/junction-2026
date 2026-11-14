@@ -6,6 +6,7 @@ setup:
 	$(PYTHON) -m venv .venv
 	$(VENV)/python -m pip install -r requirements-dev.lock
 	$(VENV)/python -m pip install --no-deps --no-build-isolation -e .
+	$(VENV)/python -c "import cv2, numpy; print('Local privacy runtime:', cv2.__version__, numpy.__version__)"
 test:
 	$(VENV)/python -m pytest -q -m 'not live and not integration'
 lint:

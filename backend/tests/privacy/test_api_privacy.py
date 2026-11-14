@@ -8,13 +8,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-from backend.privacy import LocalFaceRedactor, RedactionUnavailable
-from backend.privacy import redactor as redactor_module
 from fastapi.testclient import TestClient
 from PIL import Image, PngImagePlugin
 
 import backend.app as api_module
 from backend.app import Settings, create_app
+from backend.privacy import LocalFaceRedactor, RedactionUnavailable
+from backend.privacy import redactor as redactor_module
 from backend.speech import ElevenLabsSpeechService
 
 NOW = datetime(2026, 11, 14, 12, tzinfo=UTC)
