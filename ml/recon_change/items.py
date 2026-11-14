@@ -847,7 +847,8 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
     fields["items_frame"] = {"source": saw, "width": picture.shape[1], "height": picture.shape[0], **detector.last}
     if CANDIDATES > 0 and state != "lost":  # every box that could be placed, weak ones too, for the relay to add up over looks
         try:
-            listed, _ = place([d for d in every if d["matched"] == "enrolled" or d["score"] >= CANDIDATES], r, base, q, valid, window, state, room=room)
+            listed, _ = place([d for d in every if d["accepted"] or d["matched"] == "enrolled" or d["score"] >= CANDIDATES],
+                              r, base, q, valid, window, state, room=room)
             fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "confidence_pct", "position", "box", "matched", "distance_m", "bearing_deg")}
                                           for c in listed if c["position"] is not None]
         except Exception as error:
