@@ -34,11 +34,15 @@ JPEG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffd9")  # starts l
 
 
 class Gateway:
-    """Stands in for the SSH link to the cluster."""
+    """Stands in for the SSH link to the cluster. `fix` is what the next position fix returns."""
+
+    def __init__(self):
+        self.fix, self.calls = FIX, []
 
     def call(self, header, blob=b""):
+        self.calls.append(header)
         if header["op"] == "locate":
-            return {"ok": True, "job": "job1", "result": json.loads(json.dumps(FIX))}, b""
+            return {"ok": True, "job": "job1", "result": json.loads(json.dumps(self.fix))}, b""
         if header["op"] == "status":
             return {"ok": True, "zones": ["kitchen"], "workers": {}}, b""
         return {"ok": False, "error": "not in this test"}, b""
@@ -86,7 +90,8 @@ def main():
     relay.cv2 = None  # the canned photo is not a real picture: pass it through untouched
     api_server, api_url = serve(EventApi)
     evidence = Path(tempfile.mkdtemp(prefix="beacon-test-"))
-    handler = relay.make_handler(Gateway(), evidence, KEY, f"{api_url}/events", pick=None, api_token=TOKEN)
+    gateway = Gateway()
+    handler = relay.make_handler(gateway, evidence, KEY, f"{api_url}/events", pick=None, api_token=TOKEN)
     handler.log_message = lambda *args: None
     relay_server, url = serve(handler)
 
@@ -128,6 +133,31 @@ def main():
     assert body["answer"].startswith("I have not seen your wallet today."), body
     time.sleep(0.3)
     assert sorted(EventApi.asked) == ["Have you seen my wallet?", "Where are my keys?", "Where are my keys?"], EventApi.asked
+
+    # Someone picks the keys up. Later fixes have a clear, close look at the spot and no keys there.
+    # One look is not enough, and neither are two from the same standpoint; two from different
+    # standpoints put the sighting in doubt, and the wearer is no longer sent there.
+    look = {"name": "keys", "in_view": True, "blocked": False, "close_enough": True, "detected_near": False}
+    gateway.fix = {**FIX, "items": [], "items_checked": [look]}
+    code, fix = call("/locate?zone=kitchen", raw=JPEG)
+    assert gateway.calls[-1]["remembered"] == [{"name": "keys", "position": [-1.0, 1.9, 0.0]}], gateway.calls[-1]
+    assert fix["seen"][0]["doubt"] is False
+    code, fix = call("/locate?zone=kitchen", raw=JPEG)
+    assert fix["seen"][0]["doubt"] is False
+    gateway.fix = {**FIX, "items": [], "items_checked": [{**look, "blocked": True}], "position": [0.5, 0.0, 0.0]}
+    code, fix = call("/locate?zone=kitchen", raw=JPEG)
+    assert fix["seen"][0]["doubt"] is False  # something was in the way: that look says nothing
+    gateway.fix = {**FIX, "items": [], "items_checked": [look], "position": [0.5, 0.0, 0.0]}
+    code, fix = call("/locate?zone=kitchen", raw=JPEG)
+    assert fix["seen"][0]["doubt"] is True
+    code, body = call("/ask?zone=kitchen", {"question": "Where are my keys?"})
+    assert body["answer"].startswith("Your keys were near the pill box at ") and "but I did not see them there at " in body["answer"], body
+    assert body["point"] is None
+    gateway.fix = FIX  # the keys are back in view: a new sighting, no doubt
+    code, fix = call("/locate?zone=kitchen", raw=JPEG)
+    assert fix["seen"][0]["doubt"] is False
+    code, body = call("/ask?zone=kitchen", {"question": "Where are my keys?"})
+    assert body["answer"].startswith("Your keys were last seen at ") and body["point"]["name"] == "keys", body
 
     # Any other question goes to the event API and comes back in words.
     code, body = call("/ask", {"question": "Did I take my pills?"})

@@ -144,6 +144,14 @@ next to it:
   points there. This needs the item finder in the worker, which is being built on branch
   `jun-26-lost-items`; until it is deployed the answer is "I cannot look for your keys yet."
   The relay already sends the wearer's newest photo at up to 1280 px (`big.jpg`) for it.
+  A sighting can go stale (someone picks the keys up), so every later fix is asked to look at
+  each remembered spot again. After two clear, close looks from different standpoints with no
+  item there, the answer becomes "Your keys were near the pill box at 10:42, but I did not see
+  them there at 11:05" and the arrow no longer points there.
+  Remembered positions are comparable between fixes: across ten fixes with different query
+  frames on the example scene, the same named place moved by at most 1.4 cm and a baseline
+  camera by at most 1.8 cm (cameras span 4.8 m), because every fix builds its map from the same
+  baseline photos.
 - `/hud?k=KEY&demo=1` rehearses all of it with stand-ins and no backend: "Remind me" and "Open
   the pill box" play the reminder and the sensor.
 - `python live/test_care_flow.py` tests the relay side offline, with a stand-in gateway and a
