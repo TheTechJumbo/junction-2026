@@ -241,8 +241,11 @@ class LiveRelayTest {
         assertEquals("image/jpeg", request.body!!.contentType().toString())
     }
 
-    @Test fun onlyDebugLoopbackMayUseCleartext() {
-        assertThrows(IllegalArgumentException::class.java) { RelayClient("http://192.168.1.20:8090", "key", "kitchen", allowLocalHttp = true) }
+    @Test fun onlyDebugLoopbackOrLanMayUseCleartext() {
+        // Debug builds: loopback (adb reverse) and private LAN (the laptop on the same Wi-Fi); never a public address.
+        RelayClient("http://192.168.1.20:8090", "key", "kitchen", allowLocalHttp = true)
+        assertThrows(IllegalArgumentException::class.java) { RelayClient("http://192.168.1.20:8090", "key", "kitchen", allowLocalHttp = false) }
+        assertThrows(IllegalArgumentException::class.java) { RelayClient("http://203.0.113.5:8090", "key", "kitchen", allowLocalHttp = true) }
         assertThrows(IllegalArgumentException::class.java) { RelayClient("http://127.0.0.1:8090", "key", "kitchen", allowLocalHttp = false) }
         assertThrows(IllegalArgumentException::class.java) { RelayClient("https://relay.example/path", "key", "kitchen", allowLocalHttp = false) }
         assertThrows(IllegalArgumentException::class.java) { RelayClient("https://relay.example", " ", "kitchen", allowLocalHttp = false) }
