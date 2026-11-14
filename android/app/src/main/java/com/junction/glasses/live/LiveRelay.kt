@@ -17,6 +17,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
@@ -129,6 +130,9 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
     /** A baseline upload takes the relay's vision worker a while: generous timeouts for this call only. */
     private val slowHttp = http.newBuilder().writeTimeout(5, TimeUnit.MINUTES)
         .readTimeout(15, TimeUnit.MINUTES).callTimeout(16, TimeUnit.MINUTES).build()
+    /** A room video can be large: long write and read timeouts and no overall limit. */
+    private val videoHttp = http.newBuilder().writeTimeout(10, TimeUnit.MINUTES)
+        .readTimeout(10, TimeUnit.MINUTES).callTimeout(0, TimeUnit.MILLISECONDS).build()
 
     fun request(jpeg: ByteArray): Request = Request.Builder()
         .url(base.newBuilder().addPathSegment("locate").addQueryParameter("zone", zone).build())
@@ -147,6 +151,34 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
             .post(zip.toRequestBody(ZIP))
             .build()
     }
+
+    /** A room video for the laptop: POST {relay}/recording?zone={zone}, the body streamed (video/mp4). */
+    fun recordingRequest(zone: String, video: RequestBody): Request {
+        require(ZONE.matches(zone)) { "Zone names use a-z, 0-9, _ and -" }
+        return Request.Builder()
+            .url(base.newBuilder().addPathSegment("recording").addQueryParameter("zone", zone).build())
+            .header("X-Key", key)
+            .header("Accept", "application/json")
+            .post(video)
+            .build()
+    }
+
+    /** The laptop's status for the zone's latest video: GET {relay}/recording?zone={zone}. */
+    fun recordingStatusRequest(zone: String): Request {
+        require(ZONE.matches(zone)) { "Zone names use a-z, 0-9, _ and -" }
+        return Request.Builder()
+            .url(base.newBuilder().addPathSegment("recording").addQueryParameter("zone", zone).build())
+            .header("X-Key", key)
+            .header("Accept", "application/json")
+            .get()
+            .build()
+    }
+
+    suspend fun uploadRecording(zone: String, video: RequestBody): RecordingReply =
+        RecordingReply.parse(send(videoHttp, recordingRequest(zone, video)))
+
+    suspend fun recordingStatus(zone: String): RecordingReply =
+        RecordingReply.parse(send(http, recordingStatusRequest(zone)))
 
     suspend fun locate(jpeg: ByteArray): LocateReply = LocateReply.parse(send(http, request(jpeg)))
 
@@ -188,6 +220,7 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         private const val MAX_REPLY_BYTES = 8L * 1024 * 1024
         private val JPEG = "image/jpeg".toMediaType()
         private val ZIP = "application/zip".toMediaType()
+        val VIDEO_MP4 = "video/mp4".toMediaType()
         private val LOOPBACK = setOf("localhost", "127.0.0.1", "::1", "10.0.2.2")
         private val ZONE = Regex("[a-z0-9_-]{1,32}")
 
