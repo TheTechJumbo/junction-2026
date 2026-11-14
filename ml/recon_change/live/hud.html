@@ -124,7 +124,8 @@ const told = {};                      // when each reminder was last shown
 const sample = { pills: '', keys: { name: 'keys', position: [-1.5, 1.9, 0], time: '09:12', near: 'bathroom door' } };
 
 // Everything the arrow can point to: the named places, then the items a position fix has seen.
-const spots = () => fix ? [...fix.waypoints, ...(fix.seen || []).map(s => ({ ...s, item: true }))] : [];
+// Not an item in doubt: the glasses have since looked at that spot and did not find it there.
+const spots = () => fix ? [...fix.waypoints, ...(fix.seen || []).filter(s => !s.doubt).map(s => ({ ...s, item: true }))] : [];
 
 function fromMe(position) {  // metres, and degrees from straight ahead (+ to the right)
   const east = position[0] - me.x, north = position[1] - me.y;

@@ -75,6 +75,8 @@ BIG_SIDE = 1280  # the wearer's newest photo is also sent at this size, for find
 REMINDER_WINDOW = 2 * 3600  # a reminder nobody finished within two hours counts as missed
 NEAR_PLACE_M = 1.5  # an item this close to a named place is described as "near" it
 FRESH_FIX_S = 60  # "to your left" is only said from a position fix this recent
+MISSED_LOOKS = 2  # clear looks at a remembered spot without the item before the sighting is doubted
+MOVED_M, MOVED_DEG = 0.3, 15  # a look only counts as another one from a different standpoint
 
 # Clock times (reminders, "last seen at") are in the home's time zone, the same one the event API
 # answers in, not the laptop's. Set BEACON_TZ to change it.
@@ -307,18 +309,42 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             seen.setdefault(zone, {})[item["name"]] = {
                 "name": item["name"], "position": item["position"], "score": item.get("score"), "at": time.time(),
                 "near": near["name"] if near else "", "image": images.get(item.get("image") or "")}
-        if found:
+        # A sighting goes stale: someone picks the keys up, and "last seen by the pill box" would still be
+        # said with full confidence. So every later fix reports, for each remembered spot, whether it had a
+        # clear, close look at the spot and whether the item was there (the worker's "items_checked").
+        # MISSED_LOOKS clear looks without the item, from different standpoints, put the sighting in doubt.
+        here = [item["name"] for item in found]
+        looked = False
+        for look in result.get("items_checked") or []:
+            spot = seen.get(zone, {}).get(look.get("name"))
+            if not spot or look.get("name") in here:
+                continue
+            looked = True
+            if look.get("detected_near"):
+                spot.update(missed=0)
+            elif look.get("in_view") and look.get("close_enough") and not look.get("blocked"):
+                last = spot.get("missed_from")
+                moved = last is None or math.dist(last[:2], result["position"][:2]) >= MOVED_M or abs(
+                    (result["heading_deg"] - last[2] + 180) % 360 - 180) >= MOVED_DEG
+                if moved:  # two looks from the same standpoint would miss it for the same reason
+                    spot.update(missed=spot.get("missed", 0) + 1, missed_at=time.time(),
+                                missed_from=[*result["position"][:2], result["heading_deg"]])
+        if found or looked:
             try:
                 seen_file.write_text(json.dumps(seen))
             except OSError:
                 pass
 
+    def in_doubt(spot):
+        return spot.get("missed", 0) >= MISSED_LOOKS
+
     def seen_list(zone, fix):
-        """The items seen in a zone, each with how long ago and, from a usable fix, the way to it."""
+        """The items seen in a zone, each with how long ago and, from a usable fix, the way to it.
+        "doubt" marks a sighting the glasses have since looked at without finding the item."""
         out = []
         for spot in seen.get(zone, {}).values():
             entry = {**spot, "age_s": round(time.time() - spot["at"]),
-                     "time": home_time(spot["at"]).strftime("%H:%M")}
+                     "time": home_time(spot["at"]).strftime("%H:%M"), "doubt": in_doubt(spot)}
             if fix and fix.get("state") != "lost":
                 entry["distance_m"], entry["bearing_deg"] = from_here(spot["position"], fix)
             out.append(entry)
@@ -336,6 +362,11 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             watching = fix and name in (fix.get("items_looked_for") or [])
             reply["answer"] = (f"I have not seen your {name} today. Look around slowly and I will keep watching for {them}."
                                if watching else f"I cannot look for your {name} yet.")
+            return reply
+        if in_doubt(spot):  # do not send them to a place the glasses have since looked at in vain
+            place = f"near the {spot['near']}" if spot.get("near") else "seen"
+            reply["answer"] = (f"Your {name} {were} {place} at {home_time(spot['at']):%H:%M}, but I did not see {them} there "
+                               f"at {home_time(spot['missed_at']):%H:%M}. Look around slowly and I will keep watching for {them}.")
             return reply
         text = f"Your {name} {were} last seen at {home_time(spot['at']):%H:%M}"
         if spot.get("near"):
@@ -647,7 +678,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(400, {"ok": False, "error": "Could not read that file as a video or a photo."})
             seconds["pick_frames"] = round(time.time() - t0, 2)
             device = "cpu" if query.get("device", [""])[0] == "cpu" else "gpu"
-            header, blob = link.call({"op": op, "zone": zone, "device": device, "view": bool(query.get("view", [""])[0])}, clip)
+            job = {"op": op, "zone": zone, "device": device, "view": bool(query.get("view", [""])[0])}
+            if op == "locate":  # the spots where items were seen, so the worker can look at them again
+                job["remembered"] = [{"name": s["name"], "position": s["position"]} for s in seen.get(zone, {}).values()]
+            header, blob = link.call(job, clip)
             seconds["total"] = round(time.time() - t0, 2)
             if not header.get("ok"):
                 return self.send_json(502, {**header, "seconds": seconds})
