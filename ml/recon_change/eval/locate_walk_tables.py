@@ -75,7 +75,7 @@ def floor_plane(cloud, up, tol, rng, tries=400):
     on = cloud[np.abs(cloud @ n - a @ n) < tol]  # least-squares plane through the points on it
     score = len(on)
     centre = on.mean(0)
-    normal = np.linalg.svd(on - centre)[2][-1]
+    normal = np.linalg.svd(on - centre, full_matrices=False)[2][-1]
     normal *= 1 if normal @ up > 0 else -1
     return normal, centre, score / len(cloud)
 
@@ -145,7 +145,8 @@ def derive(row, plan, out_dir, rng, with_floor):
         pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
         a, b = max(pairs, key=lambda ab: np.linalg.norm(truth[ab[0]] - truth[ab[1]]))
         m["pair"] = [a, b]
-        m["ratio_pair"] = float(np.linalg.norm(model_places[a] - model_places[b]) * metres / np.linalg.norm(truth[a] - truth[b]))
+        on_pair = float(np.linalg.norm(model_places[a] - model_places[b]) * metres / np.linalg.norm(truth[a] - truth[b]))
+        m["ratio_pair"] = m["ratio"] / on_pair  # metres rescaled so that this one distance comes out right
     # (2) The floor: the cameras' height above it is a person's eye height.
     file = out_dir / "fix" / ("_".join(str(v) for v in row["key"]) + ".npz")
     if with_floor and file.exists():
@@ -232,18 +233,28 @@ def tables(rows, plan, meta):
     same, wrong = pick("same"), pick("wrong")
     L += ["", "Match scores, and what other rules would have given on the same fixes (12 + 1). The shipped rule counts a pixel of the query when at "
           "least two baseline frames see it at the same depth and looking alike. Found is a score of at least 0.5, accepted at least 0.3.", "",
-          "| Rule | Same room: score median | p10 | Found | Accepted | Wrong room: score median | max | Accepted | Same-room queries scoring above every wrong-room query |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+          "| Rule | Same room: score median | p10 | Found | Accepted | Wrong room: score median | max | Accepted | Same-room queries scoring above every wrong-room query | "
+          "Its found fixes: position error m p90 | max | heading error deg max | off by more than 0.2 m or 10 deg |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for label, score in (("shipped (`confidence`)", lambda r: r["confidence"]),
                          ("shipped, recomputed from its parts (check)", lambda r: rule(r, 3)),
                          ("one baseline frame is enough (same depth and looking alike)", lambda r: rule(r, 2)),
                          ("depth only, two baseline frames (`match_by_depth`)", lambda r: r["match_by_depth"]),
                          ("depth only, one baseline frame", lambda r: rule(r, 0))):
         s, w = [score(r) for r in same], [score(r) for r in wrong]
+        good = [r for r, v in zip(same, s) if v is not None and v >= 0.5]
         s, w = [v for v in s if v is not None], [v for v in w if v is not None]
         top = max(w) if w else 0.0
         L.append(f"| {label} | {stat(s)} | {stat(s, 'p10')} | {share(sum(v >= 0.5 for v in s), len(s))} | {share(sum(v >= 0.3 for v in s), len(s))} | "
-                 f"{stat(w)} | {stat(w, 'max')} | {share(sum(v >= 0.3 for v in w), len(w))} | {share(sum(v > top for v in s), len(s))} |")
+                 f"{stat(w)} | {stat(w, 'max')} | {share(sum(v >= 0.3 for v in w), len(w))} | {share(sum(v > top for v in s), len(s))} | "
+                 f"{stat([r['m']['pos_err'] for r in good], 'p90')} | {stat([r['m']['pos_err'] for r in good], 'max')} | "
+                 f"{stat([r['m']['head_err'] for r in good], 'max', 1)} | "
+                 f"{share(sum(r['m']['pos_err'] > 0.2 or r['m']['head_err'] > 10 for r in good), len(good))} |")
+    turned_away = [r for r in same if r["state"] != "found"]
+    right = [r for r in turned_away if r["m"]["pos_err"] < 0.2 and r["m"]["head_err"] < 10]
+    L += ["", f"Of the {len(turned_away)} same-room queries that were not found, {len(right)} had the right position anyway (within 0.2 m and 10 degrees): "
+          "turned away for nothing. Per room: " + ", ".join(
+              f"{room} {sum(r['room'] == room for r in right)} of {sum(r['room'] == room for r in turned_away)}" for room in rooms) + "."]
     L += ["", "Parts of the score, medians: share of the frame's trusted pixels that at least 1 / at least 2 baseline frames see at the same depth, and "
           "where at least 1 / at least 2 also look alike.", "",
           "| Room | Frame | Depth, 1 frame | Depth, 2 frames | Alike, 1 frame | Alike, 2 frames |", "| --- | --- | --- | --- | --- | --- |"]
@@ -318,6 +329,9 @@ def tables(rows, plan, meta):
     split("By blur. Sharpness is `recon_change.sharpness` of the query frame (variance of the Laplacian); thirds within each room. Edges: "
           + "; ".join(f"{room} {edges[room][0]:.0f} and {edges[room][1]:.0f}" for room in rooms) + ".", "Sharpness of the query frame",
           [("blurriest third", lambda v: v == 0), ("middle third", lambda v: v == 1), ("sharpest third", lambda v: v == 2)], lambda r: r["m"]["blur_band"])
+    split("By sharpness in absolute numbers, all rooms on one scale (a frame under 150 is visibly smeared; a plain close-up also scores low):",
+          "Sharpness of the query frame", [("under 150", lambda v: v < 150), ("150 to 400", lambda v: 150 <= v < 400),
+                                           ("400 to 800", lambda v: 400 <= v < 800), ("800 and more", lambda v: v >= 800)], lambda r: r["sharpness"])
     split("By how fast the camera was turning when the frame was taken (from the motion capture):", "Turning speed deg/s",
           [("under 15", lambda v: v < 15), ("15 to 40", lambda v: 15 <= v < 40), ("40 to 80", lambda v: 40 <= v < 80), ("80 and more", lambda v: v >= 80)],
           lambda r: r["m"]["turn"])
@@ -330,6 +344,46 @@ def tables(rows, plan, meta):
     split("By how far down the camera looked (0 = level, 90 = straight down):", "Pitch deg",
           [("under 15", lambda v: v < 15), ("15 to 30", lambda v: 15 <= v < 30), ("30 to 45", lambda v: 30 <= v < 45), ("45 and more", lambda v: v >= 45)],
           lambda r: r["m"]["pitch"])
+    def by_room(title, bands, value):
+        L.extend(["", title, "", "| Band | " + " | ".join(f"{room}: found" for room in rooms) + " |", "| --- |" + " --- |" * len(rooms)])
+        for label, test in bands:
+            cells = []
+            for room in rooms:
+                g = [r for r in pick("same", room=room) if value(r) is not None and test(value(r))]
+                cells.append(share(sum(r["state"] == "found" for r in g), len(g)))
+            L.append(f"| {label} | " + " | ".join(cells) + " |")
+
+    by_room("Found rate per room, by blur (thirds within the room):",
+            [("blurriest third", lambda v: v == 0), ("middle third", lambda v: v == 1), ("sharpest third", lambda v: v == 2)], lambda r: r["m"]["blur_band"])
+    L += ["", "What blur does to the score (medians; `match_by_depth` is the score without the appearance check, `looks_alike` the share of "
+          "depth-matched pixels that also look alike):", "", "| Room | Blur band | Queries | match_by_depth | looks_alike | Match (shipped) | "
+          "Position error m median | Not found although within 0.2 m and 10 deg |", "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for room in rooms:
+        for band, label in enumerate(("blurriest third", "middle third", "sharpest third")):
+            g = [r for r in pick("same", room=room) if r["m"]["blur_band"] == band]
+            lost_right = sum(r["state"] != "found" and r["m"]["pos_err"] < 0.2 and r["m"]["head_err"] < 10 for r in g)
+            L.append(f"| {room} | {label} | {len(g)} | {stat([r['match_by_depth'] for r in g])} | {stat([r['looks_alike'] for r in g])} | "
+                     f"{stat([r['confidence'] for r in g])} | {stat([r['m']['pos_err'] for r in g])} | {share(lost_right, len(g))} |")
+    by_room("Found rate per room, by turning speed (deg/s):",
+            [("under 15", lambda v: v < 15), ("15 to 40", lambda v: 15 <= v < 40), ("40 and more", lambda v: v >= 40)], lambda r: r["m"]["turn"])
+    by_room("Found rate per room, by the angle to the closest baseline view (deg):",
+            [("under 15", lambda v: v < 15), ("15 to 30", lambda v: 15 <= v < 30), ("30 and more", lambda v: v >= 30)], lambda r: r["m"]["view_gap"])
+    L += ["", "Blur with coverage held fixed: only queries that look within 20 degrees of a baseline view.", "",
+          "| Band | Queries | Found | Unsure | Lost | Position error m median | max | Heading error deg median | max |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    covered = [r for r in pick("same") if r["m"]["view_gap"] < 20]
+    for label, test in (("turning under 15 deg/s", lambda r: r["m"]["turn"] is not None and r["m"]["turn"] < 15),
+                        ("turning 15 to 40 deg/s", lambda r: r["m"]["turn"] is not None and 15 <= r["m"]["turn"] < 40),
+                        ("turning 40 deg/s and more", lambda r: r["m"]["turn"] is not None and r["m"]["turn"] >= 40),
+                        ("sharpness under 150", lambda r: r["sharpness"] < 150), ("sharpness 150 to 400", lambda r: 150 <= r["sharpness"] < 400),
+                        ("sharpness 400 and more", lambda r: r["sharpness"] >= 400)):
+        g = [r for r in covered if test(r)]
+        c = Counter(r["state"] for r in g)
+        L.append(f"| {label} | {len(g)} | {share(c['found'], len(g))} | {c['unsure']} | {c['lost']} | {stat([r['m']['pos_err'] for r in g])} | "
+                 f"{stat([r['m']['pos_err'] for r in g], 'max')} | {stat([r['m']['head_err'] for r in g], 'median', 1)} | {stat([r['m']['head_err'] for r in g], 'max', 1)} |")
+    near_all = [r["m"]["nearest"] for r in pick("same")]
+    L += ["", f"Range tested: the query camera was {stat(near_all, 'min')} to {stat(near_all, 'max')} m from the nearest baseline camera "
+          f"(median {stat(near_all)}), turning at up to {stat([r['m']['turn'] for r in pick('same')], 'max', 0)} deg/s and moving at up to "
+          f"{stat([r['m']['speed'] for r in pick('same')], 'max')} m/s."]
     split("By match score:", "Match", [("under 0.3 (lost)", lambda v: v < 0.3), ("0.3 to 0.5 (unsure)", lambda v: 0.3 <= v < 0.5),
                                        ("0.5 to 0.8", lambda v: 0.5 <= v < 0.8), ("0.8 and more", lambda v: v >= 0.8)], lambda r: r["confidence"])
 
@@ -378,8 +432,9 @@ def tables(rows, plan, meta):
     L += ["", "### 8. Other ways to get metres (found fixes, 12 + 1)", "",
           "Nothing here is in `locate.py`; each row is what the same fixes would have shown with another rule for metres. "
           "\"Ratio\" is that rule's metres / true metres.", "",
-          "| Room | Rule | Fixes | Ratio median | p10 | p90 | Distance error m median | p90 | max | Distance error % median | Bearing error deg median | p90 |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+          "| Room | Rule | Fixes | Ratio median | p10 | p90 | Fixes with metres within 15% of the truth | Distance error m median | p90 | max | "
+          "Distance error % median | Bearing error deg median | p90 |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for label, got in groups("same"):
         g = [r for r in got if r["state"] == "found"]
 
@@ -396,10 +451,12 @@ def tables(rows, plan, meta):
                     rel.append(100 * abs(sd - w["true_h"]) / max(w["true_h"], 1e-6))
                     if w["true_h"] >= 0.5:
                         b.append(abs(wrap(sb - w["true_b"])))
-            L.append(f"| {label} | {rule} | {len(ratios)} | {stat(ratios)} | {stat(ratios, 'p10')} | {stat(ratios, 'p90')} | {three(d)} | {stat(rel, 'median', 0)} | "
+            L.append(f"| {label} | {rule} | {len(ratios)} | {stat(ratios)} | {stat(ratios, 'p10')} | {stat(ratios, 'p90')} | "
+                     f"{share(sum(abs(k - 1) <= 0.15 for k in ratios), len(ratios))} | {three(d)} | {stat(rel, 'median', 0)} | "
                      f"{stat(b, 'median', 0)} | {stat(b, 'p90', 0)} |")
 
         line("as shipped: median viewing distance = 2 m", g, lambda r: r["m"]["ratio"])
+        line("median viewing distance = 1.5 m (`typical_m=1.5`)", g, lambda r: r["m"]["ratio"] * 0.75)
         line("one known distance (the two places farthest apart)", g, lambda r: r["m"].get("ratio_pair"))
         line(f"floor found, cameras assumed {EYE_M} m above it (scale only)", g, lambda r: r["m"].get("ratio_floor_eye"))
         line("floor found, the true camera height given (scale only)", g, lambda r: r["m"].get("ratio_floor_true_height"))
