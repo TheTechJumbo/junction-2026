@@ -30,6 +30,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+import recon_rust  # Rust versions of depth_gap and votes when built, else these NumPy ones run
+
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 EDGE = 0.04  # neighbouring pixels whose depth differs by more than this fraction are an edge
 # Pixels searched around a spot in the other clip before calling it empty. The two clips can be
@@ -215,6 +217,9 @@ def depth_gap(points, E, K, depth, near, valid):
     the camera has no trusted view of the point:
       gap       against the depth at that pixel
       gap_near  against the nearest depth in the window around it (see nearest_in_window)"""
+    fast = recon_rust.depth_gap(points, E, K, depth, near, valid)
+    if fast is not None:
+        return fast
     cam = points @ E[:, :3].T + E[:, 3]
     z = cam[:, 2]
     H, W = depth.shape
@@ -253,6 +258,9 @@ def measure_noise(r, valid, near, group_a, group_b, per_frame=4000, seed=0):
 def votes(r, valid, near, pts, frames, tol_agree, tol_free):
     """For each world point, how many of these frames saw the same surface (agree), how many
     looked straight through its place (free), and whether any had a trusted view (seen)."""
+    fast = recon_rust.votes(r, valid, near, pts, frames, tol_agree, tol_free)
+    if fast is not None:
+        return fast
     agree = np.zeros(len(pts), np.int32)
     free = np.zeros(len(pts), np.int32)
     seen = np.zeros(len(pts), bool)
