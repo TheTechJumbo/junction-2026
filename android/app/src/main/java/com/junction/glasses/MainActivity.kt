@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
         private const val STATE_PERMISSIONS_REQUESTED = "auto_setup_permissions_requested"
         private const val STATE_REGISTRATION_REQUESTED = "auto_setup_registration_requested"
         private const val STATE_CONSENT_REQUESTED = "auto_setup_consent_requested"
+        private const val STATE_GLASSES_APP_PAGE_OPENED = "auto_setup_glasses_app_page_opened"
         private const val REGISTRATION_SETTLE_MS = 3_000L
     }
     private val main = Handler(Looper.getMainLooper())
@@ -133,6 +134,7 @@ class MainActivity : ComponentActivity() {
         autoGlasses = AutoGlassesSetup(
             registrationRequested = savedInstanceState?.getBoolean(STATE_REGISTRATION_REQUESTED) == true,
             consentRequested = savedInstanceState?.getBoolean(STATE_CONSENT_REQUESTED) == true,
+            glassesAppPageOpened = savedInstanceState?.getBoolean(STATE_GLASSES_APP_PAGE_OPENED) == true,
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         audio = AndroidAudioOutput(this)
@@ -245,6 +247,8 @@ class MainActivity : ComponentActivity() {
         button("Enable glasses access") { permissions.launch(PHONE_PERMISSIONS) }
         button("Register with Meta AI") { glasses.register() }
         button("Connect / reconnect glasses", primary = true) { glasses.connect() }
+        button("Install glasses app in Meta AI") { glasses.openGlassesAppUpdate() }
+        note("If the glasses connect and drop at once, Meta AI may need to install this app's Developer Mode glasses app. Glasses firmware updates do not include it, and no glasses reset is needed.")
         diagnosticStatus = label("Hardware tests: not run. A successful SDK call still needs confirmation on the glasses.")
         val displayOption = CheckBox(this).apply {
             text = "Optional: I am using display glasses"
@@ -285,7 +289,7 @@ class MainActivity : ComponentActivity() {
             }
         })
         lifecycleScope.launch { glasses.state.collect { s ->
-            deviceStatus.text = "Registration: ${s.registration}\nDevices: ${s.deviceCount} · ${s.connection}\nCamera: ${s.camera} · ${displayDescription(s.display)}\nSpeech: ${s.speech} · Motion: ${s.motion}\nGlasses consent — Camera: ${s.cameraPermission}; microphone: ${s.microphonePermission}" + (s.error?.let { "\n$it" } ?: "")
+            deviceStatus.text = "Registration: ${s.registration}\nDevices: ${s.deviceCount} · ${s.connection}\nGlasses: ${s.device ?: "not reported yet"}\nCamera: ${s.camera} · ${displayDescription(s.display)}\nSpeech: ${s.speech} · Motion: ${s.motion}\nGlasses consent — Camera: ${s.cameraPermission}; microphone: ${s.microphonePermission}" + (s.error?.let { "\n$it" } ?: "")
             refreshAutomaticSetup()
         } }
         lifecycleScope.launch { glasses.motion.collect { reading ->
@@ -312,6 +316,7 @@ class MainActivity : ComponentActivity() {
         outState.putBoolean(STATE_PERMISSIONS_REQUESTED, autoPermissionsRequested)
         outState.putBoolean(STATE_REGISTRATION_REQUESTED, autoGlasses.registrationRequested)
         outState.putBoolean(STATE_CONSENT_REQUESTED, autoGlasses.consentRequested)
+        outState.putBoolean(STATE_GLASSES_APP_PAGE_OPENED, autoGlasses.glassesAppPageOpened)
     }
     /**
      * DEBUG builds only: adb extras backend_url/api_token fill the endpoint and token fields as if typed
@@ -450,6 +455,8 @@ class MainActivity : ComponentActivity() {
             AutoGlassesSetup.Step.REGISTER -> glasses.register()
             AutoGlassesSetup.Step.REQUEST_CONSENT -> glasses.requestConsent { autoGlasses.consentFinished(); refreshAutomaticSetup() }
             AutoGlassesSetup.Step.CONNECT -> glasses.connect()
+            AutoGlassesSetup.Step.OPEN_GLASSES_APP_UPDATE -> glasses.openGlassesAppUpdate()
+            AutoGlassesSetup.Step.OPEN_FIRMWARE_UPDATE -> glasses.openFirmwareUpdate()
             AutoGlassesSetup.Step.RETRY_LATER -> {
                 cancelAutomaticRetry()
                 val wait = autoGlasses.retryDelayMs
@@ -483,6 +490,12 @@ class MainActivity : ComponentActivity() {
                 if (autoGlasses.registrationRequested) "approve this app in Meta AI." else "checking Meta AI registration…"
             autoGlasses.consentRunning -> "asking for glasses camera and microphone consent in Meta AI…"
             s.connection == AutoGlassesSetup.STARTED -> "connected."
+            autoGlasses.blockedBy == AutoGlassesSetup.GLASSES_APP_UPDATE ->
+                "the glasses need this app's Developer Mode glasses app. Install it in Meta AI (opened once automatically; tap Install glasses app in Meta AI to open it again), then come back. No glasses reset needed."
+            autoGlasses.blockedBy == AutoGlassesSetup.FIRMWARE_UPDATE -> "the glasses firmware is too old for this app. Update it in Meta AI, then tap Connect / reconnect glasses."
+            autoGlasses.blockedBy == AutoGlassesSetup.SDK_UPDATE -> "these glasses need a newer build of this app (Meta SDK too old)."
+            autoGlasses.dropsExhausted ->
+                "the glasses dropped the session right after it started ${AutoGlassesSetup.MAX_DROPS + 1} times, so automatic reconnects stopped. Try Install glasses app in Meta AI, then Connect / reconnect glasses."
             autoGlasses.idleReconnect -> "Glasses idle, reconnecting… (the glasses end idle sessions; this is normal)"
             autoGlasses.retryPending -> "Waiting for glasses: put them on / unfold them. Retry ${autoGlasses.retriesUsed} of ${AutoGlassesSetup.MAX_RETRIES} in a few seconds."
             s.connection != "DISCONNECTED" -> "connecting (${s.connection}). Waiting for glasses: put them on / unfold them."
@@ -507,6 +520,9 @@ class MainActivity : ComponentActivity() {
                 paintChip(glassesChip, ChipLevel.WAIT, "No glasses found")
             s.registration != AutoGlassesSetup.REGISTERED -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses not registered")
             s.connection == AutoGlassesSetup.STARTED -> paintChip(glassesChip, ChipLevel.GOOD, "Glasses STARTED")
+            s.blocker == AutoGlassesSetup.GLASSES_APP_UPDATE -> paintChip(glassesChip, ChipLevel.BAD, "Glasses app missing")
+            s.blocker != null -> paintChip(glassesChip, ChipLevel.BAD, "Glasses need update")
+            automaticSetup && autoGlasses.dropsExhausted -> paintChip(glassesChip, ChipLevel.BAD, "Glasses keep dropping")
             automaticSetup && autoGlasses.idleReconnect -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses idle, reconnecting")
             s.connection == "DISCONNECTED" && !autoGlasses.retryPending -> paintChip(glassesChip, ChipLevel.BAD, "Glasses DISCONNECTED")
             else -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses ${s.connection}")

@@ -127,6 +127,104 @@ class AutoGlassesSetupTest {
         assertEquals(Step.CONNECT, setup.at("REGISTERED", devices = 1))
     }
 
+    @Test fun missingGlassesAppOpensMetaAiOnceAndNeverLoops() {
+        val setup = connectedSetup()
+        assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STARTED"))
+        // The glasses refuse: open Meta AI's glasses app page instead of the 30 s reconnect loop.
+        assertEquals(Step.OPEN_GLASSES_APP_UPDATE, setup.at("REGISTERED", blocks = 1, blocker = GLASSES_APP, error = "missing app"))
+        assertTrue(setup.glassesAppPageOpened)
+        assertEquals(GLASSES_APP, setup.blockedBy)
+        assertFalse(setup.retryPending || setup.idleReconnect)
+        assertEquals("missing app", setup.lastFailure)
+        assertEquals(Step.WAIT, setup.at("REGISTERED", blocks = 1, blocker = GLASSES_APP, pending = true))
+        assertEquals(Step.WAIT, setup.at("REGISTERED", blocks = 1, blocker = GLASSES_APP))
+        // Back from Meta AI: reconnect, and check twice more while its install finishes.
+        setup.onForeground()
+        assertEquals(Step.CONNECT, setup.at("REGISTERED", blocks = 1, blocker = GLASSES_APP))
+        for (blocks in 2..1 + AutoGlassesSetup.MAX_BLOCK_RETRIES) {
+            assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", blocks = blocks, blocker = GLASSES_APP))
+            assertEquals(AutoGlassesSetup.BLOCK_RETRY_MS, setup.retryDelayMs)
+            setup.retryDue()
+            assertEquals(Step.CONNECT, setup.at("REGISTERED", blocks = blocks, blocker = GLASSES_APP))
+        }
+        // Still refused: Meta AI is not opened again by itself; the button stays.
+        assertEquals(Step.WAIT, setup.at("REGISTERED", blocks = 4, blocker = GLASSES_APP))
+        assertEquals(Step.WAIT, setup.at("REGISTERED", blocks = 4, blocker = GLASSES_APP))
+        setup.onForeground()
+        assertEquals(Step.CONNECT, setup.at("REGISTERED", blocks = 4, blocker = GLASSES_APP))
+        assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STARTED", blocks = 4))
+        assertNull(setup.blockedBy)
+    }
+
+    @Test fun glassesAppPageWaitsForConsentAndForeground() {
+        val setup = AutoGlassesSetup(consentRequested = true)
+        assertEquals(Step.CONNECT, setup.at("REGISTERED"))
+        assertEquals(Step.WAIT, setup.at("REGISTERED", blocks = 1, blocker = GLASSES_APP, foreground = false))
+        assertEquals(Step.WAIT, setup.at("REGISTERED", blocks = 1, blocker = GLASSES_APP, pending = true))
+        assertEquals(Step.OPEN_GLASSES_APP_UPDATE, setup.at("REGISTERED", blocks = 1, blocker = GLASSES_APP))
+        // A recreated Activity keeps the single hand-off of this launch.
+        val recreated = AutoGlassesSetup(consentRequested = true, glassesAppPageOpened = true)
+        assertEquals(Step.CONNECT, recreated.at("REGISTERED"))
+        assertEquals(Step.RETRY_LATER, recreated.at("REGISTERED", blocks = 1, blocker = GLASSES_APP))
+    }
+
+    @Test fun firmwareAndSdkMismatchesNeverRetry() {
+        val firmware = connectedSetup()
+        assertEquals(Step.OPEN_FIRMWARE_UPDATE, firmware.at("REGISTERED", blocks = 1, blocker = AutoGlassesSetup.FIRMWARE_UPDATE))
+        assertEquals(Step.WAIT, firmware.at("REGISTERED", blocks = 2, blocker = AutoGlassesSetup.FIRMWARE_UPDATE))
+        val sdk = connectedSetup()
+        assertEquals(Step.WAIT, sdk.at("REGISTERED", blocks = 1, blocker = AutoGlassesSetup.SDK_UPDATE))
+        assertEquals(AutoGlassesSetup.SDK_UPDATE, sdk.blockedBy)
+        assertFalse(sdk.retryPending)
+        assertFalse(sdk.glassesAppPageOpened)
+    }
+
+    @Test fun instantDropsRetryThreeTimesThenStopEvenAfterASessionWorked() {
+        val setup = connectedSetup()
+        // A session that worked earlier makes later failures retry forever; drops must still stop.
+        assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STARTED"))
+        for (drops in 1..AutoGlassesSetup.MAX_DROPS) {
+            assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = drops, error = "dropped"))
+            assertEquals(AutoGlassesSetup.FAILURE_RETRY_MS, setup.retryDelayMs)
+            assertFalse(setup.idleReconnect)
+            setup.retryDue()
+            assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = drops))
+            assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STARTED", drops = drops))
+        }
+        assertEquals(Step.WAIT, setup.at("REGISTERED", drops = 4, error = "dropped"))
+        assertTrue(setup.dropsExhausted)
+        assertEquals("dropped", setup.lastFailure)
+        setup.retryDue()
+        assertEquals(Step.WAIT, setup.at("REGISTERED", drops = 4))
+        setup.onForeground()
+        assertFalse(setup.dropsExhausted)
+        assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = 4))
+    }
+
+    @Test fun anIdleEndAfterAWorkingSessionResetsTheDropCount() {
+        val setup = connectedSetup()
+        repeat(AutoGlassesSetup.MAX_DROPS) { index ->
+            assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = index + 1, ends = index))
+            setup.retryDue()
+            assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = index + 1, ends = index))
+            // That session then ran for minutes and ended idle.
+            assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = index + 1, ends = index + 1))
+            setup.retryDue()
+            assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = index + 1, ends = index + 1))
+        }
+        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = 4, ends = 3))
+        assertFalse(setup.dropsExhausted)
+    }
+
+    @Test fun aStoppingSessionIsNotReconnectedOverItsOutcomeDecides() {
+        val setup = AutoGlassesSetup(consentRequested = true)
+        // STOPPED while the adapter waits for the reason: no second session on top of it.
+        assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STOPPED"))
+        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = 1))
+        setup.retryDue()
+        assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = 1))
+    }
+
     @Test fun disconnectButtonCancelsPendingRetry() {
         val setup = connectedSetup()
         assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", failures = 1))
@@ -150,9 +248,15 @@ class AutoGlassesSetupTest {
         foreground: Boolean = true,
         pending: Boolean = false,
         devices: Int = 1,
+        drops: Int = 0,
+        blocks: Int = 0,
+        blocker: String? = null,
     ): Step = next(
         MetaState(initialized = initialized, registration = registration, connection = connection, error = error,
-            sessionFailures = failures, sessionEnds = ends, deviceCount = devices),
+            sessionFailures = failures, sessionEnds = ends, deviceCount = devices,
+            sessionDrops = drops, sessionBlocks = blocks, blocker = blocker),
         foreground, pending, settled,
     )
+
+    private companion object { const val GLASSES_APP = AutoGlassesSetup.GLASSES_APP_UPDATE }
 }
