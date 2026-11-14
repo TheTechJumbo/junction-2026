@@ -204,8 +204,9 @@ def main():
     looks = StandIn(0.6)
     looks.look_from, looks.look_limits = 0.25, {"keys": 0.5, "remote control": 0.5}
     got = looks.candidates(picture, names, floor=0.3)
-    assert [(d["name"], d["accepted"]) for d in got] == [("keys", True), ("phone", True), ("glasses", False)], got
-    assert got[0]["score"] == 0.6 and got[0]["second_look"] == 0.6 and looks.last["second_looks"] == 1 and looks.last["passes"] == 2, (got, looks.last)
+    assert [(d["name"], d["accepted"]) for d in got] == [("phone", True), ("keys", True), ("glasses", False)], got
+    assert got[0]["score"] == 0.55 and got[1]["score"] == 0.4 and got[1]["second_look"] == 0.6, got  # the raw score stays
+    assert looks.last["second_looks"] == 1 and looks.last["passes"] == 2, looks.last
     assert looks.asked == [["keys", "a key"]], looks.asked  # the box on the phone gets no second look as a remote
     weak = StandIn(0.4)  # the second look does not agree: nothing more is accepted
     weak.look_from, weak.look_limits = 0.25, {"keys": 0.5}
@@ -223,7 +224,13 @@ def main():
     assert not judged.asked and judged.last["passes"] == 1 and judged.last["second_looks"] == 2, judged.last
     judged.look_limits = {"keys": 0.5}  # with a look limit as well, both must agree: the zoomed 0.2 is not enough
     assert [d["name"] for d in judged.find(picture, names)] == ["phone"]
-    print("6 ok: limits per item, second looks, a second opinion, and the same answers as before when none is set")
+    by_name = {d["name"]: d for d in got}
+    assert by_name["keys"]["confidence_pct"] == 80 and by_name["glasses"]["confidence_pct"] == 65 and by_name["phone"]["confidence_pct"] == 99, got
+    assert items.confidence_pct({"name": "keys", "score": 0.3}) == 55 and items.confidence_pct({"name": "umbrella", "score": 0.7}) == 97
+    assert items.confidence_pct({"name": "keys", "score": 0.9, "matched": "enrolled"}) == items.CONFIDENCE_ENROLLED
+    placed, _ = items.place([{"name": "keys", "score": 0.4, "box": box}], r, base, q, valid, window, "found")
+    assert placed[0]["confidence_pct"] == 72 and placed[0]["matched"] == "text", placed
+    print("6 ok: limits per item, second looks, a second opinion, stated confidence, and the same answers as before when none is set")
     print("all ok")
 
 

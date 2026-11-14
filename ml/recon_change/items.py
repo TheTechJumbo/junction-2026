@@ -98,6 +98,22 @@ ENROLLED_FLOOR = 0.4  # boxes less alike than this to a shown thing are not even
 # not, as "items_candidates", so that the relay can add up weak sightings of one thing at one place over
 # several looks. 0 = no such list.
 CANDIDATES = float(os.environ.get("RECON_ITEMS_CANDIDATES", "0"))
+# The stated confidence of an answer ("confidence_pct"): of the answers with the same kind of evidence on
+# the tuning half of the test photos, the share that were right. The evidence is the item, the band its
+# score falls in (bands start at these scores) and, for a weak box the judge was asked about, whether the
+# judge agreed. Fitted by eval/items_recall.py --confidence; eval/ITEMS_RESULTS.md has the check on the
+# other half and says where it is thin. A share on test photos, where the item is there in about half of
+# them: at home, where it mostly is not, weak boxes will be right less often than stated.
+CONFIDENCE = {"bands": [0.25, 0.35, 0.5, 0.6], "of": {
+    "keys": {"any": [55, 72, 99, 97], "agreed": [94, 80, 98, 96], "disagreed": [32, 49, 94, 93]},
+    "glasses": {"any": [62, 96, 99, 98], "agreed": [95, 98, 99, 97], "disagreed": [18, 65, 95, 93]},
+    "wallet": {"any": [40, 82, 98, 98], "agreed": [90, 93, 97, 97], "disagreed": [22, 48, 92, 93]},
+    "phone": {"any": [51, 85, 99, 99], "agreed": [92, 92, 99, 98], "disagreed": [36, 56, 96, 93]},
+    "remote control": {"any": [14, 48, 99, 100], "agreed": [90, 93, 97, 99], "disagreed": [10, 38, 96, 98]},
+    "other": {"any": [40, 77, 97, 97], "agreed": [90, 91, 96, 96], "disagreed": [22, 48, 92, 93]}}}
+# A box matched to an enrolled picture has no such measurement behind it yet (the synthetic test in
+# eval/ITEMS_RESULTS.md is too kind to count): it states this.
+CONFIDENCE_ENROLLED = 50
 # Rows of square tiles across the picture's short side, looked at besides the whole picture.
 # 0 = whole picture only (1 pass), 1 = tiles as high as the picture (16:9 and 4:3: 3 passes), 2 = 2 rows.
 TILES = int(os.environ.get("RECON_ITEMS_TILES", "1"))
@@ -238,6 +254,18 @@ def crop_around(shape, box, zoom, least=24):
     x = int(round(min(max((x0 + x1) / 2 - side / 2, 0), W - side)))
     y = int(round(min(max((y0 + y1) / 2 - side / 2, 0), H - side)))
     return x, y, side
+
+
+def confidence_pct(d, judge_limits=None):
+    """How often an answer with this kind of evidence was right in the measurements, 0 to 100 (see CONFIDENCE)."""
+    if d.get("matched") == "enrolled":
+        return CONFIDENCE_ENROLLED
+    table = CONFIDENCE["of"].get(d["name"], CONFIDENCE["of"]["other"])
+    band = max([i for i, edge in enumerate(CONFIDENCE["bands"]) if d["score"] >= edge], default=0)
+    said = "any"
+    if d.get("judge") is not None and judge_limits and d["name"] in judge_limits:
+        said = "agreed" if d["judge"] >= judge_limits[d["name"]] else "disagreed"
+    return int(table[said][band])
 
 
 def best_per_name(detections):
@@ -504,7 +532,7 @@ class Detector:
         """Every box of every name, best first, each marked "accepted" or not, and "matched": "text"
         (found by the words) or "enrolled" (found by a picture of the wearer's own thing).
         Accepted: a text box that scores at least its item's limit, or at least look_from with a
-        second, zoomed look that agrees (then it carries "second_look": the zoomed score); an
+        second, zoomed look that agrees (it then carries "second_look", the zoomed score, or "judge", the second opinion; "score" stays the first look's); an
         enrolled box that scores at least enrolled_score. Boxes that are not accepted are listed
         down to `floor`, for the look-again check and the candidates list; they are never sightings."""
         phrases = sorted({p for name in names for p in phrases_for(name)})
@@ -550,13 +578,13 @@ class Detector:
                             seen = float(score)
                 d["second_look"] = round(seen, 3)
                 agreed = seen >= self.look_limits[d["name"]]
-                if agreed:
-                    d["score"] = round(max(seen, d["score"]), 3)
             d["accepted"] = bool(agreed)
         if looks:
             self.last = {**first, "passes": first.get("passes", 0) + passes, "seconds": round(seconds, 3), "second_looks": len(looks)}
         else:
             self.last = first
+        for d in got:
+            d["confidence_pct"] = confidence_pct(d, self.judge_limits)
         got.sort(key=lambda d: (-d["accepted"], d["matched"] != "enrolled", -d["score"]))
         kept = []
         for d in got:  # one thing gets one name and one entry; a box that is not accepted never pushes an accepted one out
@@ -655,7 +683,8 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0, room=None):
     items, marks = [], []
     for d in found:
         item = {"name": d["name"], "score": round(float(d["score"]), 2), "box": [round(float(v), 4) for v in d["box"]],
-                "position": None, "distance_m": None, "bearing_deg": None, "matched": d.get("matched", "text")}
+                "position": None, "distance_m": None, "bearing_deg": None, "matched": d.get("matched", "text"),
+                "confidence_pct": d["confidence_pct"] if "confidence_pct" in d else confidence_pct(d)}
         items.append(item)
         if state == "lost":
             item["note"] = "No position fix, so it is not on the map."
@@ -819,7 +848,7 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
     if CANDIDATES > 0 and state != "lost":  # every box that could be placed, weak ones too, for the relay to add up over looks
         try:
             listed, _ = place([d for d in every if d["matched"] == "enrolled" or d["score"] >= CANDIDATES], r, base, q, valid, window, state, room=room)
-            fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "position", "box", "matched", "distance_m", "bearing_deg")}
+            fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "confidence_pct", "position", "box", "matched", "distance_m", "bearing_deg")}
                                           for c in listed if c["position"] is not None]
         except Exception as error:
             fields["items_note"] = (fields.get("items_note", "") + f" Candidates were not listed: {type(error).__name__}: {error}").strip()[:300]
