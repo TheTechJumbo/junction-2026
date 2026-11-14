@@ -1,0 +1,69 @@
+name: Android glasses
+on:
+  push:
+    branches: ["codex/android-glasses"]
+  pull_request:
+    paths: ["android/**", ".github/workflows/android-ci.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: make setup
+      - name: Start credential-free synthetic backend
+        run: |
+          API_TOKEN=synthetic-android-ci LOCAL_DATA_DIR="$RUNNER_TEMP/android-api" \
+            DATABASE_URL= ELEVENLABS_API_KEY= ELEVENLABS_VOICE_ID= \
+            .venv/bin/uvicorn backend.run:create_application --factory --host 127.0.0.1 --port 8097 --no-access-log > "$RUNNER_TEMP/android-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/android-api.pid"
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8097/health; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Compile APK, lint, unit and real-backend checks
+        working-directory: android
+        env:
+          JUNCTION_ANDROID_TEST_URL: http://127.0.0.1:8097
+          JUNCTION_ANDROID_TEST_TOKEN: synthetic-android-ci
+        run: ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+      - name: Require executed backend integration test
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          files = list(Path('android/app/build/test-results/testDebugUnitTest').glob('TEST-*.xml'))
+          cases = [case for f in files for case in ET.parse(f).findall('.//testcase')]
+          actual = [c for c in cases if 'AssembledBackendTest' in c.attrib.get('classname', '')]
+          if not actual or any(c.find('skipped') is not None for c in actual):
+              raise SystemExit('Real backend Android test missing or skipped')
+          PY
+      - name: Upload development APK and reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: junction-glasses-debug
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/reports/tests/testDebugUnitTest/
+            android/app/build/reports/lint-results-debug.html
+      - name: Stop backend
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/android-api.pid"; then
+            kill "$(cat "$RUNNER_TEMP/android-api.pid")" || true
+          fi

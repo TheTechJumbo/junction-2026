@@ -13,3 +13,10 @@ __pycache__/
 
 build/
 dist/
+
+# Android machine configuration and generated files
+.gradle/
+local.properties
+*.jks
+*.keystore
+.idea/
