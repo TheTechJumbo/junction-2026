@@ -107,3 +107,7 @@ A separate 64 MiB allocation test was killed by its cgroup memory limit; a separ
 after both. systemd cgroup charge and process RSS can differ because the public
 checkpoint's mapped file pages may be shared with caches charged elsewhere.
 Both limits and RSS must be considered; fitting weights alone is insufficient.
+
+Three frames also completed: load 14.59 s, inference 400.14 s, peak RSS
+2,423,860 KiB (2.31 GiB). Finite camera/depth outputs and the local recon.npz
+adapter were validated. Full room-change quality remains unvalidated.
