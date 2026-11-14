@@ -151,7 +151,29 @@ def post_events(url, events):
         return response.status
 
 
+REPO = "TheTechJumbo/junction-2026"
+
+
 def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None):
+    history_file = evidence_dir / "history.json"
+    try:
+        history = json.loads(history_file.read_text())  # earlier checks, so the dashboard survives a restart
+    except (OSError, ValueError):
+        history = []
+    work = {"at": 0.0, "pull_requests": []}
+
+    def pull_requests():
+        """The repo's pull requests, for the dashboard's work panel. Asked from `gh` at most once a minute."""
+        if time.time() - work["at"] > 60:
+            work["at"] = time.time()
+            try:
+                out = subprocess.run(["gh", "pr", "list", "--repo", REPO, "--state", "all", "--limit", "15", "--json",
+                                      "number,title,state,headRefName,url,updatedAt"], capture_output=True, text=True, timeout=20)
+                work["pull_requests"] = json.loads(out.stdout) if out.returncode == 0 else []
+            except (OSError, ValueError, subprocess.SubprocessError):
+                work["pull_requests"] = []
+        return work["pull_requests"]
+
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, code, data, content_type):
             self.send_response(code)
@@ -175,14 +197,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             url = urlparse(self.path)
             if not self.allowed(parse_qs(url.query)):
                 return
-            if url.path == "/":
-                return self.send_bytes(200, (HERE / "phone.html").read_bytes(), "text/html; charset=utf-8")
+            pages = {"/": "phone.html", "/dashboard": "dashboard.html", "/viewer": "viewer.html"}
+            if url.path in pages:
+                return self.send_bytes(200, (HERE / pages[url.path]).read_bytes(), "text/html; charset=utf-8")
+            if url.path == "/history":
+                return self.send_json(200, {"ok": True, "checks": history[-40:][::-1]})
+            if url.path == "/work":
+                return self.send_json(200, {"ok": True, "repo": REPO, "pull_requests": pull_requests()})
             if url.path == "/status":
                 header, _ = link.call({"op": "status"})
                 return self.send_json(200 if header.get("ok") else 503, header)
-            match = re.fullmatch(r"/evidence/([\w-]+)/(\w+)\.jpg", url.path)
-            if match and (evidence_dir / match[1] / f"{match[2]}.jpg").exists():
-                return self.send_bytes(200, (evidence_dir / match[1] / f"{match[2]}.jpg").read_bytes(), "image/jpeg")
+            match = re.fullmatch(r"/evidence/([\w-]+)/(\w+)\.(jpg|splat)", url.path)
+            if match and (evidence_dir / match[1] / f"{match[2]}.{match[3]}").exists():
+                kind = "image/jpeg" if match[3] == "jpg" else "application/octet-stream"
+                return self.send_bytes(200, (evidence_dir / match[1] / f"{match[2]}.{match[3]}").read_bytes(), kind)
             self.send_json(404, {"ok": False, "error": "not found"})
 
         def do_POST(self):
@@ -203,27 +231,41 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 except ValueError:
                     return self.send_json(400, {"ok": False, "error": "Could not read that file as a video."})
                 seconds["pick_frames"] = round(time.time() - t0, 2)
-            header, blob = link.call({"op": op, "zone": zone}, clip)
+            device = "cpu" if query.get("device", [""])[0] == "cpu" else "gpu"
+            header, blob = link.call({"op": op, "zone": zone, "device": device}, clip)
             seconds["total"] = round(time.time() - t0, 2)
             if not header.get("ok"):
                 return self.send_json(502, {**header, "seconds": seconds})
             result = header["result"]
             if op == "baseline":
                 return self.send_json(200, {"ok": True, "zone": zone, "frames": result["frames"], "seconds": seconds})
-            images = {}
+            images, splat_url = {}, None
             if blob:
                 folder = evidence_dir / header["job"]
                 folder.mkdir(parents=True, exist_ok=True)
                 with zipfile.ZipFile(io.BytesIO(blob)) as bundle:
                     for name in bundle.namelist():
-                        if re.fullmatch(r"\w+\.jpg", name):
+                        if re.fullmatch(r"\w+\.(jpg|splat)", name):
                             (folder / name).write_bytes(bundle.read(name))
-                            images[name[:-4]] = f"/evidence/{header['job']}/{name}"
+                            if name.endswith(".jpg"):
+                                images[name[:-4]] = f"/evidence/{header['job']}/{name}"
+                            else:
+                                splat_url = f"/evidence/{header['job']}/{name}"
             headline, detail = in_plain_words(result)
             events = to_events(result, zone, images)
             body = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail,
-                    "verdict": result["verdict"], "events": events, "images": images,
-                    "seconds": {**seconds, **result.get("seconds", {})}, "report": result}
+                    "verdict": result["verdict"], "events": events, "images": images, "splat": splat_url,
+                    "device": result.get("device"), "on_gpu": result.get("on_gpu"), "host": result.get("host"),
+                    "settings": result.get("settings"), "gaussians": result.get("gaussians"),
+                    "median_depth": result.get("median_depth"),
+                    "seconds": {**seconds, **result.get("seconds", {})}}
+            history.append({**body, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+            del history[:-200]
+            try:
+                history_file.write_text(json.dumps(history))
+            except OSError:
+                pass
+            body["report"] = result
             if event_api and events:
                 try:
                     body["posted_to_event_api"] = post_events(event_api, events)
@@ -254,9 +296,10 @@ def main():
     addresses = ["127.0.0.1"]
     if args.host == "0.0.0.0":
         addresses += sorted({a for a in socket.gethostbyname_ex(socket.gethostname())[2] if not a.startswith("127.")})
-    print("relay running. Open one of:", flush=True)
+    print("relay running. Phone page, open one of:", flush=True)
     for address in addresses:
         print(f"  http://{address}:{args.port}/?k={args.token}", flush=True)
+    print(f"dashboard: http://127.0.0.1:{args.port}/dashboard?k={args.token}", flush=True)
     print(f"frame picking on this laptop: {'on' if rc else 'off (OpenCV not found)'}; evidence images in {evidence_dir}", flush=True)
     try:
         server.serve_forever()

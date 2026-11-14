@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon Dashboard</title>
+<style>
+  :root {
+    --bg: #05070a; --card: #0d131b; --line: #223040; --ink: #e8eef5; --dim: #93a1b2;
+    --blue: #4fc3ff; --green: #3cdc78; --red: #ff6b5b; --amber: #ffb84d; --violet: #b79cff;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0 8px 0 0; letter-spacing: .04em; }
+  h2 { font-size: 12px; margin: 0; color: var(--dim); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+  .pill.on { color: var(--green); border-color: var(--green); }
+  .pill.off { color: var(--red); border-color: var(--red); }
+  main { display: grid; grid-template-columns: 290px minmax(0, 1fr) 300px; gap: 14px; padding: 14px 16px; align-items: start; }
+  @media (max-width: 1100px) { main { grid-template-columns: 260px minmax(0, 1fr); } #work { grid-column: 1 / -1; } }
+  @media (max-width: 720px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  button, select, input[type=text] { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  button { cursor: pointer; border-color: var(--blue); background: #12202d; }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible, li:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  label { font-size: 12px; color: var(--dim); display: flex; flex-direction: column; gap: 3px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  #checks li { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+  #checks li[aria-current="true"] { border-color: var(--blue); background: #101c28; }
+  .meta { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; }
+  .chip.gpu { color: var(--green); } .chip.cpu { color: var(--violet); }
+  .headline { font-size: 22px; font-weight: 700; line-height: 1.2; }
+  .headline.change { color: var(--amber); }
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  figure { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+  figure img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); display: block; }
+  figcaption { font-size: 12px; color: var(--dim); }
+  iframe { width: 100%; height: 420px; border: 1px solid var(--line); border-radius: 8px; background: #000; }
+  .bars { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 5px 10px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .bar { height: 10px; border-radius: 3px; background: var(--blue); min-width: 2px; }
+  .bar.model { background: var(--amber); }
+  pre { margin: 0; font: 12px/1.5 ui-monospace, "Cascadia Mono", monospace; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; }
+  a { color: var(--blue); }
+  #prs li { border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  .state { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .state.OPEN { color: var(--green); } .state.MERGED { color: var(--violet); } .state.CLOSED { color: var(--red); }
+  .empty { color: var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1>BEACON <span style="font-weight:400;color:var(--dim)">vision dashboard</span></h1>
+  <span class="pill" id="gpu">GPU worker: checking…</span>
+  <span class="pill" id="cpu">CPU worker: checking…</span>
+  <span class="pill" id="places"></span>
+  <a id="phone" style="margin-left:auto">Phone page</a>
+</header>
+<main>
+  <div class="col">
+    <div class="card">
+      <h2>Run a check</h2>
+      <div class="row">
+        <label>Place <input type="text" id="zone" value="kitchen" size="10" autocomplete="off"></label>
+        <label>Run on <select id="device"><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
+      </div>
+      <label>Video <input type="file" id="file" accept="video/*,.zip"></label>
+      <div class="row">
+        <button id="runBaseline">Set as baseline</button>
+        <button id="runCheck">Check for changes</button>
+      </div>
+      <div class="meta" id="runNote" role="status"></div>
+    </div>
+    <div class="card">
+      <h2>Checks</h2>
+      <ul id="checks"><li class="empty" style="cursor:default">No checks yet. Run one here or from the phone page.</li></ul>
+    </div>
+  </div>
+
+  <div class="col" id="detail">
+    <div class="card"><div class="empty">Pick a check on the left to see what the vision stage found.</div></div>
+  </div>
+
+  <div class="col" id="work">
+    <div class="card">
+      <h2>Work: pull requests</h2>
+      <ul id="prs"><li class="empty">Loading…</li></ul>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const key = new URLSearchParams(location.search).get('k') || '';
+const withKey = (path) => path + (path.includes('?') ? '&' : '?') + 'k=' + encodeURIComponent(key);
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+const get = async (path) => (await fetch(withKey(path), { cache: 'no-store' })).json();
+const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+$('phone').href = withKey('/');
+
+let checks = [], selected = null, busy = false;
+
+async function refreshStatus() {
+  try {
+    const s = await get('/status');
+    for (const d of ['gpu', 'cpu']) {
+      const w = (s.workers || {})[d] || {};
+      const st = w.info ? w.info.settings : null;
+      $(d).textContent = `${d.toUpperCase()} worker: ` + (w.running
+        ? `${w.info ? w.info.device : 'running'}` + (st ? ` · ${st.baseline_frames}+${st.new_frames} frames at ${st.long_side}px` : '')
+        : s.ok ? 'offline' : 'Iridis unreachable');
+      $(d).className = 'pill ' + (w.running ? 'on' : 'off');
+    }
+    $('places').textContent = (s.zones || []).length ? `baselines: ${s.zones.join(', ')}` : 'no baselines yet';
+  } catch {
+    for (const d of ['gpu', 'cpu']) { $(d).textContent = `${d.toUpperCase()} worker: relay unreachable`; $(d).className = 'pill off'; }
+  }
+}
+
+function chip(c) { return el('span', { className: 'chip ' + (c.on_gpu ? 'gpu' : 'cpu'), textContent: c.on_gpu ? 'GPU' : 'CPU' }); }
+
+function renderList() {
+  if (!checks.length) return;
+  $('checks').replaceChildren(...checks.map((c) => {
+    const li = el('li', { tabIndex: 0 },
+      el('div', {}, el('strong', { textContent: c.headline }), ' ', chip(c)),
+      el('div', { className: 'meta', textContent: `${clock(c.ts)} · ${c.zone} · ${c.seconds.total.toFixed(1)} s` }));
+    li.setAttribute('aria-current', c.job === selected);
+    li.onclick = () => select(c.job);
+    li.onkeydown = (e) => { if (e.key === 'Enter') select(c.job); };
+    return li;
+  }));
+}
+
+const STEPS = [['pick_frames', 'Pick sharp frames (laptop)'], ['frames', 'Read frames'], ['reconstruct', 'Rebuild in 3D (the model)'],
+  ['detect', 'Find changes'], ['splat', 'Build Gaussian splat']];
+
+function select(job) {
+  selected = job;
+  renderList();
+  const c = checks.find((x) => x.job === job);
+  if (!c) return;
+  const s = c.seconds, known = STEPS.reduce((sum, [k]) => sum + (s[k] || 0), 0);
+  const rows = [...STEPS.map(([k, label]) => [label, s[k] || 0, k === 'reconstruct']), ['Network and waiting', Math.max(0, s.total - known), false]];
+  const bars = el('div', { className: 'bars' });
+  for (const [label, sec, model] of rows) {
+    bars.append(el('span', { textContent: label }),
+      el('div', {}, el('div', { className: 'bar' + (model ? ' model' : ''), style: `width:${Math.max(0.5, 100 * sec / s.total)}%` })),
+      el('span', { textContent: `${sec.toFixed(2)} s` }));
+  }
+  const st = c.settings || {};
+  const pair = el('div', { className: 'pair' });
+  if (c.images.before) pair.append(el('figure', {}, el('img', { src: withKey(c.images.before), alt: 'Baseline view' }), el('figcaption', { textContent: 'Baseline. Red marks what is gone.' })));
+  if (c.images.now) pair.append(el('figure', {}, el('img', { src: withKey(c.images.now), alt: 'Current view' }), el('figcaption', { textContent: 'Now. Green marks what appeared.' })));
+  const cards = [
+    el('div', { className: 'card' },
+      el('div', { className: 'headline' + (c.events.length ? ' change' : ''), textContent: c.headline }),
+      el('div', { className: 'meta', textContent: `${c.detail} · place "${c.zone}" · ${clock(c.ts)}` }),
+      pair,
+      c.images.changes ? el('a', { href: withKey(c.images.changes), target: '_blank', rel: 'noopener', textContent: 'See all views' }) : ''),
+  ];
+  if (c.splat) {
+    cards.push(el('div', { className: 'card' },
+      el('h2', { textContent: `3D view · ${(c.gaussians || 0).toLocaleString('en-US')} Gaussians, built on a CPU in ${(s.splat || 0).toFixed(2)} s` }),
+      el('iframe', { src: withKey(`/viewer?src=${encodeURIComponent(withKey(c.splat))}&d=${c.median_depth || 1}`), title: '3D view of the place', loading: 'lazy' })));
+  }
+  cards.push(el('div', { className: 'card' },
+    el('h2', { textContent: `Where the ${s.total.toFixed(1)} s went` }),
+    bars,
+    el('div', { className: 'meta', textContent: `Ran on ${c.device || 'unknown'}${c.host ? ` (${c.host})` : ''}` +
+      (st.long_side ? ` · ${st.baseline_frames} baseline + ${st.new_frames} new frames at ${st.long_side}px` : '') }),
+    el('details', {}, el('summary', { textContent: `Events sent (${c.events.length})` }), el('pre', { textContent: JSON.stringify(c.events, null, 2) }))));
+  $('detail').replaceChildren(...cards);
+}
+
+async function refreshHistory() {
+  try {
+    const h = await get('/history');
+    const newest = h.checks[0] ? h.checks[0].job : null;
+    const changed = h.checks.length !== checks.length || (newest && (!checks[0] || checks[0].job !== newest));
+    checks = h.checks;
+    if (changed) { renderList(); if (newest && (!selected || !busy)) select(newest); }
+  } catch { /* keep what is on screen */ }
+}
+
+async function refreshWork() {
+  try {
+    const w = await get('/work');
+    $('prs').replaceChildren(...(w.pull_requests.length ? w.pull_requests.map((p) => el('li', {},
+      el('div', {}, el('span', { className: 'state ' + p.state, textContent: p.state }), ' ',
+        el('a', { href: p.url, target: '_blank', rel: 'noopener', textContent: `#${p.number} ${p.title}` })),
+      el('div', { className: 'meta', textContent: `${p.headRefName} · updated ${clock(p.updatedAt)}` })))
+      : [el('li', { className: 'empty', textContent: 'No pull requests found (is gh signed in on this laptop?).' })]));
+  } catch { /* keep what is on screen */ }
+}
+
+async function run(op) {
+  const file = $('file').files[0];
+  if (!file) { $('runNote').textContent = 'Choose a video first.'; return; }
+  busy = true;
+  $('runBaseline').disabled = $('runCheck').disabled = true;
+  const t0 = performance.now();
+  const tick = setInterval(() => { $('runNote').textContent = `Working… ${Math.round((performance.now() - t0) / 1000)} s`; }, 500);
+  let r;
+  try {
+    const zone = $('zone').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-') || 'room';
+    r = await (await fetch(withKey(`/${op}?zone=${encodeURIComponent(zone)}&device=${$('device').value}`), { method: 'POST', body: file })).json();
+  } catch { r = { ok: false, error: 'Could not reach the relay.' }; }
+  clearInterval(tick);
+  busy = false;
+  $('runBaseline').disabled = $('runCheck').disabled = false;
+  $('runNote').textContent = !r.ok ? `Did not work: ${r.error}` : op === 'baseline' ? `Baseline saved: ${r.frames} frames.` : `Done in ${r.seconds.total.toFixed(1)} s.`;
+  await refreshHistory();
+  if (r.ok && r.job) select(r.job);
+  refreshStatus();
+}
+$('runBaseline').onclick = () => run('baseline');
+$('runCheck').onclick = () => run('check');
+
+refreshStatus(); refreshHistory(); refreshWork();
+setInterval(refreshStatus, 8000);
+setInterval(refreshHistory, 5000);
+setInterval(refreshWork, 60000);
+</script>
+</body>
+</html>

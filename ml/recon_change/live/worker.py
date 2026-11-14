@@ -15,7 +15,9 @@ already picked, which is far smaller to send than a phone video.
 Stop it cleanly with `touch STOP` in the folder above this one, or `scancel`.
 """
 import json
+import os
 import re
+import socket
 import sys
 import time
 import traceback
@@ -28,9 +30,15 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import recon_change as rc  # noqa: E402
+import splat  # noqa: E402
 
-QUEUE, BASELINES = ROOT / "queue", ROOT / "baselines"
-N_BASELINE, N_AFTER = 24, 12
+# Settings come from the environment, so this one script is both the GPU worker and the CPU worker.
+DEVICE = os.environ.get("RECON_DEVICE") or None  # "cuda", "cpu", or unset to use a GPU when there is one
+N_BASELINE, N_AFTER = (int(n) for n in os.environ.get("RECON_FRAMES", "24,12").split(","))
+LONG_SIDE = int(os.environ.get("RECON_LONG_SIDE", "518"))  # model input size: smaller is faster and coarser
+LANE = "-cpu" if DEVICE == "cpu" else ""  # the CPU worker has its own queue and heartbeat
+QUEUE, BASELINES = ROOT / f"queue{LANE}", ROOT / "baselines"
+INFO = {}  # what this worker is, filled in at start and attached to every result
 
 
 def clip_frames(job, req, n):
@@ -94,13 +102,14 @@ def check(model, job, req):
         raise RuntimeError(f"No baseline for '{req['zone']}' yet. Record the baseline clip first.")
     seconds = {}
     t0 = time.time()
+    files = [files[i] for i in sorted(set(np.linspace(0, len(files) - 1, min(N_BASELINE, len(files))).round().astype(int)))]
     base = [cv2.imread(str(f)) for f in files]
     after = clip_frames(job, req, N_AFTER)
     if len(after) < 3:
         raise RuntimeError(f"The clip gave only {len(after)} frames. Record a longer one.")
     seconds["frames"] = round(time.time() - t0, 2)
     t0 = time.time()
-    recon = rc.reconstruct(model, base + after)
+    recon = rc.reconstruct(model, base + after, long_side=LONG_SIDE)
     seconds["reconstruct"] = round(time.time() - t0, 2)
     t0 = time.time()
     report, detail = rc.analyse(recon, len(base))
@@ -111,16 +120,31 @@ def check(model, job, req):
     cv2.imwrite(str(out / "before.jpg"), before, [cv2.IMWRITE_JPEG_QUALITY, 90])
     cv2.imwrite(str(out / "now.jpg"), now, [cv2.IMWRITE_JPEG_QUALITY, 90])
     seconds["detect"] = round(time.time() - t0, 2)
+    t0 = time.time()
+    report["gaussians"] = splat.write_splat(recon, detail, out / "scene.splat")  # 3D view, built on the CPU
+    seconds["splat"] = round(time.time() - t0, 2)
     report["seconds"] = seconds
+    report["median_depth"] = round(float(np.median(recon.depth)), 4)
+    report.update(INFO)
     return report
 
 
 def main():
     QUEUE.mkdir(exist_ok=True)
     BASELINES.mkdir(exist_ok=True)
-    stop, alive = ROOT / "STOP", ROOT / "worker.alive"
+    stop, alive = ROOT / f"STOP{LANE}", ROOT / f"worker{LANE}.alive"
     stop.unlink(missing_ok=True)
-    model = rc.load_model()
+    import torch
+    if DEVICE == "cpu":
+        torch.set_num_threads(int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)))
+    model = rc.load_model(device=DEVICE)
+    on_gpu = next(model.parameters()).is_cuda
+    INFO.update({
+        "device": torch.cuda.get_device_name(0) if on_gpu else f"CPU, {torch.get_num_threads()} threads",
+        "on_gpu": on_gpu, "host": socket.gethostname().split(".")[0],
+        "settings": {"baseline_frames": N_BASELINE, "new_frames": N_AFTER, "long_side": LONG_SIDE},
+    })
+    (ROOT / f"worker{LANE}.json").write_text(json.dumps(INFO))
     print("worker ready", flush=True)
     while not stop.exists():
         alive.touch()  # heartbeat: the gateway reads this file's age, and reports "offline" when it goes stale

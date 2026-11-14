@@ -94,38 +94,47 @@ def fit_size(h, w, long_side=518, patch=14):
 
 
 # ----------------------------------------------------------------------------- model
-def load_model(model_id="facebook/VGGT-1B"):
-    """Load VGGT onto the GPU. Takes 13 to 17 s on Iridis, so a live service does this once."""
+def load_model(model_id="facebook/VGGT-1B", device=None):
+    """Load VGGT. On a GPU this takes 13 to 17 s on Iridis, so a live service does it once.
+    device: "cuda", "cpu", or None to use a GPU when there is one."""
     import torch
     from vggt.models.vggt import VGGT
 
-    if not torch.cuda.is_available():
-        raise SystemExit("No CUDA GPU visible. Run this through the Slurm job.")
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     t0 = time.time()
-    model = VGGT.from_pretrained(model_id).cuda().eval()
-    print(f"VGGT loaded in {time.time() - t0:.0f} s on {torch.cuda.get_device_name(0)}", flush=True)
+    model = VGGT.from_pretrained(model_id).to(device).eval()
+    name = torch.cuda.get_device_name(0) if device == "cuda" else f"CPU, {torch.get_num_threads()} threads"
+    print(f"VGGT loaded in {time.time() - t0:.0f} s on {name}", flush=True)
     return model
 
 
-def reconstruct(model, frames_bgr):
-    """Run VGGT on all frames at once: depth, confidence and a camera for every frame."""
+def reconstruct(model, frames_bgr, long_side=518):
+    """Run VGGT on all frames at once: depth, confidence and a camera for every frame.
+    Runs on whatever device the model is on. A smaller long_side is faster and coarser."""
     import torch
     from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 
-    H, W = fit_size(*frames_bgr[0].shape[:2])
+    device = next(model.parameters()).device
+    on_gpu = device.type == "cuda"
+    H, W = fit_size(*frames_bgr[0].shape[:2], long_side=long_side)
     rgb = np.stack([
         cv2.cvtColor(cv2.resize(f, (W, H), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB) for f in frames_bgr
     ])
-    images = torch.from_numpy(rgb).permute(0, 3, 1, 2).float().div(255).cuda()  # (S, 3, H, W) in [0, 1]
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
-    torch.cuda.reset_peak_memory_stats()
+    images = torch.from_numpy(rgb).permute(0, 3, 1, 2).float().div(255).to(device)  # (S, 3, H, W) in [0, 1]
     t0 = time.time()
-    with torch.no_grad(), torch.autocast("cuda", dtype=dtype):
-        pred = model(images)
-    E, K = pose_encoding_to_extri_intri(pred["pose_enc"], images.shape[-2:])
-    torch.cuda.synchronize()
-    print(f"VGGT: {len(rgb)} frames at {W}x{H} | inference {time.time() - t0:.1f} s, "
-          f"peak GPU memory {torch.cuda.max_memory_allocated() / 1e9:.1f} GB", flush=True)
+    with torch.inference_mode():
+        if on_gpu:
+            torch.cuda.reset_peak_memory_stats()
+            dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+            with torch.autocast("cuda", dtype=dtype):
+                pred = model(images)
+        else:
+            pred = model(images)  # plain float32 on a CPU
+        E, K = pose_encoding_to_extri_intri(pred["pose_enc"], images.shape[-2:])
+    if on_gpu:
+        torch.cuda.synchronize()
+    memory = f", peak GPU memory {torch.cuda.max_memory_allocated() / 1e9:.1f} GB" if on_gpu else ""
+    print(f"VGGT: {len(rgb)} frames at {W}x{H} | inference {time.time() - t0:.1f} s{memory}", flush=True)
 
     def f32(t):
         return t.float().cpu().numpy()
