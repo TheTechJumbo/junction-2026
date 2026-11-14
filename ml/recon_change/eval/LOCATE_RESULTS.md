@@ -278,3 +278,9 @@ Share of queries with a match at or above each value. Same room should be high, 
 | 24 | 0.49 | 0.89 | 1.00 | 0.00 | 0.04 | 0.23 |
 | 12 | 0.48 | 0.87 | 1.00 | 0.00 | 0.06 | 0.97 |
 | 8 | 0.30 | 0.86 | 1.00 | 0.00 | 0.07 | 0.39 |
+
+## Note from the orchestrator, after this report
+
+`locate.py` now uses unsure = 0.3 (found stays 0.5). With 24 baseline photos no wrong-room query here
+scored above 0.23 and no same-room query below 0.49, so every wrong-room answer in this run becomes
+"lost" and no same-room answer changes. The tables above were measured with unsure = 0.2.

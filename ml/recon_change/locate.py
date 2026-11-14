@@ -21,7 +21,10 @@ import numpy as np
 
 import recon_change as rc
 
-FOUND, UNSURE = 0.5, 0.2  # match with the map: at least FOUND is a fix, below UNSURE the wearer is lost
+# Match with the map: at least FOUND is a fix, below UNSURE the wearer is lost. On the PASLCD benchmark
+# (eval/LOCATE_RESULTS.md, 24 baseline photos) a wrong room never scored above 0.23 and the right room
+# never below 0.49, so 0.3 turns every wrong-room answer seen there into "lost" at no cost.
+FOUND, UNSURE = 0.5, 0.3
 
 
 def camera(E):
