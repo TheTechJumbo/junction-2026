@@ -123,10 +123,13 @@ def views(r, valid, near, feat, q, others, tol, sample, rng, limit=None, reach=N
     return agree, alike, float(valid[q].mean())
 
 
-def locate(r, base, new, places=(), typical_m=2.0, conf_pct=25.0, tol=0.06, sample=6000, seed=0, look=True):
+def locate(r, base, new, places=(), typical_m=2.0, conf_pct=25.0, tol=0.06, sample=6000, seed=0, look=True, need=2):
     """r holds baseline frames (indices `base`) and the wearer's frames (indices `new`, oldest
     first). places: [{"name", "frame" (index into r), "u", "v"}].
     look=False scores on depth alone (the behaviour before the appearance check).
+    need: how many baseline frames must match a pixel of the wearer's view for it to count, 2 or 1.
+    2 is what runs. 1 was only measured (eval/LOCATE_WALK_RESULTS.md): it finds more same-room
+    views when the baseline frames barely overlap, and lets a few poor fixes through.
     Returns (result, marks, valid): a JSON-ready dict, coloured balls for the 3D view as
     (world position, radius, RGB colour), and the trusted-pixel mask."""
     valid = rc.valid_mask(r, conf_pct)
@@ -142,8 +145,8 @@ def locate(r, base, new, places=(), typical_m=2.0, conf_pct=25.0, tol=0.06, samp
     feat = unit_features(r) if look else None
 
     def share(count, seen):
-        """Share of a frame's view that at least two of the other frames matched."""
-        return float((count >= 2).mean()) * min(1.0, seen / max(trusted, 1e-6)) if len(count) else 0.0
+        """Share of a frame's view that at least `need` (two) of the other frames matched."""
+        return float((count >= need).mean()) * min(1.0, seen / max(trusted, 1e-6)) if len(count) else 0.0
 
     # How well does a baseline frame match the rest of the baseline? That is what a good fix looks like.
     probes = [base[i] for i in np.linspace(0, len(base) - 1, min(4, len(base))).round().astype(int)]
@@ -158,7 +161,7 @@ def locate(r, base, new, places=(), typical_m=2.0, conf_pct=25.0, tol=0.06, samp
     matches = by_depth if feat is None else score(1)
     sure = matches[-1]
     agree, alike, _ = now[-1]  # of the newest frame's pixels that match by depth, the share that also look alike
-    looks_alike = None if feat is None else float((alike[agree >= 2] >= 2).mean()) if (agree >= 2).any() else 0.0
+    looks_alike = None if feat is None else float((alike[agree >= need] >= need).mean()) if (agree >= need).any() else 0.0
 
     position, forward = camera(r.E[new[-1]])
     here = on_map(position)[0]

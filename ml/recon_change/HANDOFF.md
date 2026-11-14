@@ -185,3 +185,48 @@ about 11:28 UTC.
 
 Not done: the item finder is not deployed, no ElevenLabs voice is set up (the browser's voice
 speaks), no real sensor has sent an event, and nothing has run on the glasses or in a real room.
+
+## Update, Sat 14 Nov about 10:55 UTC: the state to integrate against
+
+Branch `jun-22-hud-waypoints` holds the whole vision stage in a working state and is what runs
+live. It is 39 commits ahead of `main`, touches only `ml/recon_change/`, and merges into `main`
+without conflicts. One pull request to `main` carries it; the earlier stacked pull requests
+(2, 3, 4, 5, 8, 10) are all contained in it.
+
+What it does now, all tested live through the relay on the cluster GPU at 10:53 UTC:
+
+| Step | Result | Time |
+| --- | --- | --- |
+| Change check, unchanged clip | "No change found" | 15.3 s |
+| Change check, clip with a cube painted in | "1 thing appeared" | 15.0 s |
+| Position fix, photo from the room | found, 1.0 | 3.9 s (of which the item finder 0.8 s) |
+| Position fix, photo of another place | lost, 0.0 | 3.8 s |
+| "Did I take my pills?" (local copy of Bartek's API) | his answer, shown and spoken | under 0.1 s |
+| "Where is the pill box?" | "about 1.9 metres ahead" | 0.4 s |
+| A phone painted into a photo, then "Where is my phone?" | "last seen at 12:48 near the pill box, about 1.3 metres ahead" | answer at once |
+| Two later looks at that spot without the phone | "... but I did not see it there at 12:49", arrow withdrawn | |
+
+Offline tests, all passing: `test_synthetic.py`, `eval/test_items.py`,
+`eval/test_locate_lookalike.py`, `eval/test_masks.py`, `live/test_care_flow.py`.
+
+How to run it:
+
+    # cluster, in /scratch/$USER/junction-recon (the item finder's packages and weights are in items/)
+    RECON_ITEMS_ENV=items sbatch iridis/worker.slurm        # GPU lane
+    RECON_ITEMS_ENV=items sbatch iridis/worker_cpu.slurm    # CPU lane
+    # laptop, in ml/recon_change (EVENT_API_* are optional: without them only pills answers are missing)
+    EVENT_API_URL=http://127.0.0.1:8000/events EVENT_API_TOKEN=<token> python live/relay.py --host 0.0.0.0
+
+The item finder (OWLv2, `eval/ITEMS_RESULTS.md`) is deployed but weak: at its limit of 0.5 it
+finds 97 of 303 labelled items (keys 7 of 56) with 1 wrong answer in 78 and no false answer on
+324 item-free photos. It is precise and misses most keys. An agent is working on that on branch
+`jun-26-items-recall`.
+
+A real, complex room is loaded as zone `lounge` (a PASLCD scene with labelled changes). The
+change check there finds the moved bin and a removed disc and misses thin and flat changes.
+
+Running now: GPU job 2220544 and CPU job 2220545 until about 12:47 UTC, with replacements queued
+behind them. Agents in flight: item finder recall, the walking test of the position fix
+(`jun-25-locate-walk`, draft PR 18), and watched spots for small changes (`jun-22-watch-spots`).
+
+Still not done: a real room of ours, real items, the glasses, a real sensor event, a voice.
