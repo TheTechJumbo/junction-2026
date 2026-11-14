@@ -10,7 +10,9 @@ to RUNNING, does the work, writes result.json, and renames the marker to DONE or
             and report what appeared and what is gone
   locate    reconstruct the zone's baseline frames together with up to 3 frames of what the
             wearer sees now, and report where they stand, which way they face, and the
-            distance and direction to each named place (see locate.py). With RECON_ITEMS not
+            distance and direction to each named place (see locate.py). Metres come from one
+            known distance between two places when the zone has a scale.json, else from an
+            assumed viewing distance (RECON_TYPICAL_M). With RECON_ITEMS not
             empty it also reports small things seen in the newest frame ("keys", "glasses",
             ...) and where they are on the same map (see items.py)
 
@@ -48,6 +50,16 @@ N_LOCATE = int(os.environ.get("RECON_LOCATE_FRAMES", "3"))  # frames of the wear
 # Baseline photos used for a position fix. With the appearance check, 12 reject every wrong room on
 # the PASLCD benchmark and halve the time of 24 (eval/LOCATE_LOOKALIKE_RESULTS.md).
 N_LOCATE_BASE = int(os.environ.get("RECON_LOCATE_BASELINE", min(N_BASELINE, 12)))
+# Metres of a position fix. A zone with baselines/<zone>/scale.json, {"a": "pill box", "b": "front door",
+# "metres": 2.4}, is scaled so that this one distance between two of its named places comes out right
+# (within 15% for every fix of the walking test, eval/LOCATE_WALK_RESULTS.md). Without the file the
+# baseline's median viewing distance is assumed to be this many metres. The default, 1.5, is fitted to
+# three desk-like rooms seen from 1 to 2.5 m; it was 2.0 before, which showed 24% to 54% too much there.
+TYPICAL_M = float(os.environ.get("RECON_TYPICAL_M", locate.TYPICAL_M))
+# A fix that is not found is tried once more with this many baseline photos (0 = never, the default).
+# With 24: found 80% -> 90% in the walking test, and every fix that is not found at first, also every
+# look into another room, takes about 5 s longer.
+N_LOCATE_RETRY = int(os.environ.get("RECON_LOCATE_RETRY", "0"))
 LANE = "-cpu" if DEVICE == "cpu" else ""  # the CPU worker has its own queue and heartbeat
 QUEUE, BASELINES = ROOT / f"queue{LANE}", ROOT / "baselines"
 ITEMS = items.wanted()  # RECON_ITEMS: small things to look for in every position fix; empty = off
@@ -221,30 +233,55 @@ def where(model, job, req):
         places = [p for p in json.loads((zone / "waypoints.json").read_text()) if p["frame"] < len(files)]
     except (OSError, ValueError):
         places = []
+    try:  # one known distance between two named places, written by the carer's page
+        known = json.loads((zone / "scale.json").read_text())
+    except (OSError, ValueError):
+        known = None
     seconds = {}
     t0 = time.time()
     spots = watched_spots(req["zone"], len(files))
-    spread = np.linspace(0, len(files) - 1, min(N_LOCATE_BASE, len(files))).round().astype(int)
-    # a place or a watched spot needs the picture it was picked in
-    pick = sorted({int(i) for i in spread} | {p["frame"] for p in places} | {s["frame"] for s in spots})
-    base = [cv2.imread(str(files[i])) for i in pick]
     seen = clip_frames(job, req, N_LOCATE)
-    new = [crop_like(f, base[0]) for f in seen]
-    if not new:
+    if not seen:
         raise RuntimeError("No picture of what the wearer sees.")
-    seconds["frames"] = round(time.time() - t0, 2)
+    read = time.time() - t0
+
+    def fix(n):
+        """One pass with n baseline photos: the photos, the wearer's frames, the reconstruction and locate's answer."""
+        t0 = time.time()
+        spread = np.linspace(0, len(files) - 1, min(n, len(files))).round().astype(int)
+        # a place or a watched spot needs the picture it was picked in
+        pick = sorted({int(i) for i in spread} | {p["frame"] for p in places} | {s["frame"] for s in spots})
+        base = [cv2.imread(str(files[i])) for i in pick]
+        new = [crop_like(f, base[0]) for f in seen]
+        took = {"frames": round(time.time() - t0, 2)}
+        t0 = time.time()
+        recon = rc.reconstruct(model, base + new, long_side=LONG_SIDE)
+        took["reconstruct"] = round(time.time() - t0, 2)
+        t0 = time.time()
+        slot = {f: i for i, f in enumerate(pick)}
+        result, marks, valid = locate.locate(
+            recon, list(range(len(base))), list(range(len(base), len(base) + len(new))),
+            [{**p, "frame": slot[p["frame"]]} for p in places], typical_m=TYPICAL_M, known=known)
+        took["locate"] = round(time.time() - t0, 2)
+        return base, new, recon, result, marks, valid, took, pick
+
+    base, new, recon, result, marks, valid, took, pick = fix(N_LOCATE_BASE)
+    seconds.update(took)
+    seconds["frames"] = round(seconds["frames"] + read, 2)
+    if result["state"] != "found" and min(N_LOCATE_RETRY, len(files)) > len(base):  # once more, with more of the baseline
+        t0 = time.time()
+        again = fix(N_LOCATE_RETRY)
+        better = ["lost", "unsure", "found"].index(again[3]["state"]) > ["lost", "unsure", "found"].index(result["state"])
+        retried = {"baseline": len(again[0]), "first_state": result["state"], "kept": better}
+        if better:
+            base, new, recon, result, marks, valid, _, pick = again
+        result["retried"] = retried
+        seconds["retry"] = round(time.time() - t0, 2)
     t0 = time.time()
-    recon = rc.reconstruct(model, base + new, long_side=LONG_SIDE)
-    seconds["reconstruct"] = round(time.time() - t0, 2)
-    t0 = time.time()
-    slot = {f: i for i, f in enumerate(pick)}
-    result, marks, valid = locate.locate(
-        recon, list(range(len(base))), list(range(len(base), len(base) + len(new))),
-        [{**p, "frame": slot[p["frame"]]} for p in places])
     out = job / "out"
     out.mkdir(exist_ok=True)
     cv2.imwrite(str(out / "view.jpg"), new[-1], [cv2.IMWRITE_JPEG_QUALITY, 88])
-    seconds["locate"] = round(time.time() - t0, 2)
+    seconds["locate"] = round(seconds["locate"] + time.time() - t0, 2)
     result.update({"items": [], "items_looked_for": ITEMS, "items_checked": [], "items_candidates": []})
     if ITEMS:  # lost items: found in the newest picture, placed with this fix's depth (items.py)
         t0 = time.time()
@@ -293,7 +330,7 @@ def main():
         "device": torch.cuda.get_device_name(0) if on_gpu else f"CPU, {torch.get_num_threads()} threads",
         "on_gpu": on_gpu, "host": socket.gethostname().split(".")[0],
         "settings": {"baseline_frames": N_BASELINE, "new_frames": N_AFTER, "long_side": LONG_SIDE,
-                     "locate_baseline_frames": N_LOCATE_BASE},
+                     "locate_baseline_frames": N_LOCATE_BASE, "typical_m": TYPICAL_M, "locate_retry_frames": N_LOCATE_RETRY},
     })
     if ITEMS:
         try:
