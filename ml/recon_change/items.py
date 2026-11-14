@@ -28,6 +28,7 @@ import cv2
 import numpy as np
 
 import locate
+import people
 
 MODEL_ID = os.environ.get("RECON_ITEMS_MODEL", "google/owlv2-base-patch16-ensemble")
 # Where the detector's weights are, if not in the Hugging Face cache that HF_HOME names (the
@@ -331,6 +332,9 @@ class Detector:
         self.limits, self.look_from, self.look_limits = dict(LIMITS), LOOK_FROM, dict(LOOK_LIMITS)
         self.enrolled, self.enrolled_files, self.enrolled_score = {}, None, ENROLLED_SCORE  # item -> its picture questions
         self.judge, self.judge_limits = None, dict(JUDGE_LIMITS)
+        # people.py: more phrases to ask in every candidates() pass, what that pass said about them, and the
+        # last pass's score for every patch of the whole picture (phrases, scores (patches, phrases))
+        self.also, self.seen, self.grid = [], {}, None
         self.model_id = model_id
         t0 = time.time()
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=CACHE)
@@ -415,6 +419,7 @@ class Detector:
             scores.append(score.cpu().numpy())
             boxes.append(where.float().cpu().numpy())
         scores, boxes = np.concatenate(scores), np.concatenate(boxes)  # (pieces, patches, phrases), (pieces, patches, 4)
+        self.grid = (list(phrases), scores[0])  # the whole picture's patches: a coarse outline of whatever was asked for
 
         raw = {}
         for k, phrase in enumerate(phrases):
@@ -537,7 +542,8 @@ class Detector:
         down to `floor`, for the look-again check and the candidates list; they are never sightings."""
         phrases = sorted({p for name in names for p in phrases_for(name)})
         shown = [q for name in names for q in self.enrolled.get(name, [])]
-        raw = self.detect(image_bgr, phrases + shown, tiles)
+        raw = self.detect(image_bgr, phrases + shown + [p for p in self.also if p not in phrases], tiles)
+        self.seen = {"raw": {p: raw[p] for p in self.also if p in raw}, "grid": self.grid}  # for people.seen()
         first = dict(self.last)
         H, W = image_bgr.shape[:2]
         looking = self.look_from > 0
@@ -692,6 +698,8 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0, room=None):
         item = {"name": d["name"], "score": round(float(d["score"]), 2), "box": [round(float(v), 4) for v in d["box"]],
                 "position": None, "distance_m": None, "bearing_deg": None, "matched": d.get("matched", "text"),
                 "confidence_pct": d["confidence_pct"] if "confidence_pct" in d else confidence_pct(d)}
+        if d.get("on_person"):
+            item["on_person"] = True
         items.append(item)
         if state == "lost":
             item["note"] = "No position fix, so it is not on the map."
@@ -845,7 +853,13 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
         picture, saw = newest, "newest frame"
     lowest = min([detector.score, CONFIRM] + ([CANDIDATES] if CANDIDATES > 0 else []))
     every = detector.candidates(picture, names, floor=lowest)  # down to the look-again and candidates limits
-    found = best_per_name([d for d in every if d["accepted"]])  # sightings: accepted boxes only
+    crowd = people.seen(detector, picture.shape)  # None unless the detector was asked for people (people.attach)
+    if crowd is not None:
+        fields["people"], fields["people_in_view"] = crowd["people"], bool(crowd["people"])
+        for d in every:  # glasses on a face, a phone in a hand: on a person, so not a thing lying somewhere
+            if people.on_person(d["box"], crowd["people"]):
+                d["on_person"] = True
+    found = best_per_name([d for d in every if d["accepted"] and not d.get("on_person")])  # sightings: accepted boxes only
     room = locate.map_frame(r, base, valid)
     window = crop_window(newest.shape, like.shape)
     items, marks = place(found, r, base, q, valid, window, state, room=room)
@@ -856,7 +870,8 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
         try:
             listed, _ = place([d for d in every if d["accepted"] or d.get("only_enrolled") or d["score"] >= CANDIDATES],
                               r, base, q, valid, window, state, room=room)
-            fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "confidence_pct", "position", "box", "matched", "distance_m", "bearing_deg")}
+            fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "confidence_pct", "position", "box", "matched", "distance_m",
+                                                             "bearing_deg", "on_person") if k in c}
                                           for c in listed if c["position"] is not None]
         except Exception as error:
             fields["items_note"] = (fields.get("items_note", "") + f" Candidates were not listed: {type(error).__name__}: {error}").strip()[:300]

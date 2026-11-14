@@ -183,6 +183,7 @@ def main():
         def __init__(self, zoomed):
             self.score, self.limits, self.look_from, self.look_limits, self.last, self.zoomed, self.asked = 0.5, {}, 0.0, {}, {}, zoomed, []
             self.enrolled, self.enrolled_score, self.words, self.judge, self.judge_limits = {}, 0.6, {}, None, {}
+            self.also, self.seen, self.grid = [], {}, None
 
         def detect(self, image_bgr, phrases, tiles=None, floor=items.FLOOR, batch=4):
             self.last = {"passes": 1, "seconds": 0.1, "size": [image_bgr.shape[1], image_bgr.shape[0]]}
