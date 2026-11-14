@@ -17,7 +17,7 @@ check: lint test
 
 .PHONY: run dashboard-check test-http rehearse
 run:
-	$(VENV)/uvicorn backend.run:create_application --factory --host 127.0.0.1 --port 8000
+	$(VENV)/python scripts/run_local.py
 dashboard-check:
 	npm --prefix dashboard run check
 test-http:

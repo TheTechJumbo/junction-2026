@@ -1,3 +1,6 @@
+Current team integration and CI instructions: [TEAM_INTEGRATION.md](TEAM_INTEGRATION.md).
+The counts and local-only publication state below record the initial handoff.
+
 # Bartek implementation handoff — 14 November 2026
 
 The event API/storage, rules answer engine, dashboard and speech endpoint are implemented
@@ -14,7 +17,8 @@ requests did not expose runnable thread IDs; those pending worktrees were not us
 ## Run locally
 
 From this worktree, run `make setup` once. Python 3.12 and Node 24 were used for verification.
-The app reads exported environment variables; it does not automatically read `.env`.
+The app reads exported environment variables. `make run` now also loads private
+`.env.local` without shell execution; exported variables take precedence.
 
 ```sh
 export API_TOKEN=synthetic-local-demo-token

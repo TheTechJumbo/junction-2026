@@ -1,7 +1,8 @@
 # Current implementation entry point
 
 JUN-19 supersedes the historical product plan below. For Bartek’s implemented local application,
-start with [docs/HANDOFF.md](docs/HANDOFF.md) for run commands and verification,
+start with [docs/TEAM_INTEGRATION.md](docs/TEAM_INTEGRATION.md) for team wiring and CI,
+[docs/HANDOFF.md](docs/HANDOFF.md) for the initial verification record,
 [contracts/API.md](contracts/API.md) for interfaces and [docs/DECISIONS.md](docs/DECISIONS.md)
 for unresolved team decisions. The historical plan below is retained for reference;
 profiles and confirmed ingestion/locking claims are not implemented.
