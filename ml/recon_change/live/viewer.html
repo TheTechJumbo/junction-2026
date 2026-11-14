@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon 3D View</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070a; color: #e8eef5; overflow: hidden;
+    font: 13px/1.4 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #note { position: fixed; left: 10px; bottom: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
+  #key { position: fixed; right: 10px; top: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
+  #key b.g { color: #3cdc78; } #key b.r { color: #ff6b5b; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="note">Loading…</div>
+<div id="key"><b class="g">green</b> appeared · <b class="r">red</b> gone · <b style="color:#4aa3ff">blue</b> wearer · drag to orbit</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "@sparkjsdev/spark": "https://cdn.jsdelivr.net/npm/@sparkjsdev/spark@2.4.0/dist/spark.module.js"
+} }
+</script>
+<script type="module">
+// Shows one `.splat` file: ?src=<url of the file>&d=<typical distance to the scene, in scene units>
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+
+const q = new URLSearchParams(location.search);
+const depth = Number(q.get('d')) || 1;
+const note = document.getElementById('note');
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070a);
+scene.add(new SparkRenderer({ renderer }));
+const camera = new THREE.PerspectiveCamera(60, 1, depth * 0.01, depth * 100);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+// The reconstruction's first camera sits at the origin looking along +z with y down. Turning the
+// scene half a turn about x puts that in three.js terms: looking along -z with y up.
+camera.position.set(0, depth * 0.25, depth * 0.35);
+controls.target.set(0, 0, -depth);
+controls.update();
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+try {
+  const bytes = new Uint8Array(await (await fetch(q.get('src'), { cache: 'no-store' })).arrayBuffer());
+  const mesh = new SplatMesh({ fileBytes: bytes, fileName: 'scene.splat' });
+  mesh.quaternion.set(1, 0, 0, 0);
+  scene.add(mesh);
+  await mesh.initialized;
+  note.textContent = `${(bytes.length / 32).toLocaleString('en-US')} Gaussians, built on a CPU with no training`;
+  window.__viewer = { mesh, camera, controls, count: bytes.length / 32 };
+} catch (err) {
+  note.textContent = `Could not load the 3D view: ${err.message || err}`;
+}
+</script>
+</body>
+</html>
