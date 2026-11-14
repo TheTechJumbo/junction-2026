@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'">
+<title>Daylight · Family view</title><link rel="stylesheet" href="styles.css"><script type="module" src="app.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to daily overview</a>
+<header class="topbar"><a class="brand" href="./"><span class="brand-icon" aria-hidden="true">◒</span> daylight<span class="brand-caption">FAMILY VIEW</span></a><div class="connection"><span id="connection-label">Not connected</span><button id="connection-button" class="quiet">Connect</button></div></header>
+<main id="main">
+<div class="page-heading"><div><p class="eyebrow">A little reassurance, every day</p><h1>A day at home.</h1><p class="intro">The moments that matter, all in one place.</p></div><div class="day-control"><label for="day">Viewing day</label><input id="day" type="date" required><small>Europe/Helsinki</small></div></div>
+<div class="toolbar"><span id="mode-label">Private family overview</span><div><button id="refresh" class="quiet">↻ Refresh</button><button id="demo" class="quiet">Explore synthetic demo</button></div></div>
+<div id="status" class="status" role="status" aria-live="polite"></div>
+<section id="content" aria-label="Daily overview" hidden>
+<div class="grid"><section class="card summary"><p class="eyebrow">THE DAILY PICTURE</p><h2>The day, at a glance</h2><p id="summary-text"></p><p class="footnote">Openings are observations. They do not confirm medication was taken or a door was locked.</p></section><section class="card alerts"><div class="section-heading"><h2>Things to notice</h2><span class="badge" id="alert-count"></span></div><p class="muted">Alerts from sensor observations</p><div id="alerts"></div></section></div>
+<div class="grid lower"><section class="card timeline"><div class="section-heading"><h2>The day's timeline</h2><span class="muted" id="event-count"></span></div><p class="muted">Times shown in Helsinki · earliest first</p><ol id="events"></ol></section><div class="side"><section class="card"><p class="eyebrow">A MOMENT OF REASSURANCE</p><h2>Repeated questions</h2><p class="muted">Questions recorded during this day</p><div id="questions"></div></section><section class="card"><div class="section-heading"><h2>Home connection</h2><span class="small-icon" aria-hidden="true">⌁</span></div><p class="muted">Device status reported by the home service</p><div id="sensors"></div></section><aside class="care-note"><span aria-hidden="true">◌</span><p>Small moments, gently remembered.<br><span>Your family's view of the day.</span></p></aside></div></div>
+</section>
+<footer><span>daylight</span><p>Designed for a little more peace of mind.</p><p id="updated">Connect to view recorded observations.</p></footer>
+</main>
+<dialog id="connect-dialog" aria-labelledby="connect-title"><form id="connect-form"><h2 id="connect-title">Connect to home</h2><p>Enter the access token provided for your home service.</p><label for="token">Access token</label><input id="token" type="password" autocomplete="off" required><p class="muted">Kept in memory for this tab. Refreshing the page clears it.</p><div class="dialog-actions"><button type="button" id="cancel-connect" class="quiet">Cancel</button><button type="submit" class="primary">Connect</button></div></form></dialog>
+<dialog id="evidence-dialog" aria-labelledby="evidence-title"><h2 id="evidence-title">Observation evidence</h2><p id="evidence-status" role="status"></p><img id="evidence-image" alt="Evidence attached to the selected observation" hidden><button id="close-evidence" class="primary">Close</button></dialog>
+</body></html>

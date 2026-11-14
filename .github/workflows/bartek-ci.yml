@@ -1,0 +1,139 @@
+name: Bartek integration
+
+on:
+  push:
+    branches: ["codex/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: junction
+          POSTGRES_PASSWORD: synthetic-ci-password
+          POSTGRES_DB: junction_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U junction -d junction_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Disposable service credentials only; no repository or production secrets.
+      TEST_DATABASE_URL: postgresql://junction:synthetic-ci-password@127.0.0.1:5432/junction_ci
+      API_TOKEN: synthetic-ci-only-token
+      JUNCTION_TEST_API_TOKEN: synthetic-ci-only-token
+      JUNCTION_TEST_BASE_URL: http://127.0.0.1:8098
+      REQUIRE_SOURCE_FIXTURES: "1"
+      APP_TIMEZONE: Europe/Helsinki
+      ELEVENLABS_API_KEY: ""
+      ELEVENLABS_VOICE_ID: ""
+      GEMINI_API_KEY: ""
+      VISION_RELAY_URL: ""
+      VISION_RELAY_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Actual-producer tests git-show pinned commits on teammate branches.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify pinned producer source objects
+        run: |
+          git cat-file -e 98eb82b773e2986fd2ab8a60be3eb3f2b735fa4a:unoq/store.py
+          git cat-file -e 804b821dd6e51171567310f1ffc1cda32fb3547d:demo/ayman/replay.py
+          git cat-file -e 804b821dd6e51171567310f1ffc1cda32fb3547d:demo/ayman/events.json
+          git cat-file -e 9aaf1e377e50bd0faeece3c4582a48b17eb976b8:ml/recon_change/live/relay.py
+      - name: Install locked dependencies on Linux
+        run: |
+          make setup
+          .venv/bin/python -m pip check
+      - name: Merged UNO Q store checks
+        run: make unoq-check
+      - name: Python unit, lint and schema gates
+        run: make check
+      - name: Dashboard syntax, client and HTTP transport gates
+        run: make dashboard-check
+      - name: Start isolated assembled API and require readiness
+        env:
+          DATABASE_URL: postgresql://junction:synthetic-ci-password@127.0.0.1:5432/junction_ci
+        run: |
+          export LOCAL_DATA_DIR="$RUNNER_TEMP/bartek-ci-household"
+          mkdir -m 700 "$LOCAL_DATA_DIR"
+          nohup .venv/bin/uvicorn backend.run:create_application --factory --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/bartek-api.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/bartek-api.pid"
+          .venv/bin/python - <<'PY'
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          pid = int((Path(os.environ["RUNNER_TEMP"]) / "bartek-api.pid").read_text())
+          health = os.environ["JUNCTION_TEST_BASE_URL"] + "/health"
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          for attempt in range(100):
+              try:
+                  os.kill(pid, 0)
+              except ProcessLookupError:
+                  raise SystemExit("Assembled API exited before readiness") from None
+              try:
+                  with opener.open(health, timeout=.5) as response:
+                      if response.status == 200:
+                          break
+              except OSError:
+                  pass
+              time.sleep(.1)
+          else:
+              raise SystemExit("Assembled API did not become ready on loopback")
+          PY
+      - name: PostgreSQL recovery, live HTTP and actual producer integration gates
+        run: |
+          .venv/bin/python -m pytest -q -m integration --junitxml="$RUNNER_TEMP/bartek-integration.xml"
+          .venv/bin/python - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "bartek-integration.xml")
+          cases = report.findall(".//testcase")
+          skipped = report.findall(".//testcase/skipped")
+          required = {
+              "test_real_postgres_outage_recovery_and_restart",
+              "test_authenticated_ingest_answer_timeline_and_question_counts",
+              "test_actual_ayman_demo_script_and_store_export",
+              "test_actual_seb_relay_http_check_through_authenticated_wrapper",
+              "test_assembled_entrypoint_actual_relay_cache",
+              "test_merged_store_image_stays_local_and_real_export_retries_deduplicate",
+              "test_real_export_bad_source_and_target_auth_never_create_central_events",
+              "test_source_restart_new_event_and_retry_reach_answers_and_dashboard",
+          }
+          missing = required - {case.attrib["name"] for case in cases}
+          if missing or skipped:
+              raise SystemExit(f"Required integration coverage missing: {sorted(missing)}; skips: {len(skipped)}")
+          PY
+      - name: Isolated API diagnostics on failure
+        if: failure()
+        run: |
+          if test -f "$RUNNER_TEMP/bartek-api.log"; then
+            tail -100 "$RUNNER_TEMP/bartek-api.log"
+          fi
+      - name: Stop isolated API
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/bartek-api.pid"; then
+            kill "$(cat "$RUNNER_TEMP/bartek-api.pid")" 2>/dev/null || true
+          fi
