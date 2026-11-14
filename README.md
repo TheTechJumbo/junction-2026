@@ -85,8 +85,14 @@ Full list: <https://junction2026.com/challenges>.
 ```jsonc
 // Event: from the glasses, the UNO Q, or the rules engine
 { "id": "e17", "ts": "2026-11-14T08:00:00Z", "kind": "action" | "sensor" | "alert",
-  "label": "pills_taken" | "door_locked" | "keys_down" | "pillbox_open" | "door_open" | "double_dose_prevented",
-  "source": "glasses" | "uno-q" | "rules", "evidence": { "imageUrl": "…" } | null }
+  "label": "pills_taken" | "door_locked" | "keys_down" | "pillbox_open" | "door_open" | "double_dose_prevented"
+         | "missed_dose" | "dose_late" | "door_open_night" | "no_morning_activity",
+  "source": "glasses" | "uno-q" | "rules", "evidence": { "imageUrl": "…" } | null,
+  "message": "Front door opened at 03:10" }  // alerts only: plain text for the dashboard
+
+// Prompt: what the glasses say, created by the rules engine
+{ "id": "p4", "ts": "2026-11-14T08:40:00Z", "text": "You already took your morning pills at 08:00.",
+  "audioUrl": "…" }  // from /speak
 
 // Profile: one per person, picked from a template
 { "id": "dementia", "person": "Anna",
@@ -95,8 +101,14 @@ Full list: <https://junction2026.com/challenges>.
   "summaryTo": ["Sara (daughter)"] }
 
 // POST /events     Event (from the UNO Q or the glasses)
+// POST /frames     { "ts": "…", "imageBase64": "…" } -> { "events": [Event] }  (glasses, every few seconds;
+//                  the server runs key-action detection and returns any events it stored)
+// GET  /prompts    ?since=… -> { "prompts": [Prompt] }  (glasses poll this and play each prompt)
 // POST /ask        { "question": "Did I lock the door?" } -> { "answer": "Yes, at 08:14.", "evidence": [Event] }
-// GET  /timeline   ?day=… -> { "events": [Event], "baseline": …, "alerts": [Event] }
+// GET  /timeline   ?day=… -> { "events": [Event], "baseline": …, "alerts": [Event],
+//                  "meds": [{ "name": "morning pills", "due": "08:00", "status": "taken" | "due" | "late" }] }
+// GET  /profile    -> Profile (the active one)
+// PUT  /profile    { "id": "dementia" | "parkinsons" } -> Profile  (the dashboard's profile switch)
 // GET  /summary    ?day=… -> { "text": "Anna had a normal morning…" }
 // POST /speak      { "text": "…" } -> audio
 ```
