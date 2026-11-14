@@ -62,6 +62,8 @@ jobs:
         run: |
           make setup
           .venv/bin/python -m pip check
+      - name: Merged UNO Q store checks
+        run: make unoq-check
       - name: Python unit, lint and schema gates
         run: make check
       - name: Dashboard syntax, client and HTTP transport gates
@@ -115,6 +117,9 @@ jobs:
               "test_actual_ayman_demo_script_and_store_export",
               "test_actual_seb_relay_http_check_through_authenticated_wrapper",
               "test_assembled_entrypoint_actual_relay_cache",
+              "test_merged_store_image_stays_local_and_real_export_retries_deduplicate",
+              "test_real_export_bad_source_and_target_auth_never_create_central_events",
+              "test_source_restart_new_event_and_retry_reach_answers_and_dashboard",
           }
           missing = required - {case.attrib["name"] for case in cases}
           if missing or skipped:

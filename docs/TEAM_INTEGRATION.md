@@ -1,5 +1,7 @@
 # Runnable team integration
 
+For the branch that combines PRs #6 and #13, see [Ayman integration](AYMAN_INTEGRATION.md).
+
 The local system is tested against Ayman's store `98eb82b`, demo `804b821`, and Seb's
 combined relay `9aaf1e3`. The current code adapters bridge their actual interfaces; they
 do not require rewriting teammate files or merging the vision model into the API process.
@@ -81,7 +83,7 @@ injected; this verifies integration contracts, not model quality or real speech 
 assembled HTTP server and explicit mandatory-source integration gate. Missing source
 objects and skipped required integration tests fail CI. The workflow never deploys or
 uses live provider secrets. Latest assembled local verification: 467 Python checks,
-9 marked PostgreSQL/HTTP/actual-source integration checks, and 10 Node checks passed.
+12 marked PostgreSQL/HTTP/actual-source integration checks, and 10 Node checks passed.
 A built wheel was extracted outside the checkout and successfully redacted the public
 face fixture with its packaged model. Browser verification displayed the processed
 photo in the authenticated evidence dialog. See CI for the published-head result.
@@ -91,7 +93,8 @@ photo in the authenticated evidence dialog. See CI for the published-head result
 - Live ElevenLabs MP3 decoding/playback and question-to-audible <2 seconds on Ed's client.
 - Current Ed dementia phone/voice/camera implementation is absent from inspected remote
   refs. `feat/rescue-ping-hud` is an older responder/ping application, not that client.
-- Aiven endpoint and approved HTTPS/device credentials for team hardware.
+- Aiven connectivity and replication have now passed a live synthetic test. Approved
+  HTTPS/device credentials and a physical-device rehearsal remain outstanding.
 - JUN-18 now has offline detected-face blurring, metadata removal and SQLite/WAL expiry
   cleanup. Detector misses remain possible: zero detections does not prove face-free,
   and the categorical requirement that no unblurred bystander is ever stored remains

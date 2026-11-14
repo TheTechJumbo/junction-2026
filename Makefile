@@ -25,3 +25,7 @@ test-http:
 	$(VENV)/python -m pytest -q tests/integration -m integration
 rehearse:
 	$(VENV)/python scripts/rehearse.py
+
+.PHONY: unoq-check
+unoq-check:
+	$(VENV)/python -m unittest discover -s unoq/tests -v
