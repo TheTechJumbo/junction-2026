@@ -2,12 +2,15 @@
 """Time and memory of the change detection (analyse) with NumPy and with Rust (JUN-28).
 
 Same input for every run: a synthetic room from test_synthetic.py, 24 before + 12 after frames,
-saved once to a file. Each configuration runs in a fresh process so that thread settings and
+saved once to a file. With the look-alike check on, the patch features have 256 numbers in
+float16, like the real ones. Each configuration runs in a fresh process so that thread settings and
 peak memory do not leak between runs. The model (VGGT) is not part of this: these numbers are
 the detection only, on top of whatever the model pass costs.
 
-    python bench_rust.py                     # 294x392 and 294x518 frames, 1 and 4 threads and all cores
-    python bench_rust.py --sizes 294x518 --threads 4 --repeat 5
+    python bench_rust.py                     # 294x518 frames, 1 and 4 threads and all cores
+    python bench_rust.py --sizes 294x392,294x518 --threads 4 --repeat 5
+
+Three engines: NumPy only; "PR 20" (Rust depth_gap and votes only); and every Rust function.
 """
 import argparse
 import json
@@ -29,6 +32,10 @@ def make_scene(path, h, w, features):
     ts.H, ts.W = h, w
     ts.K = np.array([[ts.FOCAL, 0, w / 2], [0, ts.FOCAL, h / 2], [0, 0, 1]], np.float32)
     r = ts.scene(ts.BOX_B, features=features)
+    if features:
+        from test_rust import wide_features
+
+        r = wide_features(r)
     np.savez(path, depth=r.depth, conf=r.conf, K=r.K, E=r.E, rgb=r.rgb, **({"feat": r.feat} if features else {}))
 
 
@@ -80,8 +87,13 @@ def child(path, repeat, lookalike):
                       "appeared": len(report["appeared"]), "gone": len(report["gone"]), "threads": threads}))
 
 
+ENGINES = {"numpy": {"RECON_FAST": "0"},
+           "pr20": {"RECON_FAST": "1", "RECON_FAST_OFF": "unproject,patch_median,nearest,lookalike_count"},
+           "rust": {"RECON_FAST": "1", "RECON_FAST_OFF": ""}}
+
+
 def run(path, engine, threads, repeat, lookalike):
-    env = dict(os.environ, RECON_FAST="1" if engine == "rust" else "0")
+    env = dict(os.environ, **ENGINES[engine])
     if threads:
         for k in ("RAYON_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
             env[k] = str(threads)
@@ -92,7 +104,7 @@ def run(path, engine, threads, repeat, lookalike):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--sizes", default="294x392,294x518", help="frame sizes HxW, comma separated")
+    p.add_argument("--sizes", default="294x518", help="frame sizes HxW, comma separated")
     p.add_argument("--threads", default="1,4,0", help="thread counts, 0 = all cores")
     p.add_argument("--repeat", type=int, default=3)
     p.add_argument("--child")
@@ -102,7 +114,7 @@ def main():
         return child(a.child, a.repeat, a.lookalike)
 
     print(f"{os.cpu_count()} logical CPUs. analyse() on 24 + 12 synthetic frames, median of {a.repeat} runs.")
-    print("| frames | look-alike check | threads | NumPy | Rust | speed-up | extra memory NumPy | extra memory Rust | same result |")
+    print("| frames | look-alike check | threads | NumPy | PR 20 | all Rust | speed-up | peak extra memory NumPy / PR 20 / all Rust | same result |")
     print("|---|---|---|---|---|---|---|---|---|")
     with tempfile.TemporaryDirectory() as tmp:
         for size in a.sizes.split(","):
@@ -111,12 +123,13 @@ def main():
                 path = Path(tmp) / f"scene_{h}x{w}_{int(lookalike)}.npz"
                 make_scene(path, h, w, lookalike)
                 for t in map(int, a.threads.split(",")):
-                    slow, fast = run(path, "numpy", t, a.repeat, lookalike), run(path, "rust", t, a.repeat, lookalike)
-                    ts, tf = float(np.median(slow["times"])), float(np.median(fast["times"]))
-                    same = all(slow[k] == fast[k] for k in ("verdict", "appeared", "gone"))
-                    label = t or "all ({})".format(fast["threads"])
-                    print(f"| {w}x{h} | {'on' if lookalike else 'off'} | {label} | {ts:.2f} s | {tf:.2f} s | "
-                          f"{ts / tf:.1f}x | {slow['extra_mb']:.0f} MB | {fast['extra_mb']:.0f} MB | {'yes' if same else 'NO'} |", flush=True)
+                    got = {e: run(path, e, t, a.repeat, lookalike) for e in ENGINES}
+                    sec = {e: float(np.median(g["times"])) for e, g in got.items()}
+                    same = all(got[e][k] == got["numpy"][k] for e in got for k in ("verdict", "appeared", "gone"))
+                    label = t or "all ({})".format(got["rust"]["threads"])
+                    mem = " / ".join(f"{got[e]['extra_mb']:.0f}" for e in ENGINES)
+                    print(f"| {w}x{h} | {'on' if lookalike else 'off'} | {label} | {sec['numpy']:.2f} s | {sec['pr20']:.2f} s | "
+                          f"{sec['rust']:.2f} s | {sec['numpy'] / sec['rust']:.1f}x | {mem} MB | {'yes' if same else 'NO'} |", flush=True)
 
 
 if __name__ == "__main__":

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Check that the Rust depth_gap and votes (recon_rust.py, JUN-28) give the NumPy answers.
+"""Check that the Rust code in recon_rust.py (JUN-28) gives the NumPy answers.
 
 Runs the synthetic scenes of test_synthetic.py both ways and compares:
   1. depth_gap and votes, value by value, on every frame pair the detector uses
-  2. the full report (verdict, clusters, thresholds) and the flagged pixels
+  2. unproject, patch_table, same_place_similarity and has_lookalike, with 256-number features
+  3. the full report (verdict, clusters, thresholds) and the flagged pixels
 
 NumPy's matrix product may round the last bit of a coordinate differently from the Rust loop,
 so a point lying exactly on a pixel boundary or a tolerance can, very rarely, land on the other
-side. Step 1 reports how many values land on another pixel or count differently (float32
-rounding of the gap itself is ignored); step 2 must match exactly.
+side. Steps 1 and 2 report how many values land on another pixel or count differently (float32
+rounding of the gap itself is ignored); step 3 must match exactly.
 
     python test_rust.py
 """
@@ -37,6 +38,15 @@ def both(fn, *args, **kwargs):
     return slow, fn(*args, **kwargs)
 
 
+def wide_features(r, dim=256, seed=5):
+    """The synthetic scenes' 3-number patch features spread over `dim` numbers with noise, stored
+    as float16: the size and type of the real features (recon_change.reduce_features)."""
+    rng = np.random.default_rng(seed)
+    f = r.feat @ rng.standard_normal((r.feat.shape[-1], dim)).astype(np.float32)
+    f += 0.3 * rng.standard_normal(f.shape).astype(np.float32)
+    return rc.Recon(r.depth, r.conf, r.K, r.E, r.rgb, f.astype(np.float16))
+
+
 def differ(a, b):
     """Values that differ by more than float32 rounding: another pixel, another trust answer, another count."""
     a, b = np.asarray(a), np.asarray(b)
@@ -63,6 +73,9 @@ def main():
         "box rebuilt 20 cm off, look-alike check on": (ts.scene(ts.BOX_A + np.array([0.2, 0.0, 0.0]), features=True), {"reach": 0.15}),
         "box moved, look-alike check on": (ts.scene(ts.BOX_B, features=True), {"reach": 0.15}),
         "small box moved, 3% noise": (ts.scene(ts.BOX_B, box_size=0.06, noise=0.03, seed=7), {}),
+        "box moved, 256-number features": (wide_features(ts.scene(ts.BOX_B, features=True)), {"reach": 0.15}),
+        "box rebuilt 20 cm off, 256-number features": (wide_features(ts.scene(ts.BOX_A + np.array([0.2, 0.0, 0.0]), features=True)), {"reach": 0.15}),
+        "box moved, 256-number features, look-alike reach from the clips": (wide_features(ts.scene(ts.BOX_B, features=True)), {}),
     }
 
     print("1. depth_gap and votes, value by value")
@@ -88,7 +101,32 @@ def main():
     check(diffs / total < 1e-4, "depth_gap: fewer than 1 in 10,000 values land on another pixel")
     check(vote_diffs / vote_total < 1e-4, "votes: fewer than 1 in 10,000 counts differ")
 
-    print("2. full reports and flagged pixels")
+    print("2. unproject, patch_table, same_place_similarity and has_lookalike")
+    r = scenes["box moved, 256-number features"][0]
+    unit = r.feat.astype(np.float32)
+    r = rc.Recon(r.depth, r.conf, r.K, r.E, r.rgb, unit / (np.linalg.norm(unit, axis=-1, keepdims=True) + 1e-6))
+    valid = rc.valid_mask(r, 0)
+    slow, fast = both(rc.unproject, r.depth[3], r.K[3], r.E[3])
+    check(slow.shape == fast.shape and differ(slow, fast) == 0, "unproject: same points to float32 rounding")
+    after, ref = list(range(24, 36)), list(range(0, 24, 2))
+    ta_slow, ta_fast = both(rc.patch_table, r, valid, after)
+    tb_slow, tb_fast = both(rc.patch_table, r, valid, ref)
+    same = all(differ(x, y) == 0 and x.shape == y.shape for x, y in zip(ta_slow + tb_slow, ta_fast + tb_fast))
+    check(same, f"patch_table: same {len(ta_fast[0]) + len(tb_fast[0]):,} patches, positions and features")
+    slow, fast = both(rc.same_place_similarity, r, ta_slow, tb_slow)
+    check(slow == fast, f"same_place_similarity: same value ({fast})")
+    hits = total = 0
+    for q in after:
+        pix = np.flatnonzero(valid[q])[::7]
+        pts = rc.unproject(r.depth[q], r.K[q], r.E[q]).reshape(-1, 3)[pix]
+        for reach, min_sim in ((0.05, 0.6), (0.15, 0.85)):
+            slow, fast = both(rc.has_lookalike, r, q, pix, pts, tb_slow, reach, min_sim, 2)
+            hits += differ(slow, fast)
+            total += len(pix)
+    print(f"  has_lookalike: {hits} of {total:,} answers differ")
+    check(hits / total < 1e-4, "has_lookalike: fewer than 1 in 10,000 answers differ")
+
+    print("3. full reports and flagged pixels")
     for name, (recon, kwargs) in scenes.items():
         (rep_slow, det_slow), (rep_fast, det_fast) = both(rc.analyse, recon, 24, conf_pct=0, typical_m=2.5, **kwargs)
         same_pixels = all(np.array_equal(det_slow[k][f], det_fast[k][f]) for k in ("appeared", "gone") for f in ("pixels", "frames"))
