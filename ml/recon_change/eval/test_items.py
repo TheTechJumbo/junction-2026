@@ -182,6 +182,7 @@ def main():
     class StandIn(items.Detector):
         def __init__(self, zoomed):
             self.score, self.limits, self.look_from, self.look_limits, self.last, self.zoomed, self.asked = 0.5, {}, 0.0, {}, {}, zoomed, []
+            self.enrolled, self.enrolled_score, self.words, self.judge, self.judge_limits = {}, 0.6, {}, None, {}
 
         def detect(self, image_bgr, phrases, tiles=None, floor=items.FLOOR, batch=4):
             self.last = {"passes": 1, "seconds": 0.1, "size": [image_bgr.shape[1], image_bgr.shape[0]]}
@@ -209,7 +210,20 @@ def main():
     weak = StandIn(0.4)  # the second look does not agree: nothing more is accepted
     weak.look_from, weak.look_limits = 0.25, {"keys": 0.5}
     assert [d["name"] for d in weak.find(picture, names)] == ["phone"]
-    print("6 ok: limits per item, second looks, and the same answers as before when neither is set")
+    class Opinion:  # a stand-in for the judge: it believes in keys and not in glasses
+        model_id = "stand-in"
+
+        def share(self, picture, box, name):
+            return {"keys": 0.8, "glasses": 0.05}.get(name, 0.0)
+
+    judged = StandIn(0.2)  # the zoomed detector would say no (0.2), but only the judge is asked
+    judged.look_from, judged.judge, judged.judge_limits = 0.25, Opinion(), {"keys": 0.7, "glasses": 0.1}
+    got = judged.candidates(picture, names, floor=0.3)
+    assert [(d["name"], d["accepted"]) for d in got] == [("phone", True), ("keys", True), ("glasses", False)], got
+    assert not judged.asked and judged.last["passes"] == 1 and judged.last["second_looks"] == 2, judged.last
+    judged.look_limits = {"keys": 0.5}  # with a look limit as well, both must agree: the zoomed 0.2 is not enough
+    assert [d["name"] for d in judged.find(picture, names)] == ["phone"]
+    print("6 ok: limits per item, second looks, a second opinion, and the same answers as before when none is set")
     print("all ok")
 
 

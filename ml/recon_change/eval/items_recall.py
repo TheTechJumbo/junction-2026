@@ -153,7 +153,7 @@ def measure(D, r, half, names=NAMES):
                 continue
             truth = np.array([[x / W, y / H, (x + w) / W, (y + h) / H] for x, y, w, h in label["boxes"]])
             for box, xywh in zip(truth, label["boxes"]):
-                size = max(xywh[2], xywh[3]) * 960 / max(W, H)
+                size = max(xywh[2], xywh[3]) * (960 / max(W, H))
                 band = next(s[0] for s in SIZES if s[1] <= size < s[2])
                 hit = int(any(ev.on(d["box"], box)[1][0] for d in mine))
                 c["found"][band][0] += hit
@@ -217,10 +217,13 @@ def errors(m, name):
     return m[name]["wrong_absent"] + m[name]["wrong_other"] + m[name]["false"]
 
 
-def lowest_clean(D, make, name, grid=GRID, margin=0.0, allowed=0):
+ALLOWED = 0  # errors an item may make on the tuning half at its chosen limit (--allowed)
+
+
+def lowest_clean(D, make, name, grid=GRID, margin=0.0, allowed=None):
     """The lowest value on the grid from which a rule makes no error for an item on the tuning half
     (wrong answers on test photos plus false answers on item-free photos), also at every higher value."""
-    best = None
+    best, allowed = None, ALLOWED if allowed is None else allowed
     for value in sorted(grid, reverse=True):
         if errors(measure(D, make(value), "tune", [name]), name) > allowed:
             break
@@ -234,6 +237,47 @@ def line(D, label, r, half):
     keys = m["keys"]["found"]["over 64 px"]
     return (f"| {label} | {share(total(m, 'found', 'under 32 px'))} | {share(total(m, 'found', '32 to 64 px'))} | {share(big)} | {share(keys)} "
             f"| {total(m, 'right')} | {total(m, 'wrong_absent') + total(m, 'wrong_other')} | {total(m, 'false')} of {len(D.clean[half])} |")
+
+
+def evidence(D, args):
+    """What adding up weak sightings over several looks could buy, from the saved boxes.
+    1. For every labelled object: the best score of a box on it. "Strong" is accepted today, "weak"
+       (from `zoom_from` up to 0.5) is what voting could add, "unseen" is below that.
+    2. In the item-free indoor scenes, where many photos show one room: in how many photos of a
+       scene a false candidate of each name turns up. A look-alike that is there in many views
+       would pass any vote."""
+    low = args.zoom_from
+    print(f"### best score on each labelled object (both halves), weak = {low} to 0.5\n")
+    print("| item | size | objects | strong (0.5 and up) | weak | unseen |\n|---|---|---|---|---|---|")
+    for name in NAMES:
+        for band, lo, hi in SIZES:
+            best = []
+            for rec in D.records:
+                label = rec["items"].get(name)
+                raw = D.arrays.get(f"lvis:{rec['file']}")
+                if not label or not label["there"] or raw is None:
+                    continue
+                W, H = rec["width"], rec["height"]
+                got = items.merge(raw, [name], 0.05)
+                for x, y, w, h in label["boxes"]:
+                    if lo <= max(w, h) * (960 / max(W, H)) < hi:
+                        box = [x / W, y / H, (x + w) / W, (y + h) / H]
+                        best.append(max([d["score"] for d in got if ev.on(d["box"], box)[1][0]], default=0.0))
+            best = np.array(best)
+            if len(best):
+                print(f"| {name} | {band} | {len(best)} | {(best >= 0.5).sum()} ({100 * (best >= 0.5).mean():.0f} %) "
+                      f"| {((best >= low) & (best < 0.5)).sum()} ({100 * ((best >= low) & (best < 0.5)).mean():.0f} %) "
+                      f"| {(best < low).sum()} ({100 * (best < low).mean():.0f} %) |")
+    print(f"\n### false candidates from {low} up in the item-free photos, by room\n")
+    print("| photos of | photos | " + " | ".join(f"with a false '{n}'" for n in NAMES) + " | with any |\n|---|---|" + "---|" * (len(NAMES) + 1))
+    rooms = {}
+    for key in D.clean[None]:
+        group, file = key.split(":", 1)
+        room = Path(file).parts[-4] if "PASLCD" in file else group
+        got = {d["name"] for d in items.best_per_name(decide(D, key, rule(args.phrases, low)))}
+        rooms.setdefault(room, []).append(got)
+    for room, seen in sorted(rooms.items()):
+        print(f"| {room} | {len(seen)} | " + " | ".join(str(sum(n in g for g in seen)) for n in NAMES) + f" | {sum(bool(g) for g in seen)} |")
 
 
 HEAD = ("| rule | found under 32 px | found 32 to 64 px | found over 64 px | keys over 64 px | right answers | wrong answers | false on item-free photos |\n"
@@ -250,8 +294,15 @@ def main():
     ap.add_argument("--phrases", default="chosen")
     ap.add_argument("--zoom-from", type=float, default=0.25)
     ap.add_argument("--rule", help="JSON: limit, zoom_from, zoom_limit, clip_limit per item, instead of choosing them")
+    ap.add_argument("--allowed", type=int, default=0, help="errors each item may make on the tuning half at its limit")
+    ap.add_argument("--evidence", action="store_true", help="only: how strongly present items score, and how false candidates repeat in a room")
+    ap.add_argument("--short", action="store_true", help="only the comparison lines, not the tables per item")
     args = ap.parse_args()
+    global ALLOWED
+    ALLOWED = args.allowed
     D = Data(args)
+    if args.evidence:
+        return evidence(D, args)
     print(f"{len(D.records)} test photos, {len(D.clean[None])} item-free photos ({len(D.clean['tune'])} tuning, {len(D.clean['report'])} held out), "
           f"{sum(len(v['candidates']) for v in D.looks.values())} saved second looks\n")
     rules = {"today: limit 0.5 for all": rule(args.phrases, 0.5)}
@@ -293,7 +344,7 @@ def main():
         print(f"\n### {'tuning' if half == 'tune' else 'held-out'} half\n\n{HEAD}")
         for label, r in rules.items():
             print(line(D, label, r, half))
-    for label, r in rules.items():
+    for label, r in ({} if args.short else rules).items():
         m = measure(D, r, "report")
         print(f"\n### held-out half: {label}\n\n{table(D, m, 'report')}")
         if D.context:
