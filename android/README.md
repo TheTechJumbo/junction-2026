@@ -6,6 +6,40 @@ Wearables Device Access Toolkit 1.0.1 (official source reference
 No Meta agent or ElevenLabs key belongs in this app. `/ask` and `/speak` use the
 central backend's session token; provider credentials stay server-side.
 
+## The wearer's screen (phone and glasses)
+
+The app opens on the wearer's screen. The gear button shows the setup controls described
+below. Anna sees **one card at a time**, the same card on the phone and on the glasses display,
+in symbols with a time, a distance or one or two words. `core/Wearer.kt` decides the card,
+in this order:
+
+| Card | When | Shows |
+| --- | --- | --- |
+| Night | Before 06:00, and the door opened in the last 10 min or she stands at the front door | Moon, the time, bed: "Bed?" |
+| Reminder | A relay reminder is due | Bell and time, the place's symbol, an arrow and metres to it, Done |
+| Going out | During the day, at the front door or within 2 min of it opening | House, keys/wallet/phone with where each was last seen, Lock |
+| Answer | Up to 45 s after a question | "Pills?": pill box with ✓ and the opening time, or ✗ and the way to the box. "Door?": closed time, or ?. "Keys?": where last seen, when, the way |
+| Guide | Walking to a place | Arrow, the place's symbol, metres |
+| Idle | Otherwise | Phone: the clock and the next reminder. Glasses: nothing (black is "off" on the lenses) |
+
+The cards say only what was observed: an opened pill box is shown as opened with its time,
+never as "pills taken", and a closed door is never "locked".
+
+- **Phone:** `wearer/WearerPanel.kt` shows the card large, plus three one-tap questions (Pills?,
+  Door?, Keys?) and the microphone. The glasses button previews the glasses card.
+- **Glasses:** `meta/GlassesCards.kt` sends the card with Meta's display components. It uses
+  Meta's own icons where they exist (pill box `CONTAINER_WITH_LID`, padlock, house, bed, moon,
+  check). Our line drawings (`wearer/Glyphs.kt`) become bitmaps for the door, key, wallet,
+  place, and the arrow turned to the bearing. Done on a reminder card is a glasses button.
+- **Data:** the event API's `GET /timeline` (today's sensor openings) with the backend
+  token, and optionally the vision relay's `GET /reminders` and `GET /where` (reminders,
+  places with distance and bearing, item sightings). Enter the relay in setup; its key goes
+  in the `X-Key` header, never in a URL. Done posts `/reminder?id=…&done=1`. Refreshes every
+  10 s while the app is in front.
+- **Demo:** setup › **Wearer demo: next scene** steps through nine example scenes: pills due,
+  walking there, box opened, not opened, going out, night door, lost keys, door closed and
+  idle. No sensors, relay or glasses are needed. **Wearer demo: off** returns to live data.
+
 ## Build and install
 
 Use Java 17, Android SDK platform 36 and Android Studio or the command-line tools.

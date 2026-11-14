@@ -18,7 +18,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import com.junction.glasses.core.*
+import com.junction.glasses.meta.GlassesCards
 import com.junction.glasses.meta.MetaGlassesAdapter
+import com.junction.glasses.wearer.WearerPanel
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 
@@ -46,6 +52,24 @@ class MainActivity : ComponentActivity() {
     private var pendingPhoneListen = false
     private var recognitionGeneration = 0L
     private var displayJob: Job? = null
+    // The wearer's screen and what it is built from (see core/Wearer.kt).
+    private lateinit var wearer: WearerPanel
+    private lateinit var setup: LinearLayout
+    private val home: ZoneId = ZoneId.of("Europe/Helsinki")
+    private var dayClient: DayClient? = null
+    private var relay: RelayClient? = null
+    private var reminders: List<Reminder> = emptyList()
+    private var fix: Fix? = null
+    private var sensed: List<Sensed> = emptyList()
+    private var asked: Asked? = null
+    private var nightAnsweredAt: Instant? = null
+    private var demoScene = -1
+    private var demoNow: ZonedDateTime? = null
+    private var shownCard: Card? = null
+    private var cardJob: Job? = null
+    private val refresher = object : Runnable {
+        override fun run() { refreshWearer(); main.postDelayed(this, 10_000) }
+    }
     private fun stopRecognition() {
         recognitionGeneration++
         pendingPhoneListen = false
@@ -120,15 +144,44 @@ class MainActivity : ComponentActivity() {
         button("Start glasses motion") { glasses.startMotion() }
         button("Stop glasses motion") { glasses.stopMotion() }
         button("Disconnect glasses") { stopTurn(); glasses.disconnect() }
+        label("Wearer screen", 22f)
+        val relayUrl = field("Vision relay URL (optional)").apply { if (BuildConfig.DEBUG) setText("http://127.0.0.1:8090") }
+        val relayKey = field("Vision relay key", true)
+        button("Connect vision relay") {
+            relay = try { RelayClient(relayUrl.text.toString(), relayKey.text.toString(), allowLocalHttp = BuildConfig.DEBUG) }
+                catch (_: Exception) { null }
+            relayKey.text.clear()
+            status.text = if (relay == null) "Use the relay origin and its key." else "Vision relay configured for reminders and directions."
+            refreshWearer()
+        }
+        button("Wearer demo: next scene") { nextDemoScene() }
+        button("Wearer demo: off") { demoScene = -1; demoNow = null; reminders = emptyList(); fix = null; sensed = emptyList(); asked = null; refreshWearer() }
         label("Audio uses Android’s selected media output. Check the Bluetooth output at the venue. Phone recognition may use the device’s speech service; no recordings are saved by this app.")
+        setup = column.apply { visibility = android.view.View.GONE }
+        wearer = WearerPanel(this).apply {
+            onAsk = { q -> question.setText(q); submit(q) }
+            onMic = {
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    pendingPhoneListen = true; permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                } else startPhoneListening()
+            }
+            onDone = ::finishReminder
+            onDismiss = { nightAnsweredAt = Instant.now(); showWearer() }
+            onSetup = { setup.visibility = if (setup.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE }
+        }
         setContentView(ScrollView(this).apply {
-            addView(column)
+            setBackgroundColor(WearerPanel.NIGHT); isFillViewport = true
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
+                addView(wearer); addView(setup)
+            })
             setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
                 view.setPadding(0, bars.top, 0, bars.bottom)
                 insets
             }
         })
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply { isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false }
         lifecycleScope.launch { glasses.state.collect { s ->
             deviceStatus.text = "Registration: ${s.registration}\nDevices: ${s.deviceCount} · ${s.connection}\nCamera: ${s.camera} · Display: ${s.display}\nSpeech: ${s.speech} · Motion: ${s.motion}" + (s.error?.let { "\n$it" } ?: "")
         } }
@@ -148,17 +201,37 @@ class MainActivity : ComponentActivity() {
         try {
             val client = HttpBackendClient(endpoint.text.toString().trim(), token.text.toString(), allowLocalHttp = BuildConfig.DEBUG)
             evidenceClient = EvidenceClient(endpoint.text.toString().trim(), token.text.toString(), allowLocalHttp = BuildConfig.DEBUG)
+            dayClient = DayClient(endpoint.text.toString().trim(), token.text.toString(), home, allowLocalHttp = BuildConfig.DEBUG)
             controller = VoiceTurnController(client, audio, { work -> if (Looper.myLooper() == main.looper) work() else main.post(work) }, ::renderTurn)
             token.text.clear()
             status.text = "Backend configured. Ask a question to test the connection."
+            refreshWearer()
         } catch (_: Exception) { status.text = "Use an HTTPS origin and nonempty session token. Debug builds also support USB loopback." }
     }
     private fun submit(text: String) {
         stopRecognition(); glasses.stopListening()
-        if (controller == null) { status.text = "Connect the backend first."; return }
+        asked = Asked(WearerBrain.classify(text), wearerNow().toInstant(), null)
+        if (demoScene >= 0) { showWearer(); return }
+        if (controller == null) { status.text = "Connect the backend first."; if (::wearer.isInitialized) wearer.setStatus("Not connected"); return }
         controller?.submit(text)
     }
     private fun renderTurn(turn: TurnState) {
+        renderStatus(turn)
+        if (::wearer.isInitialized) wearer.setStatus(when (turn.phase) {
+            TurnPhase.ASKING -> "…"; TurnPhase.ERROR -> "No answer. Try again."; else -> ""
+        })
+        turn.answer?.let { answer ->
+            asked = asked?.copy(answerText = answer.text)
+            // The answer's own sensor evidence counts even before the next timeline refresh.
+            val fromAnswer = answer.evidence.filter { it.source == "sensor" }.mapNotNull { o ->
+                runCatching { Sensed(o.type, ZonedDateTime.parse(o.ts).withZoneSameInstant(home)) }.getOrNull()
+            }
+            if (demoScene < 0) sensed = (sensed + fromAnswer).distinct()
+            showWearer()
+        }
+        renderAnswer(turn)
+    }
+    private fun renderStatus(turn: TurnState) {
         status.text = turn.message ?: when (turn.phase) {
             TurnPhase.IDLE -> "Ready"
             TurnPhase.ASKING -> "Finding recorded observations…"
@@ -169,6 +242,8 @@ class MainActivity : ComponentActivity() {
             TurnPhase.ERROR -> "Could not complete the question"
             TurnPhase.CANCELLED -> "Stopped"
         }
+    }
+    private fun renderAnswer(turn: TurnState) {
         if (turn.phase == TurnPhase.ASKING) {
             displayJob?.cancel(); shownAnswer = null; latestEvidence = emptyList(); answerView.text = "Finding observations…"; evidenceView.text = ""
         }
@@ -248,16 +323,80 @@ class MainActivity : ComponentActivity() {
             })
         }
     }
+    private fun wearerNow(): ZonedDateTime = demoNow ?: ZonedDateTime.now(home)
+
+    /** Pulls today's sensor observations and, when configured, the relay's reminders and position fix. */
+    private fun refreshWearer() {
+        if (demoScene < 0) {
+            dayClient?.today(LocalDate.now(home)) { result -> result.onSuccess { list -> main.post { if (demoScene < 0) { sensed = list; showWearer() } } } }
+            relay?.reminders { result -> result.onSuccess { list -> main.post { if (demoScene < 0) { reminders = list; showWearer() } } } }
+            relay?.where { result -> main.post { if (demoScene < 0) { fix = result.getOrNull(); showWearer() } } }
+        }
+        showWearer()
+    }
+
+    /** Decides the card and shows it on the phone and, when connected, on the glasses. */
+    private fun showWearer() {
+        if (!::wearer.isInitialized) return
+        val now = wearerNow()
+        val quietNight = nightAnsweredAt?.let { java.time.Duration.between(it, Instant.now()).toMinutes() < 10 } == true
+        var card = WearerBrain.decide(WearerInputs(now, reminders, fix, sensed, asked, null))
+        if (quietNight && card is Card.Night) card = WearerBrain.decide(WearerInputs(now, reminders, null, emptyList(), asked, null))
+        wearer.setClock(now.toLocalTime())
+        wearer.show(card)
+        if (card != shownCard) {
+            shownCard = card
+            cardJob?.cancel()
+            cardJob = lifecycleScope.launch { glasses.showCard(card, ::finishReminder) }
+        }
+    }
+
+    private fun finishReminder(id: String) {
+        reminders = reminders.map { if (it.id == id) it.copy(state = Reminder.State.DONE) else it }
+        showWearer()
+        relay?.done(id) { main.post { refreshWearer() } }
+    }
+
+    /** Example scenes for demos and setup checks, without sensors, relay or glasses. */
+    private fun nextDemoScene() {
+        demoScene = (demoScene + 1) % DEMO_SCENES
+        val today = ZonedDateTime.now(home).withSecond(0).withNano(0)
+        fun at(h: Int, m: Int) = today.withHour(h).withMinute(m)
+        val pills = Reminder("demo-pills", "Morning pills", "08:00", WearerBrain.PILL_BOX, Reminder.State.DUE)
+        val room = { box: Way?, door: Way?, seen: List<Sighting> ->
+            Fix(true, listOfNotNull(box?.let { Place(WearerBrain.PILL_BOX, it) }, door?.let { Place(WearerBrain.FRONT_DOOR, it) }), seen)
+        }
+        reminders = emptyList(); fix = null; sensed = emptyList(); asked = null; nightAnsweredAt = null
+        demoNow = at(8, 5)
+        when (demoScene) {
+            0 -> { reminders = listOf(pills); fix = room(Way(3.4, 40), Way(6.0, -150), emptyList()) }
+            1 -> { reminders = listOf(pills); fix = room(Way(0.8, -8), Way(5.0, 170), emptyList()) }
+            2 -> { demoNow = at(8, 41); sensed = listOf(Sensed("pillbox_open", at(8, 0))); asked = Asked(Topic.Pills, demoNow!!.toInstant(), null) }
+            3 -> { demoNow = at(8, 41); fix = room(Way(4.2, 120), null, emptyList()); asked = Asked(Topic.Pills, demoNow!!.toInstant(), null) }
+            4 -> { demoNow = at(10, 30); fix = room(null, Way(1.2, 0), listOf(Sighting("keys", "Hall table", "09:12", Way(1.5, 35)), Sighting("wallet", "Kitchen", "08:50", null))) }
+            5 -> { demoNow = at(3, 11); sensed = listOf(Sensed("door_open", at(3, 10))) }
+            6 -> { demoNow = at(9, 45); fix = room(null, null, listOf(Sighting("keys", "Pill box", "09:40", Way(2.5, -70)))); asked = Asked(Topic.Item("keys"), demoNow!!.toInstant(), null) }
+            7 -> { demoNow = at(8, 20); sensed = listOf(Sensed("door_open", at(8, 14)), Sensed("door_closed", at(8, 15))); asked = Asked(Topic.Door, demoNow!!.toInstant(), null) }
+            else -> { demoNow = at(12, 30); reminders = listOf(Reminder("demo-evening", "Evening pills", "20:00", WearerBrain.PILL_BOX, Reminder.State.LATER)) }
+        }
+        status.text = "Wearer demo scene ${demoScene + 1} of $DEMO_SCENES"
+        wearer.setStatus("")
+        showWearer()
+    }
+
     override fun onStop() {
         // Meta registration and consent intentionally leave this Activity briefly.
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
+        main.removeCallbacks(refresher)
         if (!glasses.isExternalFlowPending) { glasses.stopListening(); glasses.suspendLifecycle() }
         super.onStop()
     }
     override fun onResume() {
         super.onResume()
+        main.removeCallbacks(refresher); main.post(refresher)
         if (::glasses.isInitialized) glasses.onResume()
     }
+    private companion object { const val DEMO_SCENES = 9 }
     override fun onDestroy() {
         recognizer?.destroy(); glasses.close(); audio.close()
         super.onDestroy()
