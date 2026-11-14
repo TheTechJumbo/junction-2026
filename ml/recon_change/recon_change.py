@@ -16,7 +16,10 @@ false alarm. The thresholds come from how noisy the depth is inside the before c
 between the two clips, whichever is worse.
 
 The control cannot see errors that only show up between the two clips, so a clean control is
-not proof. On video where the second clip looks from new viewpoints, expect some false changes.
+not proof. When the clips line up worse with each other than frames of one clip do, a tall object
+lands in a slightly different place and looks like "gone here, appeared there". The look-alike
+check removes that: a flagged surface is dropped when the other clip has a surface that looks the
+same (DINOv2 patch features, which VGGT computes anyway) within reach of it.
 """
 import argparse
 import json
@@ -33,6 +36,12 @@ EDGE = 0.04  # neighbouring pixels whose depth differs by more than this fractio
 # misaligned by more than frames of one clip are, which makes a tall object look moved. 15 clears
 # that on the test videos; much larger windows hide small objects on floors seen at an angle.
 WINDOW = 15
+# Look-alike check. How far (as a fraction of the viewing distance) to search the other clip for
+# the same-looking surface: REACH_PER_SIGMA times the depth noise the clips have between them
+# beyond what one clip has inside itself, at most REACH_MAX. Well-aligned clips get a reach
+# below one and a half image patches, which switches the check off, so nothing changes for them.
+REACH_PER_SIGMA, REACH_MAX = 15.0, 0.15
+FEAT_DIM = 256  # patch features are reduced to this many dimensions before they are stored
 GREEN, RED = (60, 220, 60), (60, 60, 235)  # BGR
 
 
@@ -45,6 +54,7 @@ class Recon:
     K: np.ndarray  # (S, 3, 3) camera intrinsics for the H x W image
     E: np.ndarray  # (S, 3, 4) world -> camera, OpenCV convention: x_cam = R @ x_world + t
     rgb: np.ndarray  # (S, H, W, 3) uint8
+    feat: np.ndarray = None  # (S, H/14, W/14, C) what each image patch looks like; None = no look-alike check
 
 
 # ----------------------------------------------------------------------------- frames
@@ -120,8 +130,14 @@ def reconstruct(model, frames_bgr):
     dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
     torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
-    with torch.no_grad(), torch.autocast("cuda", dtype=dtype):
-        pred = model(images)
+    tokens = {}  # VGGT's first stage is a DINOv2 backbone: keep its patch tokens, they cost nothing extra
+    hook = model.aggregator.patch_embed.register_forward_hook(
+        lambda module, args, out: tokens.update(x=out["x_norm_patchtokens"] if isinstance(out, dict) else out))
+    try:
+        with torch.no_grad(), torch.autocast("cuda", dtype=dtype):
+            pred = model(images)
+    finally:
+        hook.remove()
     E, K = pose_encoding_to_extri_intri(pred["pose_enc"], images.shape[-2:])
     torch.cuda.synchronize()
     print(f"VGGT: {len(rgb)} frames at {W}x{H} | inference {time.time() - t0:.1f} s, "
@@ -130,7 +146,21 @@ def reconstruct(model, frames_bgr):
     def f32(t):
         return t.float().cpu().numpy()
 
-    return Recon(depth=f32(pred["depth"])[0, ..., 0], conf=f32(pred["depth_conf"])[0], K=f32(K)[0], E=f32(E)[0], rgb=rgb)
+    return Recon(depth=f32(pred["depth"])[0, ..., 0], conf=f32(pred["depth_conf"])[0], K=f32(K)[0], E=f32(E)[0], rgb=rgb,
+                 feat=reduce_features(tokens["x"], H // 14, W // 14) if "x" in tokens else None)
+
+
+def reduce_features(tokens, h, w, dim=FEAT_DIM):
+    """Patch tokens (S, h*w, C) -> (S, h, w, dim) float16. Raw DINOv2 tokens share a large common
+    part (every pair has cosine > 0.9); removing the mean and keeping the main directions of this
+    scene makes "looks the same" and "looks different" far apart, and the result 4x smaller."""
+    import torch
+
+    x = tokens.float().reshape(-1, tokens.shape[-1])
+    x = x - x.mean(0, keepdim=True)
+    if dim < min(x.shape):
+        x = x @ torch.pca_lowrank(x, q=dim, center=False, niter=4)[2]
+    return x.reshape(len(tokens), h, w, -1).half().cpu().numpy()
 
 
 def run_vggt(frames_bgr, model_id="facebook/VGGT-1B"):
@@ -225,7 +255,7 @@ def votes(r, valid, near, pts, frames, tol_agree, tol_free):
     return agree, free, seen
 
 
-def compare(r, valid, near_own, near_cross, query, ref, tol_own, tol_cross):
+def compare(r, valid, near_own, near_cross, query, ref, tol_own, tol_cross, look=None):
     """Flag pixels of the query frames whose surface the ref frames looked straight through.
 
     Two tests, both needed:
@@ -235,11 +265,14 @@ def compare(r, valid, near_own, near_cross, query, ref, tol_own, tol_cross):
       2. The other clip saw empty space there: enough ref frames look through the point, and
          next to none saw the same surface.
     Each test has its own (agree, see-through) tolerances and its own search window, because
-    frames of one clip line up with each other much better than the two clips line up."""
+    frames of one clip line up with each other much better than the two clips line up.
+    With look = (reach, min_sim), a third test drops flags that have a look-alike surface in
+    the ref frames (see has_lookalike)."""
     need = 2 if len(ref) >= 3 else 1
     own_need = 2 if len(query) >= 4 else 1
     points, frames, pixels = [], [], []
-    seen_n = agree_n = 0
+    seen_n = agree_n = dropped = 0
+    table = patch_table(r, valid, ref) if look else None
     for q in query:
         pix = np.flatnonzero(valid[q])
         pts = unproject(r.depth[q], r.K[q], r.E[q]).reshape(-1, 3)[pix]
@@ -250,13 +283,81 @@ def compare(r, valid, near_own, near_cross, query, ref, tol_own, tol_cross):
         pix, pts = pix[real], pts[real]
         agree, free, _ = votes(r, valid, near_cross, pts, ref, *tol_cross)
         flag = (free >= need) & (6 * agree <= free)
+        if look and flag.any():
+            alike = has_lookalike(r, q, pix[flag], pts[flag], table, *look, need)
+            dropped += int(alike.sum())
+            flag[flag] = ~alike
         points.append(pts[flag])
         frames.append(np.full(int(flag.sum()), q))
         pixels.append(pix[flag])
     return {
         "points": np.concatenate(points), "frames": np.concatenate(frames), "pixels": np.concatenate(pixels),
         "consistency": agree_n / max(seen_n, 1),  # how often a clip's own frames agree with each other
+        "dropped": dropped,  # flagged pixels removed by the look-alike check
     }
+
+
+def patch_table(r, valid, frames):
+    """One row per image patch of these frames: where its surface is in the world (the patch
+    centre at the median trusted depth), what it looks like, and which frame it is from."""
+    H, W = r.depth.shape[1:]
+    h, w = r.feat.shape[1:3]
+    ph, pw = H // h, W // w
+    pos, feat, frame = [], [], []
+    for j in frames:
+        d = np.where(valid[j], r.depth[j], np.nan)[:h * ph, :w * pw]
+        d = d.reshape(h, ph, w, pw).transpose(0, 2, 1, 3).reshape(h, w, ph * pw)
+        ok = np.isfinite(d).sum(-1) >= ph * pw // 4
+        v, u = np.nonzero(ok)
+        z = np.nanmedian(d[ok], -1)
+        K, E = r.K[j], r.E[j]
+        cam = np.stack([((u + 0.5) * pw - 0.5 - K[0, 2]) / K[0, 0] * z, ((v + 0.5) * ph - 0.5 - K[1, 2]) / K[1, 1] * z, z], -1)
+        pos.append((cam - E[:, 3]) @ E[:, :3])
+        feat.append(r.feat[j][ok])
+        frame.append(np.full(len(z), j))
+    return np.concatenate(pos).astype(np.float32), np.concatenate(feat), np.concatenate(frame)
+
+
+def distances(a, b):
+    """Distance from every row of a to every row of b, without building all (A, B, 3) differences."""
+    a, b = a.astype(np.float64), b.astype(np.float64)
+    return np.sqrt(np.maximum((a * a).sum(1)[:, None] + (b * b).sum(1)[None] - 2.0 * a @ b.T, 0.0))
+
+
+def same_place_similarity(r, a, b, seed=0, sample=1500):
+    """How alike two views of one unchanged surface look: cosine similarity between patches of
+    table a and the patch of table b that sits at the same place (within 1.5% of the distance).
+    Returns the lower quartile, or None if the tables hardly overlap."""
+    (pa, fa, qa), (pb, fb, _) = a, b
+    if not len(pa) or not len(pb):
+        return None
+    pick = np.random.default_rng(seed).choice(len(pa), min(sample, len(pa)), replace=False)
+    z = np.einsum("ij,ij->i", pa[pick], r.E[qa[pick], 2, :3]) + r.E[qa[pick], 2, 3]
+    dist = distances(pa[pick], pb)
+    nearest = dist.argmin(1)
+    close = dist[np.arange(len(pick)), nearest] < 0.015 * z
+    if close.sum() < 50:
+        return None
+    return float(np.percentile(np.einsum("ij,ij->i", fa[pick][close], fb[nearest[close]]), 25))
+
+
+def has_lookalike(r, q, pix, pts, table, reach, min_sim, need):
+    """For flagged pixels of frame q: does the other clip have a surface within reach (a fraction
+    of the viewing distance) that looks the same, in at least `need` of its frames? If so the
+    flag is the same object reconstructed in a slightly different place, not a change."""
+    pos, feat, frame = table
+    H, W = r.depth.shape[1:]
+    h, w = r.feat.shape[1:3]
+    patch = (pix // W) // (H // h) * w + (pix % W) // (W // w)
+    ids, inv = np.unique(np.minimum(patch, h * w - 1), return_inverse=True)
+    inv = inv.ravel()
+    centre = np.stack([np.bincount(inv, pts[:, k], len(ids)) for k in range(3)], 1) / np.bincount(inv, minlength=len(ids))[:, None]
+    z = centre @ r.E[q][2, :3] + r.E[q][2, 3]
+    hit = (distances(centre, pos) < reach * z[:, None]) & (r.feat[q].reshape(h * w, -1)[ids] @ feat.T > min_sim)
+    count = np.zeros(len(ids), np.int32)
+    for j in np.unique(frame):
+        count += hit[:, frame == j].any(1)
+    return (count >= need)[inv]
 
 
 def cluster(points, frames, voxel, min_voxels, min_frames):
@@ -311,8 +412,9 @@ def cluster(points, frames, voxel, min_voxels, min_frames):
 
 
 # ----------------------------------------------------------------------------- analysis
-def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WINDOW, cross=True):
-    """Find what appeared and what is gone between the first n_before frames and the rest."""
+def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WINDOW, cross=True, lookalike=True, reach=None):
+    """Find what appeared and what is gone between the first n_before frames and the rest.
+    lookalike=False switches the look-alike check off; reach overrides how far it searches."""
     S = len(r.depth)
     reference = list(range(0, n_before, 2))  # half of the before clip
     control = list(range(1, n_before, 2))  # the other half: same scene, nothing changed
@@ -328,13 +430,25 @@ def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WIND
     worst = max(sigma, sigma_cross)
     tol_agree, tol_free = float(np.clip(3 * worst, 0.02, 0.12)), float(np.clip(6 * worst, 0.05, 0.40))
 
-    def run(query, ref):
-        found = compare(r, valid, near_own, near_cross, query, ref, tol_own, (tol_agree, tol_free))
+    # Look-alike check: only between the clips, and only as far as they are misaligned.
+    look = None
+    if lookalike and r.feat is not None:
+        if reach is None:
+            reach = min(REACH_PER_SIGMA * float(np.sqrt(max(sigma_cross ** 2 - sigma ** 2, 0.0))), REACH_MAX)
+        patch_reach = 1.5 * (r.depth.shape[2] // r.feat.shape[2]) / float(np.median(r.K[:, 0, 0]))  # 1.5 patches, as a fraction of distance
+        if reach >= patch_reach:
+            unit = r.feat.astype(np.float32)
+            r = Recon(r.depth, r.conf, r.K, r.E, r.rgb, unit / (np.linalg.norm(unit, axis=-1, keepdims=True) + 1e-6))
+            typical = same_place_similarity(r, patch_table(r, valid, after), patch_table(r, valid, reference))
+            look = (float(reach), float(np.clip(0.7 if typical is None else typical, 0.6, 0.85)))
+
+    def run(query, ref, look=None):
+        found = compare(r, valid, near_own, near_cross, query, ref, tol_own, (tol_agree, tol_free), look)
         min_frames = 2 if len(query) >= 3 else 1
         found["clusters"], found["member"] = cluster(found["points"], found["frames"], voxel, min_voxels, min_frames)
         return found
 
-    appeared, gone = run(after, reference), run(reference, after)
+    appeared, gone = run(after, reference, look), run(reference, after, look)
     false_a, false_b = run(control, reference), run(reference, control)
 
     to_cm = 100 * typical_m / scale  # scene units -> cm, if a typical viewing distance is typical_m
@@ -363,6 +477,9 @@ def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WIND
         "smallest_detectable_step_cm_at_1m": round(100 * tol_free, 1),
         "thresholds": {"agree": round(tol_agree, 3), "see_through": round(tol_free, 3), "window_px": window,
                        "voxel_cm_approx": round(voxel * to_cm, 1)},
+        "lookalike_check": {"active": look is not None, "reach": round(look[0], 3) if look else 0.0,
+                            "min_similarity": round(look[1], 3) if look else None,
+                            "pixels_dropped": appeared["dropped"] + gone["dropped"]},
         "appeared": appeared["clusters"], "gone": gone["clusters"], "false_alarms_in_control": false,
     }
     return report, {"valid": valid, "appeared": appeared, "gone": gone, "reference": reference, "after": after}
@@ -450,13 +567,14 @@ def main():
     ap.add_argument("--typical-distance-m", type=float, default=2.0, help="rough camera-to-scene distance, only used to print sizes in cm")
     ap.add_argument("--conf-pct", type=float, default=25.0, help="drop this percentage of least-confident pixels")
     ap.add_argument("--save-recon", action="store_true", help="also save depth and cameras to recon.npz")
+    ap.add_argument("--no-lookalike", action="store_true", help="switch off the look-alike check (see the top of this file)")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
     if args.from_recon:
         saved = np.load(args.from_recon)
-        recon = Recon(*(saved[k] for k in ("depth", "conf", "K", "E", "rgb")))
+        recon = Recon(*(saved[k] for k in ("depth", "conf", "K", "E", "rgb")), saved["feat"] if "feat" in saved else None)
         n_before = int(saved["n_before"])
     elif args.before and args.after:
         before = sample_frames(args.before, 2 * args.n_after)
@@ -466,12 +584,12 @@ def main():
             raise SystemExit("Need at least 6 before frames and 3 after frames. Record longer clips.")
         recon, n_before = run_vggt(before + after), len(before)
         if args.save_recon:
-            np.savez_compressed(out / "recon.npz", n_before=n_before, **recon.__dict__)
+            np.savez_compressed(out / "recon.npz", n_before=n_before, **{k: v for k, v in recon.__dict__.items() if v is not None})
     else:
         raise SystemExit("Give --before and --after, or --from-recon.")
 
     t0 = time.time()
-    report, detail = analyse(recon, n_before, args.conf_pct, args.typical_distance_m)
+    report, detail = analyse(recon, n_before, args.conf_pct, args.typical_distance_m, lookalike=not args.no_lookalike)
     print(f"Change detection: {time.time() - t0:.1f} s")
     (out / "report.json").write_text(json.dumps(report, indent=2))
     contact_sheet(recon, detail, out / "changes.jpg")
