@@ -366,10 +366,12 @@ pixel camera.
   (71 %) with the recommended rule (keys 28 of 45, wallet 15 of 23, phone 32 of 42, remote 53 of
   66, glasses 1 of 5). In photos with nobody in them at all: 59 photos, 145 objects, 59 found
   today (41 %), 98 (68 %) with the rule. So lying items are **not** easier than held ones on
-  these photos: many are flat-lays of everything in a bag, with dozens of small things side by
-  side. These counts mix the tuning half in, because the held-out half alone is too small.
-- **"Uncluttered" could not be isolated** from the labels, and I did not go through the 84
-  photos by eye.
+  these photos. These counts mix the tuning half in, because the held-out half alone is too small.
+- **What these photos look like.** I looked at half of them (42). Most are ordinary desks,
+  tables, sofas and TV stands with a phone, a remote or a wallet lying on them, which is close to
+  our case, and things are missed there as often as elsewhere. About one in five is cluttered on
+  purpose: everything from a bag laid out, or a pile of phones or remotes. "Uncluttered" cannot
+  be picked out from the labels, so there is no number for a tidy table alone.
 - **Size is the real gap.** Keys are about 8 cm. At 1 to 2 m from a 1280 px camera with a 70
   degree view they are 27 to 55 px long in the detector's whole-picture pass. "Over 64 px" is
   keys closer than 0.9 m. For the demo distance the columns to read are the two smaller ones:
