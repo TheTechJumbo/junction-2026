@@ -1,0 +1,7 @@
+.venv/
+data/
+*.safetensors
+*.pt
+*.pth
+*.sqlite*
+*.env
