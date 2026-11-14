@@ -27,8 +27,13 @@
 
   The arrow, the distance and the mini map are drawn from the STEADY position when the relay sends
   one ("stable" in the /where reply, made by track.py from the stream of fixes), with its confidence
-  percentage in small type. When "stable" says no arrow, the display says "Look around slowly".
-  &stable=0 draws from the newest fix alone, as before. &limit=30 tries another limit for the arrow.
+  percentage in small type. The arrow is drawn whenever the steady position is "steady" (two photos
+  in a row agree): chosen for the demo on 14 Nov, because at one photo every 4 s the stricter rule
+  kept a still wearer waiting about 16 s for an arrow and showed none while walking.
+  &limit=sure uses the relay's stricter rule instead (track.py "show": the confidence expected at the
+  next photo must reach 40%, and the arrow goes below 20%); it is right more often and shows an arrow
+  far less (eval/TRACK_RESULTS.md). &limit=30 tries a limit of your own. When there is no arrow the
+  display says "Look around slowly". &stable=0 draws from the newest fix alone, as before.
   In the sample room, "Noisy photos" feeds made-up photos (jittery, sometimes lost, sometimes far
   off) through the same steadying, so it can be seen without a relay.
 -->
@@ -127,7 +132,9 @@ let target = query.get('to') || '';
 let fix = null;                       // the latest fix from the relay (or the sample room)
 let stable = null;                    // the steady position made from the stream of fixes (relay: fix.stable; sample room: the tracker below)
 const useStable = query.get('stable') !== '0';
-const ownLimit = query.has('limit') ? +query.get('limit') : null;  // try another limit for the arrow than the relay's
+// The limit for drawing an arrow: 0 = whenever the answer is steady (the default), a number = the confidence
+// expected at the next photo must reach it, null (&limit=sure) = the relay's own stricter rule.
+const ownLimit = query.get('limit') === 'sure' ? null : query.has('limit') && isFinite(+query.get('limit')) ? +query.get('limit') : 0;
 let poseSeen = '', headingAtFix = 0;  // the pose the display last stood on; its heading, for the compass
 let me = { x: 0, y: 0, heading: 0 };  // where the wearer is now: the fix, moved by the compass or the demo keys
 let fixSeen = '', compass = null, compassAtFix = null, gotAt = 0;
