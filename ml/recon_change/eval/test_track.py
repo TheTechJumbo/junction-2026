@@ -8,7 +8,10 @@ No cluster, no data, no numpy: made-up fixes with known answers.
 import json
 import math
 import random
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -32,6 +35,66 @@ def steady_tracker(t=0.0, step=1.0, n=3):
         out = tr.update(fix(), t + i * step)
     assert out["state"] == "steady" and out["show"], out
     return tr, t + (n - 1) * step
+
+
+def same_in_the_display():
+    """live/hud.html carries a port of the tracker for its sample room. Feed both the same made-up
+    stream of fixes and compare every answer. Needs Node.js; without it the check is skipped."""
+    node = shutil.which("node")
+    if not node:
+        return "skipped (Node.js is not installed)"
+    page = (Path(__file__).resolve().parent.parent / "live" / "hud.html").read_text(encoding="utf-8")
+    port = page.split("// <tracker>")[1].split("// </tracker>")[0]
+    rng = random.Random(7)
+    t, x, y, h, stream = 0.0, 0.0, 0.0, 0.0, []
+    for i in range(400):
+        t += rng.choice([0.5, 1.0, 2.0, 3.0, 6.0, 6.0, 8.0]) if rng.random() > 0.02 else 45.0
+        x, y, h = x + rng.uniform(-0.6, 0.6), y + rng.uniform(-0.6, 0.6), track.wrap(h + rng.uniform(-40, 40))
+        r = rng.random()
+        if r < 0.2:
+            f = fix(rng.uniform(-5, 5), rng.uniform(-5, 5), rng.uniform(-180, 180), state="lost", score=0.05)
+        elif r < 0.3:
+            f = fix(x + rng.uniform(-9, 9), y + rng.uniform(-9, 9), rng.uniform(-180, 180), score=0.6)
+        else:
+            f = fix(x + rng.gauss(0, 0.06), y + rng.gauss(0, 0.06), h + rng.gauss(0, 3), state="unsure" if r < 0.4 else "found",
+                    score=0.4 if r < 0.4 else 0.9)
+        if i == 200:
+            f["waypoints"] = f["waypoints"][:1]
+        stream.append({"fix": f, "at": round(t, 2), "look": round(t + rng.choice([0.5, 2.0, 5.0, 12.0, 31.0]), 2)})
+    script = port + """
+const stream = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const tracker = makeTracker(), out = [];
+for (const step of stream) { out.push(tracker.update(step.fix, step.at)); out.push(tracker.current(step.look)); }
+console.log(JSON.stringify(out));
+"""
+    with tempfile.TemporaryDirectory() as folder:
+        file = Path(folder) / "port.js"
+        file.write_text(script, encoding="utf-8")
+        theirs = json.loads(subprocess.run([node, str(file)], input=json.dumps(stream), capture_output=True, text=True, check=True).stdout)
+    tr, ours = track.Tracker(zone="kitchen"), []
+    for step in stream:
+        ours.append(tr.update(step["fix"], step["at"]))
+        ours.append(tr.current(step["look"]))
+
+    def close(a, b, slack):
+        return (a is None and b is None) or (a is not None and b is not None and abs(a - b) <= slack)
+
+    for i, (a, b) in enumerate(zip(ours, theirs)):
+        where = f"answer {i}: track.py {a} / hud.html {b}"
+        assert (a["state"], a["show"], a["agree"], a["of"], a["waiting"]) == (b["state"], b["show"], b["agree"], b["of"], b["waiting"]), where
+        assert close(a["age_s"], b["age_s"], 0.11) and abs(a["confidence_pct"] - b["confidence_pct"]) <= 1 and abs(a["next_pct"] - b["next_pct"]) <= 1, where
+        assert (a["position"] is None) == (b["position"] is None), where
+        if a["position"] is not None:
+            assert max(abs(p - q) for p, q in zip(a["position"], b["position"])) <= 0.011, where
+            assert abs(track.wrap(a["heading_deg"] - b["heading_deg"])) <= 1, where
+        assert [w["name"] for w in a["waypoints"]] == [w["name"] for w in b["waypoints"]], where
+        for w, v in zip(a["waypoints"], b["waypoints"]):
+            assert close(w["distance_m"], v["distance_m"], 0.11), where
+            assert (w["bearing_deg"] is None and v["bearing_deg"] is None) or w["distance_m"] < 0.3 or \
+                abs(track.wrap(w["bearing_deg"] - v["bearing_deg"])) <= 2, where
+    states = [a["state"] for a in ours]
+    assert all(states.count(k) > 20 for k in ("steady", "settling", "lost")), "the made-up stream must visit every state"
+    return f"same answers on {len(ours)} moments"
 
 
 def main():
@@ -158,7 +221,7 @@ def main():
     f["waypoints"] = [{"name": "kettle", "position": [1.0, 1.0, 0.0]}]
     out = tr.update(f, t + 1)
     assert [w["name"] for w in out["waypoints"]] == ["kettle"], out
-    print("track: all checks passed")
+    print("track: all checks passed; the display's copy of the tracker: " + same_in_the_display())
 
 
 if __name__ == "__main__":

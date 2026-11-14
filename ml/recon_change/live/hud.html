@@ -24,6 +24,13 @@
   /hud?k=KEY            live, from the relay
   /hud?k=KEY&demo=1     sample room, no relay needed: arrow keys or the buttons turn and walk,
                         and the answers, the reminder and the pill box are stand-ins
+
+  The arrow, the distance and the mini map are drawn from the STEADY position when the relay sends
+  one ("stable" in the /where reply, made by track.py from the stream of fixes), with its confidence
+  percentage in small type. When "stable" says no arrow, the display says "Look around slowly".
+  &stable=0 draws from the newest fix alone, as before. &limit=30 tries another limit for the arrow.
+  In the sample room, "Noisy photos" feeds made-up photos (jittery, sometimes lost, sometimes far
+  off) through the same steadying, so it can be seen without a relay.
 -->
 <style>
   :root { color-scheme: dark; }
@@ -93,6 +100,7 @@
 <div class="row" id="pad" hidden>
   <button data-turn="-15">Turn left</button><button data-walk="0.4">Walk</button><button data-turn="15">Turn right</button>
   <button data-sample="remind">Remind me</button><button data-sample="open">Open the pill box</button>
+  <button id="noisy">Noisy photos</button>
 </div>
 <div id="note"></div>
 <video id="video" playsinline muted hidden></video>
@@ -117,6 +125,10 @@ let demo = query.has('demo');
 let zone = query.get('zone') || '';
 let target = query.get('to') || '';
 let fix = null;                       // the latest fix from the relay (or the sample room)
+let stable = null;                    // the steady position made from the stream of fixes (relay: fix.stable; sample room: the tracker below)
+const useStable = query.get('stable') !== '0';
+const ownLimit = query.has('limit') ? +query.get('limit') : null;  // try another limit for the arrow than the relay's
+let poseSeen = '', headingAtFix = 0;  // the pose the display last stood on; its heading, for the compass
 let me = { x: 0, y: 0, heading: 0 };  // where the wearer is now: the fix, moved by the compass or the demo keys
 let fixSeen = '', compass = null, compassAtFix = null, gotAt = 0;
 let due = null, guidedFor = '';       // the reminder that is due now; the one the arrow was last pointed for
@@ -125,7 +137,11 @@ const sample = { pills: '', keys: { name: 'keys', position: [-1.5, 1.9, 0], time
 
 // Everything the arrow can point to: the named places, then the items a position fix has seen.
 // Not an item in doubt: the glasses have since looked at that spot and did not find it there.
-const spots = () => fix ? [...fix.waypoints, ...(fix.seen || []).filter(s => !s.doubt).map(s => ({ ...s, item: true }))] : [];
+const spots = () => fix ? [...(stable && stable.waypoints.length ? stable.waypoints : fix.waypoints),
+                           ...(fix.seen || []).filter(s => !s.doubt).map(s => ({ ...s, item: true }))] : [];
+// Is there an arrow to draw? With a steady position, it decides (track.py: "show"). Without one, the newest fix does.
+const noArrow = () => !fix || (stable ? !(ownLimit == null ? stable.show : stable.state === 'steady' && stable.next_pct >= ownLimit)
+                                      : fix.state === 'lost');
 
 function fromMe(position) {  // metres, and degrees from straight ahead (+ to the right)
   const east = position[0] - me.x, north = position[1] - me.y;
@@ -139,7 +155,7 @@ function draw() {
   if (due && due.place && guidedFor !== due.id + due.due_at && places.some(p => p.name === due.place)) {
     target = due.place; guidedFor = due.id + due.due_at;
   }
-  const lost = !fix || fix.state === 'lost';
+  const lost = noArrow();
   const to = places.find(p => p.name === target) || places[0];
   $('place').textContent = to ? to.name : (fix ? 'No places named yet' : 'Waiting for a position');
   $('going').textContent = due ? due.text.toUpperCase().slice(0, 34) : to && to.item ? `LAST SEEN ${to.time || ''}` : 'GOING TO';
@@ -155,12 +171,18 @@ function draw() {
   $('turn').textContent = !fix ? '' : lost ? 'Look around slowly' : !to ? '' : there ? 'You are there'
     : off <= 15 ? 'Straight ahead' : off <= 60 ? `Slightly ${side}` : off <= 135 ? `Turn ${side}` : 'Turn around';
   $('far').textContent = lost || !to || there ? '' : `about ${far < 3 ? (Math.round(far * 2) / 2 || 0.5) : Math.round(far)} m`;
-  $('age').textContent = !fix ? '' : demo ? 'sample room' : `${fix.state === 'unsure' ? 'rough fix, ' : ''}updated ${Math.round((Date.now() - gotAt) / 1000 + (fix.age_s || 0))} s ago`;
+  const sure = !stable ? '' : stable.state === 'lost' ? 'not sure where you are'
+    : `${stable.confidence_pct}% sure · ${stable.agree} of ${stable.of} photos agree · ${Math.round(stable.age_s)} s ago`;
+  $('age').textContent = !fix ? '' : stable ? sure : demo ? 'sample room'
+    : `${fix.state === 'unsure' ? 'rough fix, ' : ''}updated ${Math.round((Date.now() - gotAt) / 1000 + (fix.age_s || 0))} s ago`;
 
   // Mini map, heading up: 1 m = 26 px, the wearer at the centre. Places are yellow, items are blue.
   const dots = fix ? fix.map.points.map(p => `<rect x="${(p[0] * 26).toFixed(1)}" y="${(-p[1] * 26).toFixed(1)}" width="2.4" height="2.4" fill="#2f7d55"/>`).join('') : '';
   const pins = places.map(p => `<circle cx="${p.position[0] * 26}" cy="${-p.position[1] * 26}" r="${p === to ? 8 : 5}" fill="${p.item ? (p === to ? '#7fb8ff' : '#3d6fa8') : (p === to ? '#ffd23f' : '#8a7a2a')}"/>`).join('');
-  setHTML('map', dots + pins);
+  // Sample room with noisy photos: what the newest photo alone says (red ring) and where the wearer really is (white dot).
+  const marks = !noisy ? '' : (noisy.raw && noisy.raw.position ? `<circle cx="${noisy.raw.position[0] * 26}" cy="${-noisy.raw.position[1] * 26}" r="6" fill="none" stroke="#ff6b6b" stroke-width="2"/>` : '')
+    + `<circle cx="${noisy.real.x * 26}" cy="${-noisy.real.y * 26}" r="3" fill="#fff"/>`;
+  setHTML('map', dots + pins + marks);
   $('map').setAttribute('transform', `rotate(${(-me.heading).toFixed(1)}) translate(${(-me.x * 26).toFixed(1)} ${(me.y * 26).toFixed(1)})`);
 
   setHTML('targets', places.map(p => `<button class="${p === to ? 'on' : ''}${p.item ? ' item' : ''}" data-to="${encodeURIComponent(p.name)}">${esc(p.name)}${p.item ? ` · seen ${esc(p.time || '')}` : ''}</button>`).join(''));
@@ -170,11 +192,15 @@ function draw() {
 
 function take(next) {
   fix = next; gotAt = Date.now();
-  const stamp = next.ts + next.job;
-  if (stamp !== fixSeen) {  // a new fix: stand where it says, and remember the compass reading at that moment
-    fixSeen = stamp;
-    me = { x: next.position[0], y: next.position[1], heading: next.heading_deg };
-    compassAtFix = compass;
+  stable = useStable && next.stable || null;
+  // Stand on the steady pose when there is one, else on the newest fix. Only when that pose is a new
+  // one: a pose that is being held (a lost photo in between) keeps the compass turning from where it was.
+  const pose = stable && stable.position ? stable : next;
+  const stamp = stable && stable.position ? JSON.stringify([stable.position, stable.heading_deg]) : next.ts + next.job;
+  if (stamp !== poseSeen && pose.position) {
+    poseSeen = stamp; fixSeen = next.ts + next.job;
+    me = { x: pose.position[0], y: pose.position[1], heading: pose.heading_deg };
+    headingAtFix = pose.heading_deg; compassAtFix = compass;
   }
   draw();
 }
@@ -217,7 +243,7 @@ async function say(text) {
 function guide(name) {
   if (!name || !spots().some(p => p.name === name)) return '';
   target = name;
-  return !fix || fix.state === 'lost' ? 'Look around slowly so I can find you' : `Showing the way to the ${name}`;
+  return noArrow() ? 'Look around slowly so I can find you' : `Showing the way to the ${name}`;
 }
 
 // ---------------------------------------------------------------- questions
@@ -314,10 +340,158 @@ function sampleAnswer(question) {  // stand-ins with the wording of the real ans
 }
 
 function move(turn, walk) {
-  me.heading = wrap(me.heading + turn);
-  me.x += Math.sin(me.heading * Math.PI / 180) * walk;
-  me.y += Math.cos(me.heading * Math.PI / 180) * walk;
+  const who = noisy ? noisy.real : me;  // with noisy photos on, the buttons move the wearer, and the display has to find out
+  who.heading = wrap(who.heading + turn);
+  who.x += Math.sin(who.heading * Math.PI / 180) * walk;
+  who.y += Math.cos(who.heading * Math.PI / 180) * walk;
   draw();
+}
+
+// <tracker>
+// A port of track.py for the sample room, so the steadying can be seen without a relay. Live, the
+// relay runs track.py itself and this is not used. Keep the two in step: eval/test_track.py feeds
+// both the same fixes and compares the answers (when Node.js is installed).
+const T = { WALK: 1.2, TURN: 120, NOISE_M: 0.35, NOISE_DEG: 20, JITTER_M: 0.15, JITTER_DEG: 8, LOST_AFTER: 3, SILENCE: 30,
+            STEADY_AFTER: 2, KEEP: 5, SHOW: 40, HIDE: 20, CYCLE: 6, MAX_CYCLE: 10,
+            CAL: { bias: 0.617, score: 0.441, agree: 2.654, settling: -1.290, age_s: -0.322, moved_m: -0.553, turned_deg: -0.349 } };
+function makeTracker() {
+  const s = { state: 'lost', position: null, heading_deg: null, at: null, score: 0, run: 0, misses: 0, waiting: null, recent: [],
+              speed: 0, turn: 0, places: {}, showing: false };
+  const turnTo = (a, b) => ((b - a + 180) % 360 + 360) % 360 - 180;
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const good = r => r.kind === 'agree' || r.kind === 'start' || r.kind === 'jump';
+  const percent = f => Math.round(100 / (1 + Math.exp(-Object.keys(T.CAL).reduce((sum, k) => sum + T.CAL[k] * f[k], 0))));
+  const round = (v, n) => Math.round(v * 10 ** n) / 10 ** n;
+  function features(now) {
+    const age = s.at == null ? 0 : Math.max(0, now - s.at);
+    return { bias: 1, score: s.score, agree: s.recent.filter(good).length / T.KEEP, settling: s.state === 'settling' ? 1 : 0,
+             age_s: Math.min(age, 60), moved_m: Math.min(s.speed * age, 5), turned_deg: Math.min(s.turn * age, 180) };
+  }
+  function cycle() {
+    const gaps = s.recent.slice(1).map((r, i) => r.at - s.recent[i].at).filter(g => g > 0).sort((a, b) => a - b);
+    return gaps.length ? Math.max(0.5, Math.min(T.MAX_CYCLE, gaps[Math.floor(gaps.length / 2)])) : T.CYCLE;
+  }
+  function current(now) {
+    const age = s.at == null ? null : round(Math.max(0, now - s.at), 1);
+    const agree = s.recent.filter(good).length;
+    if (s.position == null || now - s.at > T.SILENCE)
+      return { state: 'lost', position: null, heading_deg: null, confidence_pct: 0, next_pct: 0, show: false, agree, of: s.recent.length,
+               age_s: age, waiting: !!s.waiting,
+               waypoints: Object.entries(s.places).map(([name, p]) => ({ name, distance_m: null, bearing_deg: null, position: p.map(v => round(v, 2)) })) };
+    const pct = percent(features(now)), hold = percent(features(Math.max(now, s.at + cycle())));
+    const waypoints = Object.entries(s.places).map(([name, p]) => {
+      const east = p[0] - s.position[0], north = p[1] - s.position[1];
+      return { name, distance_m: round(Math.hypot(east, north), 1), bearing_deg: Math.round(turnTo(s.heading_deg, Math.atan2(east, north) * 180 / Math.PI)),
+               position: p.map(v => round(v, 2)) };
+    });
+    return { state: s.state, position: s.position.map(v => round(v, 2)), heading_deg: Math.round(s.heading_deg), confidence_pct: pct, next_pct: hold,
+             show: s.state === 'steady' && hold >= (s.showing ? T.HIDE : T.SHOW), agree, of: s.recent.length, age_s: age, waiting: !!s.waiting, waypoints };
+  }
+  function stand(pos, head, now, score, run) {
+    Object.assign(s, { position: pos.map(v => round(v, 3)), heading_deg: round(turnTo(0, head), 2), at: now, score, run, misses: 0, waiting: null,
+                       state: run >= T.STEADY_AFTER ? 'steady' : 'settling' });
+  }
+  const note = (now, kind) => { s.recent = [...s.recent, { at: now, kind }].slice(-T.KEEP); };
+  function miss(now, why, keepWaiting) {
+    s.misses += 1;
+    if (!keepWaiting && s.waiting && now - s.waiting.at > T.SILENCE) s.waiting = null;
+    if (s.position != null && s.misses >= T.LOST_AFTER) Object.assign(s, { state: 'lost', position: null, heading_deg: null, at: null, run: 0, speed: 0, turn: 0 });
+    note(now, why);
+  }
+  function places(fix) {
+    if (!Array.isArray(fix.waypoints)) return;
+    const names = new Set();
+    for (const w of fix.waypoints) {
+      if (!w.name || w.position == null) continue;
+      names.add(w.name);
+      const old = s.places[w.name];
+      if (!old) s.places[w.name] = w.position.map(Number);
+      else if (fix.state === 'found') s.places[w.name] = old.map((o, i) => round(o + 0.3 * (w.position[i] - o), 3));
+    }
+    for (const name of Object.keys(s.places)) if (!names.has(name)) delete s.places[name];
+  }
+  function takeIn(fix, now) {
+    places(fix);
+    const score = +fix.confidence || 0;
+    const usable = (fix.state === 'found' || fix.state === 'unsure') && fix.position != null && fix.heading_deg != null;
+    const strong = usable && fix.state === 'found';
+    if (!usable) return miss(now, 'lost');
+    const pos = fix.position.map(Number), head = +fix.heading_deg;
+    if (s.position == null) {
+      if (!strong) return miss(now, 'unsure');
+      stand(pos, head, now, score, 1);
+      return note(now, 'start');
+    }
+    const dt = Math.max(0, now - s.at), d = dist(pos, s.position), dh = Math.abs(turnTo(s.heading_deg, head));
+    const same = d <= T.NOISE_M && dh <= T.NOISE_DEG;
+    const reachable = d <= T.NOISE_M + T.WALK * dt && dh <= T.NOISE_DEG + T.TURN * dt;
+    if (strong && reachable) {
+      if (dt > 0.3) { s.speed = 0.5 * s.speed + 0.5 * d / dt; s.turn = 0.5 * s.turn + 0.5 * dh / dt; }
+      const a = Math.max(0.5, Math.min(1, d / T.JITTER_M)), b = Math.max(0.5, Math.min(1, dh / T.JITTER_DEG));
+      stand(s.position.map((p, i) => p + a * (pos[i] - p)), s.heading_deg + b * turnTo(s.heading_deg, head), now, score, s.run + 1);
+      return note(now, 'agree');
+    }
+    if (!strong && same) {
+      stand(s.position.map((p, i) => p + 0.3 * (pos[i] - p)), s.heading_deg + 0.3 * turnTo(s.heading_deg, head), now, Math.max(score, 0), s.run + 1);
+      return note(now, 'agree');
+    }
+    if (!strong) return miss(now, 'unsure');
+    const w = s.waiting;
+    if (w && dist(pos, w.position) <= T.NOISE_M + T.WALK * Math.max(0, now - w.at)
+          && Math.abs(turnTo(w.heading_deg, head)) <= T.NOISE_DEG + T.TURN * Math.max(0, now - w.at)) {
+      s.speed = s.turn = 0;
+      stand(pos, head, now, score, 2);
+      return note(now, 'jump');
+    }
+    s.waiting = { position: pos, heading_deg: head, at: now };
+    miss(now, 'elsewhere', true);
+  }
+  function update(fix, now) {
+    s.showing = current(now).show;
+    takeIn(fix, now);
+    const out = current(now);
+    s.showing = out.show;
+    return out;
+  }
+  return { update, current };
+}
+// </tracker>
+
+// Sample room with noisy photos: a made-up photo every 2 seconds (live it is about every 6). Most are
+// right give or take a little, some come back lost or unsure, and now and then one is found far away.
+let noisy = null;
+function noisyPhoto() {
+  const real = noisy.real, r = Math.random(), bell = () => Math.random() + Math.random() + Math.random() - 1.5;
+  const now = Date.now() / 1000;
+  let photo, said;
+  if (r < 0.15) {
+    photo = { state: 'lost', confidence: 0.03, position: [3.6 * Math.random() - 1.8, 5 * Math.random() - 1, 0], heading_deg: 360 * Math.random() - 180 };
+    said = 'lost';
+  } else if (r < 0.22) {  // found, but in the far corner of the room: nobody walks there in two seconds
+    photo = { state: 'found', confidence: 0.6, position: [real.x > 0 ? -1.8 : 1.8, real.y > 1.5 ? -1 : 4, 0], heading_deg: wrap(real.heading + 150) };
+    said = 'found, far off';
+  } else {
+    photo = { state: r < 0.30 ? 'unsure' : 'found', confidence: r < 0.30 ? 0.4 : 0.95,
+              position: [real.x + 0.08 * bell(), real.y + 0.08 * bell(), 0], heading_deg: wrap(real.heading + 5 * bell()) };
+    said = photo.state;
+  }
+  photo.waypoints = sampleRoom().waypoints;
+  noisy.raw = photo; noisy.n += 1;
+  stable = noisy.tracker.update(photo, now);
+  if (stable.position) me = { x: stable.position[0], y: stable.position[1], heading: stable.heading_deg };
+  $('note').textContent = `Photo ${noisy.n}: ${said}. Steady answer: ${stable.state}${stable.position ? `, ${stable.confidence_pct}% sure` : ''}`
+    + `${stable.waiting ? ', one odd photo is waiting for a second' : ''}. Red ring: that photo alone. White dot: where you really are.`;
+  draw();
+}
+function setNoisy(on) {
+  if (noisy) { clearInterval(noisy.photos); clearInterval(noisy.clock); }
+  noisy = null; stable = null;
+  $('noisy').classList.toggle('on', on);
+  if (!on) return;
+  noisy = { tracker: makeTracker(), real: { ...me }, raw: null, n: 0 };
+  noisy.photos = setInterval(noisyPhoto, 2000);
+  noisy.clock = setInterval(() => { stable = noisy.tracker.current(Date.now() / 1000); draw(); }, 500);  // the answer gets older between photos
+  noisyPhoto();
 }
 
 // ---------------------------------------------------------------- relay
@@ -338,7 +512,7 @@ async function send(blob) {
     const reply = await fetch(api('/locate', `&zone=${zone}`), { method: 'POST', body: blob });
     const body = await reply.json();
     if (!reply.ok) { $('note').textContent = body.error || 'That did not work.'; return; }
-    demo = false; show('pad', false); $('demo').classList.remove('on');
+    setNoisy(false); demo = false; show('pad', false); $('demo').classList.remove('on');
     take(body);
     const items = (body.items || []).map(i => i.name).join(', ');
     $('note').textContent = `${body.headline}. ${body.detail} ${items ? `I can see: ${items}. ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`;
@@ -366,10 +540,12 @@ $('finish').onclick = async () => {
   try { await fetch(api('/reminder', `&id=${due.id}&done=1`), { method: 'POST' }); } catch { /* the next poll shows the truth */ }
   reminders();
 };
-$('zone').onchange = e => { zone = e.target.value; fixSeen = ''; poll(); };
+$('zone').onchange = e => { zone = e.target.value; fixSeen = poseSeen = ''; poll(); };
 $('photo').onchange = e => { if (e.target.files[0]) send(e.target.files[0]); e.target.value = ''; };
+$('noisy').onclick = () => { setNoisy(!noisy); if (!noisy) { $('note').textContent = ''; draw(); } };
 $('demo').onclick = () => {
-  demo = !demo; $('demo').classList.toggle('on', demo); show('pad', demo); fixSeen = ''; due = null; show('finish', false);
+  setNoisy(false);
+  demo = !demo; $('demo').classList.toggle('on', demo); show('pad', demo); fixSeen = poseSeen = ''; due = null; show('finish', false);
   if (demo) take(sampleRoom()); else { fix = null; draw(); poll(); reminders(); }
 };
 $('pad').onclick = e => {
@@ -408,7 +584,7 @@ addEventListener('deviceorientationabsolute', e => {
   if (e.alpha == null || demo || !fix) return;
   compass = 360 - e.alpha;  // clockwise from north
   if (compassAtFix == null) compassAtFix = compass;
-  me.heading = wrap(fix.heading_deg + compass - compassAtFix);
+  me.heading = wrap(headingAtFix + compass - compassAtFix);
   draw();
 });
 
@@ -437,7 +613,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
   };
 }
 
-if (demo) { $('demo').classList.add('on'); show('pad', true); take(sampleRoom()); }
+if (demo) { $('demo').classList.add('on'); show('pad', true); take(sampleRoom()); if (query.has('noisy')) setNoisy(true); }
 draw();
 zones().then(poll).then(reminders);  // the position first, so a due reminder can show the way at once
 setInterval(poll, 1500);

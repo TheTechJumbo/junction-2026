@@ -139,6 +139,8 @@ def main():
     assert missed["state"] == "lost" and missed["stable"]["state"] == "steady" and missed["stable"]["position"] == [0.0, 0.0, 0.0], missed["stable"]
     assert json.loads((evidence / "track.json").read_text())["kitchen"]["state"] == "steady"  # kept for the next start
     gateway.fix = FIX
+    code, fix = call("/locate?zone=kitchen", raw=JPEG)  # found again, for the checks below
+    assert fix["state"] == "found" and fix["stable"]["state"] == "steady" and fix["stable"]["agree"] == 3, fix["stable"]
     assert call("/where?zone=hall")[0] == 404
 
     # "Where are my keys?" is answered by the relay, and still counted by the event API.
