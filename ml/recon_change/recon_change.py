@@ -30,7 +30,16 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import recon_rust  # Rust versions of depth_gap and votes when built, else these NumPy ones run
+try:
+    import recon_rust  # Rust versions of the hot loops when built, else the NumPy code below runs
+except ImportError:  # recon_rust.py itself is missing (e.g. not copied to the cluster): NumPy only, never a crash
+    import sys
+    from types import SimpleNamespace
+
+    print("recon_change: recon_rust.py not found, using NumPy only", file=sys.stderr, flush=True)
+    recon_rust = SimpleNamespace(enabled=lambda: False, **{
+        name: (lambda *args, **kwargs: None)
+        for name in ("unproject", "depth_gap", "votes", "patch_median", "nearest", "lookalike_count")})
 
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 EDGE = 0.04  # neighbouring pixels whose depth differs by more than this fraction are an edge
