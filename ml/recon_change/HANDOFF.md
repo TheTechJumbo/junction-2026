@@ -95,3 +95,30 @@ Agent results, reported but not yet checked by the orchestrator:
 - CPU speed agent: still running at the time of writing (branch `jun-22-cpu-speed`, Iridis folder `cpu/`).
 
 Next: review PR 4 and 5 and merge them into the stack, take a CPU setting from the CPU agent, record a real room with the glasses or a phone, name three places, rehearse the demo. GPU worker job 2217918 ends about 03:15 UTC; restart it with `sbatch iridis/worker.slurm`.
+
+## Update, Sat 14 Nov about 06:00 UTC
+
+Seb's Claude is back (credits reset at 03:50 UTC) and is orchestrating the vision stage again.
+
+Branch `jun-22-hud-waypoints` now holds everything: PR 2, 3, 4 (benchmark), 5 (look-alike check),
+8 (locate and the glasses display) and 10 (CPU benchmark). It is the branch to deploy and try.
+
+Live on the cluster with that branch, tested end to end through the relay:
+
+| | GPU worker (L4, 24+12 frames) | CPU worker (32 EPYC cores, 8+4 frames) |
+| --- | --- | --- |
+| Unchanged clip | No change found, 19 s | No change found, 47 s |
+| Clip with a cube painted in | 1 thing appeared, 14.5 s | 1 thing appeared, 45 s |
+| Photo from the same room | found (0.94), 5 s | found (1.0), 37 s |
+| Photo of another place | lost (0.0), 5 s | lost (0.0), 35 s |
+
+Both workers have a 2 hour cap. Started 05:39 UTC as jobs 2218938 (GPU) and 2218939 (CPU).
+Restart with `sbatch iridis/worker.slurm` and `sbatch iridis/worker_cpu.slurm`.
+
+Agents running now, each with a draft PR to open within 20 minutes:
+- `jun-25-locate-eval`: how reliable the position fix is on real captures (found rate, wrong-room
+  rejection, position error, fewer baseline frames).
+- `jun-22-recall`: make the change check find more small and flat changes, measured on PASLCD.
+
+Still not done: a real room recorded with a phone or the glasses, places named in it, and a
+rehearsal of the demo. Nothing has run on the glasses.

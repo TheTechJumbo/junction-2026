@@ -110,8 +110,8 @@ its own queue. Send a check to it with `&device=cpu`. It uses fewer frames at fu
 frames, long side 518). The CPU benchmark measured that setting at 34 s per check on 32 AMD EPYC
 cores, with the same answer as the GPU. Smaller frames are faster, but the depth gets too noisy
 for the detector, so cut frames, not size (`RECON_FRAMES`, `RECON_LONG_SIDE`). The numbers are in
-`cpu/RESULTS.md` on branch `jun-22-cpu-speed`. The live CPU worker has not been run with this
-setting yet.
+`cpu/RESULTS.md` on branch `jun-22-cpu-speed`. Live, the CPU worker took 45 to 47 s per
+check and 35 to 37 s per position fix on 32 cores, with the same answers as the GPU.
 
 **Where is the wearer, and directions:** name places once on `/places?k=KEY` by clicking a spot
 in a baseline picture. Then `POST /locate?zone=kitchen` with a photo or a short clip of what the
