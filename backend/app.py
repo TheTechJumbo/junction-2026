@@ -52,6 +52,7 @@ from contracts.models import (
 
 logger = logging.getLogger(__name__)
 MAX_EVIDENCE_BYTES = 5 * 1024 * 1024
+MAX_EVIDENCE_PIXELS = 16_000_000
 
 
 @dataclass
@@ -137,6 +138,8 @@ def verify_image(data, claimed_type):
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(data)) as img:
+                if img.width * img.height > MAX_EVIDENCE_PIXELS:
+                    raise APIError(413, "too_large", "Evidence exceeds 16 megapixels.")
                 detected = {"JPEG": "image/jpeg", "PNG": "image/png"}.get(img.format)
                 if detected is None or detected != claimed_type:
                     raise APIError(415, "unsupported_media", "Supply a valid JPEG or PNG.")

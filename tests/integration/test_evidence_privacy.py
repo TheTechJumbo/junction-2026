@@ -199,3 +199,19 @@ def test_busy_wal_reader_defers_physical_purge_and_next_expiry_pass_retries(tmp_
         if reader is not None:
             reader.close()
         store.close()
+
+
+def test_pixel_limit_rejects_before_full_decode(monkeypatch):
+    from backend.app import APIError, verify_image
+
+    image = Image.new("RGB", (4096, 4096), "white")
+    encoded = io.BytesIO()
+    image.save(encoded, "PNG")
+
+    def forbidden_decode(self, *args, **kwargs):
+        raise AssertionError("oversized evidence must be rejected before pixel allocation")
+
+    monkeypatch.setattr(Image.Image, "load", forbidden_decode)
+    with pytest.raises(APIError) as exc:
+        verify_image(encoded.getvalue(), "image/png")
+    assert exc.value.status == 413
