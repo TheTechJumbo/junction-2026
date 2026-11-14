@@ -153,7 +153,7 @@ What weakens the split, plainly:
 ## Method
 
 - `locate_eval.py --dump` ran the model once per pass on an L4 and saved depth, confidence,
-  cameras and features (roughly 20 GB, not in the repo). `--from-dump` then scores them on CPU cores.
+  cameras and features (23 GB, not in the repo). `--from-dump` then scores them on CPU cores.
   Passes: same room 9 per scene, wrong room 18 per scene, other lighting 9 per indoor scene
   (the earlier report had 5; the table above uses those 5, the rest are counted where stated),
   each at 24, 12 and 8 baseline photos.
