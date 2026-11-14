@@ -38,6 +38,7 @@ import items  # noqa: E402
 import locate  # noqa: E402
 import recon_change as rc  # noqa: E402
 import splat  # noqa: E402
+import watch  # noqa: E402
 
 # Settings come from the environment, so this one script is both the GPU worker and the CPU worker.
 DEVICE = os.environ.get("RECON_DEVICE") or None  # "cuda", "cpu", or unset to use a GPU when there is one
@@ -125,13 +126,59 @@ def before_and_now(recon, detail):
     return rc.tint(recon.rgb[before], px_before, rc.RED), rc.tint(recon.rgb[now], px_now, rc.GREEN)
 
 
+def watched_spots(zone, count):
+    """The zone's watched spots (baselines/<zone>/watch.json): [{"name", "frame", "box": [u0, v0, u1, v1]}].
+    frame is the number of the baseline picture the box was drawn in, the box is in fractions of it."""
+    try:
+        listed = json.loads((BASELINES / zone / "watch.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return [s for s in listed if isinstance(s, dict) and isinstance(s.get("name"), str) and isinstance(s.get("frame"), int)
+            and 0 <= s["frame"] < count and isinstance(s.get("box"), list) and len(s["box"]) == 4][:20]
+
+
+def look_at_spots(recon, spots, pick, pictures, n_base, out, seconds):
+    """Answer for each watched spot: same, changed or not seen (watch.py). pick lists the baseline picture
+    numbers used in this pass, in order; pictures are this pass's frames, baseline first. Each answer also
+    gets a "before" and a "now" crop with the spot outlined, for a person to judge."""
+    if not spots:
+        return []
+    t0 = time.time()
+    asked = [{"name": s["name"], "frame": pick.index(s["frame"]), "box": [float(v) for v in s["box"]]} for s in spots]
+    answers = watch.check(recon, list(range(n_base)), list(range(n_base, len(pictures))), asked)
+    for i, answer in enumerate(answers):
+        for key, frame, box in (("before", answer.get("frame_base"), answer.get("box_base")),
+                                ("now", answer.get("frame"), answer.get("box_new"))):
+            if frame is None or box is None:
+                continue
+            picture = pictures[int(frame)]
+            h, w = picture.shape[:2]
+            u0, v0, u1, v1 = (float(v) for v in box)
+            pad = max(0.75 * max(u1 - u0, v1 - v0), 0.06)  # some of the surroundings, so the spot can be recognised
+            x0, x1 = int(max(0, u0 - pad) * w), int(min(1, u1 + pad) * w)
+            y0, y1 = int(max(0, v0 - pad) * h), int(min(1, v1 + pad) * h)
+            if x1 - x0 < 4 or y1 - y0 < 4:
+                continue
+            crop = picture[y0:y1, x0:x1].copy()
+            cv2.rectangle(crop, (int(u0 * w) - x0, int(v0 * h) - y0), (int(u1 * w) - x0, int(v1 * h) - y0), (0, 220, 255), 1)
+            grow = max(1, round(160 / max(crop.shape[:2])))  # small spots are a few pixels: enlarge the crop
+            crop = cv2.resize(crop, None, fx=grow, fy=grow, interpolation=cv2.INTER_NEAREST) if grow > 1 else crop
+            cv2.imwrite(str(out / f"spot{i}_{key}.jpg"), crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            answer[f"image_{key}"] = f"spot{i}_{key}"
+    seconds["watch"] = round(time.time() - t0, 2)
+    return json.loads(json.dumps(answers, default=float))  # plain numbers, ready for JSON
+
+
 def check(model, job, req):
     files = sorted((BASELINES / req["zone"]).glob("*.jpg"))
     if not files:
         raise RuntimeError(f"No baseline for '{req['zone']}' yet. Record the baseline clip first.")
     seconds = {}
     t0 = time.time()
-    files = [files[i] for i in sorted(set(np.linspace(0, len(files) - 1, min(N_BASELINE, len(files))).round().astype(int)))]
+    spots = watched_spots(req["zone"], len(files))
+    spread = np.linspace(0, len(files) - 1, min(N_BASELINE, len(files))).round().astype(int)
+    pick = sorted({int(i) for i in spread} | {s["frame"] for s in spots})  # a spot needs the picture it was drawn in
+    files = [files[i] for i in pick]
     base = [cv2.imread(str(f)) for f in files]
     after = [crop_like(f, base[0]) for f in clip_frames(job, req, N_AFTER)]
     if len(after) < 3:
@@ -149,6 +196,11 @@ def check(model, job, req):
     cv2.imwrite(str(out / "before.jpg"), before, [cv2.IMWRITE_JPEG_QUALITY, 90])
     cv2.imwrite(str(out / "now.jpg"), now, [cv2.IMWRITE_JPEG_QUALITY, 90])
     seconds["detect"] = round(time.time() - t0, 2)
+    try:  # the watched spots: a marked place is checked far more closely than the room as a whole
+        report["watch"] = look_at_spots(recon, spots, pick, base + after, len(base), out, seconds)
+    except Exception as error:  # the room-wide answer must still go out
+        report.update({"watch": [], "watch_note": f"Watched spots were not checked: {type(error).__name__}: {error}"[:300]})
+        print(f"{job.name} watched spots FAILED: {traceback.format_exc()}", flush=True)
     t0 = time.time()
     report["gaussians"] = splat.write_splat(recon, detail, out / "scene.splat")  # 3D view, built on the CPU
     seconds["splat"] = round(time.time() - t0, 2)
@@ -170,8 +222,10 @@ def where(model, job, req):
         places = []
     seconds = {}
     t0 = time.time()
+    spots = watched_spots(req["zone"], len(files))
     spread = np.linspace(0, len(files) - 1, min(N_LOCATE_BASE, len(files))).round().astype(int)
-    pick = sorted({int(i) for i in spread} | {p["frame"] for p in places})  # a place needs the picture it was picked in
+    # a place or a watched spot needs the picture it was picked in
+    pick = sorted({int(i) for i in spread} | {p["frame"] for p in places} | {s["frame"] for s in spots})
     base = [cv2.imread(str(files[i])) for i in pick]
     seen = clip_frames(job, req, N_LOCATE)
     new = [crop_like(f, base[0]) for f in seen]
@@ -206,6 +260,11 @@ def where(model, job, req):
                            "items_note": f"Items were not looked for: {type(error).__name__}: {error}"[:300]})
             print(f"{job.name} items FAILED: {traceback.format_exc()}", flush=True)
         seconds["items"] = round(time.time() - t0, 2)
+    try:  # the watched spots this view happens to show; a lost fix has no pose to project them with
+        result["watch"] = look_at_spots(recon, spots, pick, base + new, len(base), out, seconds) if result["state"] != "lost" else []
+    except Exception as error:
+        result.update({"watch": [], "watch_note": f"Watched spots were not checked: {type(error).__name__}: {error}"[:300]})
+        print(f"{job.name} watched spots FAILED: {traceback.format_exc()}", flush=True)
     if req.get("view"):  # the room as a splat, with the wearer (blue) and the places (yellow) marked
         t0 = time.time()
         nothing = {"points": np.zeros((0, 3)), "frames": np.zeros(0, int), "pixels": np.zeros(0, int), "member": np.zeros(0, int)}
