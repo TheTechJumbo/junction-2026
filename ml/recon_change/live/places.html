@@ -7,9 +7,14 @@
 <!--
   Name the places the glasses can point to, and test a position fix.
 
-  1. Pick a room, flip through its baseline pictures, click a spot, give it a name.
-  2. Upload a photo (or a short clip) of what the wearer sees: the page shows where the relay
+  1. Pick a room, flip through its baseline pictures, click a spot, give it a name. Or drag a box
+     around a spot to watch: each check of the room then answers for that box.
+  2. Type the real distance between two named places, so distances come out in real metres.
+  3. Show an item once: one to five photos of these keys, this wallet, for the whole home.
+  4. Upload a photo (or a short clip) of what the wearer sees: the page shows where the relay
      thinks they are, on a floor plan and in 3D.
+  5. See which items the glasses remember in this room, and forget one.
+  6. Add reminders.
 -->
 <style>
   :root { color-scheme: dark; --line: #333941; --dim: #9aa1ab; }
@@ -17,9 +22,29 @@
   body { margin: 0; padding: 16px; background: #15171a; color: #d6d9de; font: 15px/1.45 system-ui, sans-serif; }
   h1 { font-size: 20px; margin: 0 0 12px; } h2 { font-size: 16px; margin: 0 0 8px; }
   a { color: #7fb8ff; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; }
   section { border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
-  button, select, label.file, input[type=text], input[type=time], #rtext { font: inherit; color: inherit; background: #262a30; border: 1px solid #3a4048; border-radius: 8px; padding: 6px 10px; }
+  button, select, label.file, input[type=text], input[type=time], input[type=number], #rtext { font: inherit; color: inherit; background: #262a30; border: 1px solid #3a4048; border-radius: 8px; padding: 6px 10px; }
+  select, input[type=text] { max-width: 100%; } input[type=number] { width: 96px; }
+  button:disabled, select:disabled, input:disabled { opacity: .45; cursor: default; }
+  [hidden] { display: none !important; }
+  h3 { font-size: 14px; margin: 14px 0 0; }
+  #hint { min-height: 4.35em; }  /* three lines, so the picture stays put when the mode changes */
+  .modes button[aria-pressed=true] { background: #ffd23f; border-color: #ffd23f; color: #000; font-weight: 600; }
+  #stage.watching { touch-action: none; }  /* a finger drags a box there, it does not scroll the page */
+  #stage img { user-select: none; -webkit-user-drag: none; }
+  .pin.new { background: #fff; }
+  .spot { position: absolute; border: 2px dashed #5ad1ff; background: #5ad1ff26; border-radius: 4px; pointer-events: none; }
+  .spot.new { border-style: solid; border-color: #fff; }
+  .spot span { position: absolute; left: -2px; bottom: 100%; margin-bottom: 3px; background: #000c; color: #5ad1ff; padding: 1px 6px; border-radius: 6px; white-space: nowrap; line-height: 1.4; font-size: 13px; }
+  .spot span.below { bottom: auto; top: 100%; margin-top: 3px; }
+  #nname { flex: 1; min-width: 160px; }
+  .warn { color: #ffb4a8; }
+  li.item { display: block; }
+  .thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
+  .thumb { position: relative; line-height: 0; }
+  .thumb img { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; background: #000; }
+  .thumb button { position: absolute; top: 3px; right: 3px; padding: 0 7px; line-height: 1.5; background: #000c; }
   button, select, label.file { cursor: pointer; }
   #rtext { flex: 1; min-width: 160px; }
   .due { color: #ffd23f; } .done { color: #3ddc84; }
@@ -45,14 +70,58 @@
 </div>
 <div class="grid">
   <section>
-    <h2>1. Name a place</h2>
-    <div class="dim">Flip to a picture that shows the place, then click on it.</div>
+    <h2>1. Places and spots to watch</h2>
+    <div class="row modes">
+      <button id="modePlace" aria-pressed="true">Name a place</button>
+      <button id="modeWatch" aria-pressed="false">Watch a spot</button>
+    </div>
+    <div id="hint" class="dim"></div>
     <div class="row"><input id="frame" type="range" min="0" max="0" value="0"><span id="count" class="dim"></span></div>
-    <div id="stage"><img id="picture" alt="Baseline picture of the room"></div>
+    <div id="stage"><img id="picture" alt="Baseline picture of the room" draggable="false"></div>
+    <div id="naming" class="row" hidden>
+      <input id="nname" type="text" maxlength="40" autocomplete="off">
+      <button id="nsave">Save</button>
+      <button id="ncancel">Cancel</button>
+    </div>
+    <div id="pnote" class="warn"></div>
+    <h3>Places</h3>
     <ul id="list"></ul>
+    <h3>Watched spots</h3>
+    <ul id="wlist"></ul>
   </section>
   <section>
-    <h2>2. Where is the wearer?</h2>
+    <h2>2. How far apart?</h2>
+    <div class="dim">Measure between two named places with a tape measure and type it here. The distances the glasses
+      say are then real metres. Until then they are a rough guess.</div>
+    <div class="row">
+      <select id="sa" title="First place"></select>
+      <span>to</span>
+      <select id="sb" title="Second place"></select>
+      <input id="sm" type="number" min="0.1" max="50" step="0.01" inputmode="decimal" placeholder="2.4" title="Distance in metres">
+      <span>metres</span>
+      <button id="ssave">Save</button>
+    </div>
+    <div id="snote" class="warn"></div>
+    <ul id="slist"></ul>
+  </section>
+  <section>
+    <h2>3. Show an item once</h2>
+    <div class="dim">Add one to five photos of the very item: these keys, this wallet. A close-up taken with a phone
+      is fine. The glasses then look for that one item. Items are for the whole home, not for one room.</div>
+    <div class="row">
+      <select id="ikind" title="Which item">
+        <option>keys</option><option>glasses</option><option>wallet</option><option>phone</option>
+        <option>remote control</option><option value="">something else</option>
+      </select>
+      <input id="iname" type="text" maxlength="32" placeholder="Name of the item" autocomplete="off" hidden>
+      <label class="file">Add photos<input id="iphoto" type="file" accept="image/*" multiple></label>
+      <span id="ibusy" class="dim"></span>
+    </div>
+    <div id="inote" class="warn"></div>
+    <ul id="ilist"></ul>
+  </section>
+  <section>
+    <h2>4. Where is the wearer?</h2>
     <div class="row">
       <label class="file">Upload what they see<input id="shot" type="file" accept="image/*,video/*"></label>
       <span id="busy" class="dim"></span>
@@ -64,7 +133,13 @@
     <div id="view"></div>
   </section>
   <section>
-    <h2>3. Reminders</h2>
+    <h2>5. Items seen in this room</h2>
+    <div class="dim">What the glasses remember: where and when they last saw an item here. Press Forget if it is
+      wrong, or if the item has been moved.</div>
+    <ul id="seen"></ul>
+  </section>
+  <section>
+    <h2>6. Reminders</h2>
     <div class="dim">Shown and spoken on the glasses at that time, with the way to the place. A reminder for the pill box
       ends when the sensor reports the box was opened.</div>
     <div class="row">
@@ -83,6 +158,7 @@ const key = new URLSearchParams(location.search).get('k') || '';
 const $ = id => document.getElementById(id);
 const withKey = path => path + (path.includes('?') ? '&' : '?') + 'k=' + encodeURIComponent(key);
 let zone = '', places = [], frames = 0;
+let spots = [], scale = null, mode = 'place';  // watched spots, the room's real scale, what a touch on the picture does
 
 async function ask(path, options) {
   const reply = await fetch(withKey(path), options);
@@ -93,13 +169,14 @@ function showPicture() {
   const n = +$('frame').value;
   $('picture').src = withKey(`/baseline/${zone}/${n}.jpg`);
   $('count').textContent = frames ? `picture ${n + 1} of ${frames}` : 'no baseline yet';
-  document.querySelectorAll('.pin').forEach(p => p.remove());
+  document.querySelectorAll('.pin:not(.new)').forEach(p => p.remove());
   for (const p of places.filter(p => p.frame === n)) {
     const pin = document.createElement('div');
     pin.className = 'pin'; pin.style.left = p.u * 100 + '%'; pin.style.top = p.v * 100 + '%';
     const label = document.createElement('span'); label.textContent = p.name; pin.append(label);
     $('stage').append(pin);
   }
+  showSpots();
 }
 
 function showList() {
@@ -122,6 +199,264 @@ async function loadPlaces() {
   if (+$('frame').value >= frames) $('frame').value = 0;
   showPicture(); showList();
   $('rplace').innerHTML = '<option value="">no place</option>' + places.map(p => `<option>${p.name.replace(/[<&]/g, '')}</option>`).join('');
+  scale = ok ? body.scale || null : null;
+  showScale();
+}
+
+// ---------------------------------------------------------------- a name for a click or a box
+// A click on the picture (a place) or a box dragged on it (a spot to watch) waits here, drawn in
+// white, until it has a name.
+const HINTS = {
+  place: 'Flip to a picture that shows the place, then tap or click on it. The glasses can show the way to a named place.',
+  watch: 'Flip to a picture that shows the spot, then drag a box around it. A check of the room then says whether that spot changed.',
+};
+let waiting = null;
+
+function setMode(next) {
+  mode = next;
+  cancelName();
+  $('modePlace').setAttribute('aria-pressed', mode === 'place');
+  $('modeWatch').setAttribute('aria-pressed', mode === 'watch');
+  $('stage').classList.toggle('watching', mode === 'watch');
+  $('hint').textContent = HINTS[mode];
+}
+
+function askName(next) {
+  cancelName();
+  waiting = next;
+  $('stage').append(next.mark);
+  $('naming').hidden = false;
+  $('pnote').textContent = '';
+  $('nname').value = '';
+  $('nname').placeholder = next.box ? 'Name of this spot, for example: pill box shelf' : 'Name of this place, for example: pill box';
+  $('nname').focus();
+}
+
+function cancelName() {
+  if (waiting) waiting.mark.remove();
+  waiting = null;
+  $('naming').hidden = true;
+  $('pnote').textContent = '';
+}
+
+async function saveName() {
+  const name = $('nname').value.trim();
+  if (!waiting || !name) { $('nname').focus(); return; }
+  const at = waiting.box
+    ? `/watch?zone=${zone}&name=${encodeURIComponent(name)}&frame=${waiting.frame}&` + ['u0', 'v0', 'u1', 'v1'].map((k, i) => `${k}=${waiting.box[i].toFixed(4)}`).join('&')
+    : `/waypoint?zone=${zone}&name=${encodeURIComponent(name)}&frame=${waiting.frame}&u=${waiting.u.toFixed(4)}&v=${waiting.v.toFixed(4)}`;
+  const isBox = !!waiting.box;
+  try {
+    const { ok, body } = await ask(at, { method: 'POST' });
+    if (!ok) { $('pnote').textContent = body.error || 'That did not work.'; return; }  // the name stays, to be corrected
+  } catch { $('pnote').textContent = 'Cannot reach the relay.'; return; }
+  cancelName();
+  if (isBox) loadSpots(); else loadPlaces();
+}
+
+$('modePlace').onclick = () => setMode('place');
+$('modeWatch').onclick = () => setMode('watch');
+$('nsave').onclick = saveName;
+$('ncancel').onclick = cancelName;
+$('nname').onkeydown = e => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') cancelName(); };
+
+// ---------------------------------------------------------------- spots to watch
+function spotBox(box, name) {
+  const [u0, v0, u1, v1] = box, el = document.createElement('div');
+  el.className = 'spot';
+  el.style.cssText = `left:${u0 * 100}%;top:${v0 * 100}%;width:${(u1 - u0) * 100}%;height:${(v1 - v0) * 100}%`;
+  if (name) {
+    const label = document.createElement('span'); label.textContent = name;
+    if (v0 < 0.12) label.className = 'below';  // no room above the box
+    el.append(label);
+  }
+  return el;
+}
+
+function showSpots() {
+  const n = +$('frame').value;
+  document.querySelectorAll('.spot:not(.new)').forEach(s => s.remove());
+  for (const s of spots.filter(s => s.frame === n)) $('stage').append(spotBox(s.box, s.name));
+}
+
+function showSpotList() {
+  $('wlist').innerHTML = '';
+  for (const s of spots) {
+    const row = document.createElement('li');
+    const name = document.createElement('a'); name.href = '#'; name.textContent = `${s.name} (picture ${s.frame + 1})`;
+    name.onclick = e => { e.preventDefault(); cancelName(); $('frame').value = s.frame; showPicture(); };
+    const remove = document.createElement('button'); remove.textContent = 'Remove';
+    remove.onclick = async () => { await ask(`/watch?zone=${zone}&name=${encodeURIComponent(s.name)}&delete=1`, { method: 'POST' }); loadSpots(); };
+    row.append(name, remove); $('wlist').append(row);
+  }
+  if (!spots.length) $('wlist').innerHTML = '<li class="dim">No spots watched in this room yet. Press “Watch a spot”, then drag a box on the picture.</li>';
+}
+
+async function loadSpots() {
+  const { ok, body } = await ask(`/watch?zone=${zone}`);
+  spots = ok ? body.watch : [];
+  showSpots(); showSpotList();
+}
+
+// A box is dragged with a mouse, a finger or a pen: press, move, let go.
+let drag = null;
+const inPicture = e => {
+  const r = $('picture').getBoundingClientRect();
+  return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
+};
+$('stage').onpointerdown = e => {
+  if (mode !== 'watch' || !frames || e.button > 0) return;
+  e.preventDefault();
+  cancelName();
+  const [u, v] = inPicture(e);
+  drag = { u, v, box: [u, v, u, v], mark: spotBox([u, v, u, v]) };
+  drag.mark.classList.add('new');
+  $('stage').append(drag.mark);
+  try { $('stage').setPointerCapture(e.pointerId); } catch { /* the drag still works inside the picture */ }
+};
+$('stage').onpointermove = e => {
+  if (!drag) return;
+  const [u, v] = inPicture(e);
+  drag.box = [Math.min(drag.u, u), Math.min(drag.v, v), Math.max(drag.u, u), Math.max(drag.v, v)];
+  const [u0, v0, u1, v1] = drag.box;
+  drag.mark.style.cssText = `left:${u0 * 100}%;top:${v0 * 100}%;width:${(u1 - u0) * 100}%;height:${(v1 - v0) * 100}%`;
+};
+$('stage').onpointerup = () => {
+  if (!drag) return;
+  const { box, mark } = drag;
+  drag = null;
+  if (box[2] - box[0] < 0.02 || box[3] - box[1] < 0.02) {  // a tap, not a drag
+    mark.remove();
+    $('pnote').textContent = 'To watch a spot, drag a box around it: press, move, let go.';
+    return;
+  }
+  askName({ box, frame: +$('frame').value, mark });
+};
+$('stage').onpointercancel = () => { if (drag) drag.mark.remove(); drag = null; };
+
+// ---------------------------------------------------------------- the room's real scale
+function showScale() {
+  const names = places.map(p => p.name), ready = names.length > 1;
+  for (const id of ['sa', 'sb']) {
+    const keep = $(id).value;
+    $(id).innerHTML = '';
+    for (const n of names) $(id).append(new Option(n));
+    if (names.includes(keep)) $(id).value = keep;
+  }
+  if (ready && $('sa').value === $('sb').value) $('sb').value = names.find(n => n !== $('sa').value);
+  for (const id of ['sa', 'sb', 'sm', 'ssave']) $(id).disabled = !ready;
+  $('slist').innerHTML = '';
+  const row = document.createElement('li');
+  if (scale) {
+    const text = document.createElement('span'); text.textContent = `${scale.a} to ${scale.b}: ${scale.metres} m`;
+    const remove = document.createElement('button'); remove.textContent = 'Remove';
+    remove.onclick = async () => { const { ok, body } = await ask(`/scale?zone=${zone}&delete=1`, { method: 'POST' }); if (ok) { scale = body.scale; showScale(); } };
+    row.append(text, remove);
+  } else {
+    row.className = 'dim';
+    row.textContent = ready ? 'No distance set for this room yet.' : 'Name two places in this room first (step 1).';
+  }
+  $('slist').append(row);
+}
+
+$('ssave').onclick = async () => {
+  const a = $('sa').value, b = $('sb').value, metres = parseFloat($('sm').value.replace(',', '.'));
+  if (a === b) { $('snote').textContent = 'Pick two different places.'; return; }
+  if (!(metres >= 0.1 && metres <= 50)) { $('snote').textContent = 'Type the distance in metres, for example 2.4.'; return; }
+  try {
+    const { ok, body } = await ask(`/scale?zone=${zone}&a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}&metres=${metres}`, { method: 'POST' });
+    $('snote').textContent = ok ? '' : body.error || 'That did not work.';
+    if (ok) { scale = body.scale; $('sm').value = ''; showScale(); }
+  } catch { $('snote').textContent = 'Cannot reach the relay.'; }
+};
+
+// ---------------------------------------------------------------- items shown once
+let shown = 0;  // makes every picture address new, so a photo that changed its number is fetched again
+
+function showItems(items) {
+  $('ilist').innerHTML = '';
+  shown += 1;
+  for (const item of items) {
+    const row = document.createElement('li'); row.className = 'item';
+    const head = document.createElement('div'); head.className = 'row';
+    const name = document.createElement('strong'); name.textContent = item.name.replaceAll('_', ' ');
+    const count = document.createElement('span'); count.className = 'dim'; count.textContent = `${item.photos} photo${item.photos > 1 ? 's' : ''}`;
+    const remove = document.createElement('button'); remove.textContent = 'Remove item';
+    remove.onclick = () => {  // asks once more: the photos would have to be taken again
+      if (remove.dataset.sure) return changeItem(`/enroll?name=${item.name}&delete=1`);
+      remove.dataset.sure = 1; remove.textContent = 'Press again to remove';
+      setTimeout(() => { delete remove.dataset.sure; remove.textContent = 'Remove item'; }, 4000);
+    };
+    head.append(name, count, remove);
+    const thumbs = document.createElement('div'); thumbs.className = 'thumbs';
+    for (let n = 0; n < item.photos; n++) {
+      const thumb = document.createElement('div'); thumb.className = 'thumb';
+      const img = new Image(); img.alt = `Photo ${n + 1} of the ${name.textContent}`; img.src = withKey(`/enrolled/${item.name}/${n}.jpg?v=${shown}`);
+      const drop = document.createElement('button'); drop.textContent = '×'; drop.title = drop.ariaLabel = `Remove photo ${n + 1} of the ${name.textContent}`;
+      drop.onclick = () => changeItem(`/enroll?name=${item.name}&n=${n}&delete=1`);
+      thumb.append(img, drop); thumbs.append(thumb);
+    }
+    row.append(head, thumbs); $('ilist').append(row);
+  }
+  if (!items.length) $('ilist').innerHTML = '<li class="dim">No items shown yet.</li>';
+}
+
+async function changeItem(path, photo) {
+  try {
+    const { ok, body } = await ask(path, { method: 'POST', body: photo });
+    $('inote').textContent = ok ? '' : body.error || 'That did not work.';
+    if (body.items) showItems(body.items);
+    return ok;
+  } catch { $('inote').textContent = 'Cannot reach the relay.'; return false; }
+}
+
+async function loadItems() {
+  try { const { ok, body } = await ask('/enrolled'); if (ok) showItems(body.items); } catch { /* the relay is down */ }
+}
+
+// A phone photo is several megabytes. Send it at 1280 on its long side, which is all that is kept.
+// A picture this browser cannot open is sent as it is, and the relay decides.
+async function smaller(file) {
+  try {
+    const picture = await createImageBitmap(file);
+    const k = Math.min(1, 1280 / Math.max(picture.width, picture.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(picture.width * k); canvas.height = Math.round(picture.height * k);
+    canvas.getContext('2d').drawImage(picture, 0, 0, canvas.width, canvas.height);
+    return await new Promise(done => canvas.toBlob(blob => done(blob || file), 'image/jpeg', 0.9));
+  } catch { return file; }
+}
+
+$('ikind').onchange = () => { $('iname').hidden = !!$('ikind').value; if (!$('ikind').value) $('iname').focus(); };
+$('iphoto').onchange = async e => {
+  const files = [...e.target.files].slice(0, 5), name = ($('ikind').value || $('iname').value).trim();
+  e.target.value = '';
+  if (!name) { $('inote').textContent = 'Type the name of the item first.'; $('iname').focus(); return; }
+  for (const [i, file] of files.entries()) {
+    $('ibusy').textContent = `Adding photo ${i + 1} of ${files.length}…`;
+    if (!await changeItem(`/enroll?name=${encodeURIComponent(name)}`, await smaller(file))) break;
+  }
+  $('ibusy').textContent = '';
+};
+
+// ---------------------------------------------------------------- items seen in this room
+function showSeen(seen) {
+  $('seen').innerHTML = '';
+  for (const s of seen) {
+    const row = document.createElement('li');
+    const text = document.createElement('span');
+    const days = Math.round(s.age_s / 86400);
+    text.textContent = `${s.name}: seen ${s.age_s < 20 * 3600 ? `at ${s.time}` : days > 1 ? `${days} days ago` : 'a day ago'}${s.near ? `, near the ${s.near}` : ''}`;
+    if (s.doubt) {
+      const doubt = document.createElement('span'); doubt.className = 'due';
+      doubt.textContent = ' · may have moved: the glasses looked there again and did not see it';
+      text.append(doubt);
+    }
+    const forget = document.createElement('button'); forget.textContent = 'Forget';
+    forget.onclick = async () => { const { ok, body } = await ask(`/forget?zone=${zone}&name=${encodeURIComponent(s.name)}`, { method: 'POST' }); if (ok) showSeen(body.seen); };
+    row.append(text, forget); $('seen').append(row);
+  }
+  if (!seen.length) $('seen').innerHTML = '<li class="dim">Nothing yet. The glasses note where they see an item as the wearer moves about.</li>';
 }
 
 // ---------------------------------------------------------------- reminders
@@ -161,18 +496,16 @@ $('radd').onclick = async () => {
 };
 setInterval(loadReminders, 10000);
 
-$('stage').onclick = async e => {
-  if (!frames || e.target.closest('.pin')) return;
+$('stage').onclick = e => {  // a click names a place; in "Watch a spot" a drag makes a box instead (see above)
+  if (mode !== 'place' || !frames || e.target.closest('.pin')) return;
   const box = $('picture').getBoundingClientRect();
   const u = (e.clientX - box.left) / box.width, v = (e.clientY - box.top) / box.height;
-  const name = (prompt('Name of this place (for example: pill box, bathroom door)') || '').trim();
-  if (!name) return;
-  const { ok, body } = await ask(`/waypoint?zone=${zone}&name=${encodeURIComponent(name)}&frame=${$('frame').value}&u=${u.toFixed(4)}&v=${v.toFixed(4)}`, { method: 'POST' });
-  if (!ok) alert(body.error || 'That did not work.');
-  loadPlaces();
+  const mark = document.createElement('div');
+  mark.className = 'pin new'; mark.style.left = u * 100 + '%'; mark.style.top = v * 100 + '%';
+  askName({ u, v, frame: +$('frame').value, mark });
 };
-$('frame').oninput = showPicture;
-$('zone').onchange = e => { zone = e.target.value; links(); loadPlaces(); latest(); };
+$('frame').oninput = () => { cancelName(); showPicture(); };
+$('zone').onchange = e => { zone = e.target.value; cancelName(); links(); loadPlaces(); loadSpots(); latest(); };
 
 function links() {
   $('hud').href = withKey(`/hud?zone=${zone}`);
@@ -209,6 +542,7 @@ function plan(fix) {
 function show(fix) {
   $('headline').textContent = fix.headline;
   $('detail').textContent = fix.detail;
+  showSeen(fix.seen || []);
   plan(fix);
   const s = fix.seconds || {};
   const alike = fix.looks_alike == null ? '' : `looks alike ${Math.round(fix.looks_alike * 100)}% · `;
@@ -227,7 +561,7 @@ function show(fix) {
 
 async function latest() {
   const { ok, body } = await ask(`/where?zone=${zone}`);
-  if (ok) show(body); else { $('headline').textContent = ''; $('detail').textContent = 'No position fix for this room yet.'; }
+  if (ok) show(body); else { $('headline').textContent = ''; $('detail').textContent = 'No position fix for this room yet.'; showSeen([]); }
 }
 
 $('shot').onchange = async e => {
@@ -249,8 +583,10 @@ $('shot').onchange = async e => {
     zone = new URLSearchParams(location.search).get('zone') || names[0] || '';
     $('zone').innerHTML = names.map(n => `<option${n === zone ? ' selected' : ''}>${n}</option>`).join('');
     links();
+    setMode('place');
     loadReminders();
-    if (zone) { loadPlaces(); latest(); }
+    loadItems();
+    if (zone) { loadPlaces(); loadSpots(); latest(); }
   } catch { $('detail').textContent = 'Cannot reach the relay.'; }
 })();
 </script>
