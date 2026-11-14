@@ -122,8 +122,10 @@ def overlap(a, b):
     return a["start"] <= b["end"] + TOL_S and a["end"] >= b["start"] - TOL_S
 
 
-def replay(streams, read, every, enter, leave, out_fixes, rooms=None):
-    """Counts over all recordings (and all phases of the thinning) for one way of reading and one setting."""
+def replay(streams, read, every, enter, leave, out_fixes, rooms=None, truth_enter=None):
+    """Counts over all recordings (and all phases of the thinning) for one way of reading and one setting.
+    truth_enter: what "near" truly means, when the limits given to the log are not meant as true metres."""
+    log_enter, enter = enter, truth_enter or enter
     tot = defaultdict(float)
     errs, rels, visits_out = [], [], []
     for (room, rec), st in streams.items():
@@ -132,7 +134,7 @@ def replay(streams, read, every, enter, leave, out_fixes, rooms=None):
         true, grid, dist = truth_visits(st, enter)
         for phase in PHASES.get(every, (0.0,)):
             stream = [{"t": f["t"], "s": f["s"], "z": "r", "w": f[read]} for f in thin(st["fixes"], every, phase)]
-            est = day.build_visits(stream, enter=enter, leave=leave, out_fixes=out_fixes, gap_s=day.GAP_S)["places"]
+            est = day.build_visits(stream, enter=log_enter, leave=leave, out_fixes=out_fixes, gap_s=day.GAP_S)["places"]
             tot["runs"] += 1
             tot["fixes"] += len(stream)
             tot["found_fixes"] += sum(f["s"] == "found" for f in stream)
@@ -230,6 +232,15 @@ def main():
                     results[f"{read}/{every}/visits"] = r["visits"]
     r = replay(streams, "room", 0, E, L, O)
     md.append(f"\nEvery saved fix (no thinning), `room`: " + line("all", r))
+
+    wide = E + 0.5
+    md.append(f"\n## Today's metres with the limits raised to {wide} m and {wide + L - E} m (BEACON_NEAR_M={wide}), against true visits at {E} m\n\n" + HEAD.format("One fix every"))
+    for every in (1, 3, 6):
+        r = replay(streams, "shown", every, wide, wide + L - E, O, truth_enter=E)
+        results[f"shown_wide/{every}/all"] = {k: v for k, v in r.items() if k != "visits"}
+        md.append(line(f"All rooms, {every} s", r))
+        for group in rooms:
+            md.append(line(f"{group}, {every} s", replay(streams, "shown", every, wide, wide + L - E, O, [group], truth_enter=E)))
 
     md.append("\n## Does the stated confidence match?\n")
     for read in ("room", "shown"):

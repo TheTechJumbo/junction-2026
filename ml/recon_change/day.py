@@ -28,9 +28,10 @@ Storage: one file per day (YYYY-MM-DD.jsonl, one line per thing handed over) in 
 Visits are worked out from those lines each time, so a restart loses nothing and a changed limit
 re-reads the same day. Files older than KEEP_DAYS days are deleted.
 
-Limits (measured in eval/DAY_RESULTS.md). Distances are the position fix's own `distance_m`, in
-the map's metres. Without a known distance those are 24% to 54% too long, so ENTER_M = 1.5 is
-1.0 to 1.2 true metres today and 1.5 true metres once the room has a scale.
+Limits (measured in eval/DAY_RESULTS.md). Distances are the position fix's own `distance_m`. With
+a known distance in the room those are true metres. Without one they are 24% to 54% too long, so
+ENTER_M = 1.5 then means 1.0 to 1.2 true metres: no visit is invented, but about a third fewer
+are found. Until the room has a scale, start the relay with BEACON_NEAR_M=2.0.
 """
 import json
 import math
@@ -49,12 +50,14 @@ JOIN_S = 20         # an event this close to a visit's first or last fix counts 
 REPEAT_S = 30 * 60  # the same question again within this long is one entry with a count
 ITEM_MOVED_M = 1.0  # an item seen this far from its last recorded spot is a new entry
 KEEP_DAYS = 14
-# Confidence, in percent, of a visit: how sure its fixes were, times three discounts.
+# Confidence, in percent, of a visit: how sure its fixes were, times three discounts. The discounts are
+# judgement, not a fit: in the replay (eval/DAY_RESULTS.md) every logged visit was real, also those resting
+# on one fix or on a fix right at the limit, so there was nothing to fit them to. They err on the low side.
 RAW_SURE = 0.95     # a raw "found" fix with no stabiliser: 453 of 453 were within 0.2 m in the walking test
-CONF = {"one_fix": 0.30,  # a visit resting on one fix loses this share; each further fix halves the loss
+CONF = {"one_fix": 0.15,  # a visit resting on one fix loses this share; each further fix halves the loss
         "quiet": 0.40,    # lost when the longest stretch without a fix inside the visit reaches GAP_S
         "quiet_free_s": 15,  # a stretch this short costs nothing: two photos in a row without a fix are normal
-        "edge": 0.25}     # lost when the closest fix was right at ENTER_M (nothing lost within 70% of it)
+        "edge": 0.15}     # lost when the closest fix was right at ENTER_M (nothing lost within 70% of it)
 SPEAK_PCT = 60      # entries below this are left out of what is said to the wearer
 JOIN_EDGE = 0.8     # an event joined to a visit only through the JOIN_S slack keeps this share
 
@@ -196,6 +199,7 @@ class DayLog:
         self.limits = {"enter": enter, "leave": leave, "out_fixes": out_fixes, "gap_s": gap_s}
         self.lock = threading.RLock()
         self.days = {}  # day -> its records, read from the file once
+        self.spots = {}  # zone -> where its named places were in the last fix written, to store them only when they change
         self.prune()
 
     # ------------------------------------------------------------------------- storage
@@ -287,6 +291,15 @@ class DayLog:
                 record["p"] = [round(float(v), 2) for v in use["position"][:2]]
             except (KeyError, TypeError, ValueError):
                 pass
+            spots = {}  # where the named places are on the map, for drawing the day's trail among them
+            for w in use.get("waypoints") or []:
+                try:
+                    spots[str(w["name"])] = [round(float(v), 2) for v in w["position"][:2]]
+                except (KeyError, TypeError, ValueError):
+                    continue
+            last = self.spots.get(record["z"])
+            if spots and (last is None or set(last) != set(spots) or any(math.dist(last[n], spots[n]) > 0.25 for n in spots)):
+                record["wp"] = self.spots[record["z"]] = spots
             if stable and isinstance(stable.get("confidence_pct"), (int, float)):
                 record["pct"] = int(round(max(0, min(100, stable["confidence_pct"]))))
             elif isinstance(fix.get("confidence"), (int, float)):
@@ -594,8 +607,8 @@ class DayLog:
         out = []
         rooms, places, gaps = kinds("room"), kinds("place"), kinds("gap")
 
-        def spans(group):
-            return _list([self.span(e["start"], e["end"]) for e in group])
+        def spans(group):  # the carer also gets the uncertain ones, marked
+            return _list([self.span(e["start"], e["end"]) + (" (uncertain)" if e in unsure else "") for e in group])
 
         if carer and rooms:
             known = sum(e["end"] - e["start"] for e in rooms)
@@ -608,13 +621,10 @@ class DayLog:
             else:
                 out.append(f"{v['Sub']} {v['were']} in the {_nice(zone)} {_times(len(group))} {self.between(group[0]['start'], group[-1]['end'])}, "
                            f"for {_duration(sum(e['end'] - e['start'] for e in group))} in all.")
-        parts = []
-        for place in dict.fromkeys(e["place"] for e in places):
+        for place in dict.fromkeys(e["place"] for e in places):  # one sentence per place
             group = [e for e in places if e["place"] == place]
-            parts.append(f"near the {place} {spans(group)}" if len(group) <= 2 else
-                         f"near the {place} {_times(len(group))}, last {self.span(group[-1]['start'], group[-1]['end'])}")
-        if parts:
-            out.append(f"{v['Sub']} {v['were']} {_list(parts)}.")
+            out.append(f"{v['Sub']} {v['were']} near the {place} {spans(group)}." if len(group) <= 2 else
+                       f"{v['Sub']} {v['were']} near the {place} {_times(len(group))}, last {self.span(group[-1]['start'], group[-1]['end'])}.")
         if not rooms and not places and (kinds("gap") or not out and not carer and unsure):
             out.append(f"{'I' if not carer else 'The glasses'} could not tell where {v['sub']} {v['were']} {label}.")
         events = kinds("event")
@@ -729,12 +739,26 @@ class DayLog:
             text = f"Yes. You were {where} {_times(len(visits))} {label}, last {self.span(newest['start'], newest['end'])}."
         return {**reply, "answer": text}
 
+    def trail(self, day):
+        """Where the glasses were through a day, for a map: ([[seconds, east, north, zone], ...] from the
+        found fixes, at most 3000 of them, and {zone: {place: [east, north]}}). Map metres."""
+        with self.lock:
+            rows = [r for r in self.records(day) if r["k"] == "fix"]
+        found = [r for r in rows if r["s"] == "found" and r.get("p")]
+        step = max(1, -(-len(found) // 3000))
+        places = {}
+        for r in rows:
+            if r.get("wp"):
+                places[r["z"]] = r["wp"]
+        return [[r["t"], r["p"][0], r["p"][1], r["z"]] for r in found[::step]], places
+
     def report(self, day=None, now=None):
         """Everything the carer's page needs for one day."""
         now = self.now() if now is None else now
         day = day or self.day_of(now)
         lo, hi = self.window(day, None)
-        return {"day": day, "today": day == self.day_of(now), "start": lo, "end": hi, "now": now, "days": self.stored_days(),
+        path, places = self.trail(day)
+        return {"day": day, "path": path, "places": places, "today": day == self.day_of(now), "start": lo, "end": hi, "now": now, "days": self.stored_days(),
                 "timeline": self.timeline(day, "carer", now), "summary": {"wearer": self.sentences(day, "wearer", None, now),
                                                                          "carer": self.sentences(day, "carer", None, now)},
                 "limits": {**self.limits, "walk_s": WALK_S, "join_s": JOIN_S, "speak_pct": SPEAK_PCT}}

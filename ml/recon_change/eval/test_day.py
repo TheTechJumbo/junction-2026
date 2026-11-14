@@ -120,7 +120,7 @@ def main():
     # The two summaries.
     wearer, carer = log.summary(for_="wearer"), log.summary(for_="carer")
     assert wearer.startswith("You were in the kitchen from 08:10 to 08:40 and from 10:00 to 10:20. "
-                             "You were near the pill box from 08:14 to 08:16 and near the front door from 08:17 to 08:19. "
+                             "You were near the pill box from 08:14 to 08:16. You were near the front door from 08:17 to 08:19. "
                              "The pill box was opened at 08:15 while you were next to it."), wearer
     assert "three times" not in wearer and "Drink some water" not in wearer, "repeats and missed reminders are for the carer"
     assert "There were 2 stretches when I could not tell where you were, the longest from 08:40 to 10:00." in wearer, wearer
@@ -193,7 +193,7 @@ def main():
     raw = (folder / files[0]).read_text(encoding="utf-8")
     assert not re.search(r"jpg|png|splat|evidence|image|points", raw), "pictures or a map reached the day file"
     assert all(set(json.loads(line)) <= {"k", "t", "s", "z", "w", "p", "type", "source", "object", "id", "c", "q", "topic", "state", "due",
-                                         "text", "place", "note", "name", "near"} for line in raw.splitlines())
+                                         "text", "place", "note", "name", "near", "wp", "st", "pct"} for line in raw.splitlines())
     again = day.DayLog(folder, clock=UTC, now=lambda: clock["now"])
     assert again.timeline() == entries and again.summary(for_="carer") == carer, "the day changed across a restart"
     assert again.event({"id": "e1", "type": "pillbox_open", "source": "sensor", "ts": f"{DAY}T08:15:00+00:00"}) is None, "an event id is stored once"
@@ -205,6 +205,9 @@ def main():
     report = again.report()
     assert json.loads(json.dumps(report)) == report and report["day"] == DAY and report["days"] == [DAY]
     assert report["end"] - report["start"] == 86400 and report["start"] == at("00:00")
+    # The trail for the map: one point per found fix, none for a lost one, and the places' spots stored once.
+    assert len(report["path"]) == 502 and report["path"][0] == [at("08:10"), 1.0, 2.0, "kitchen"], report["path"][0]
+    assert report["places"] == {"kitchen": {"pill box": [0.0, 0.0], "front door": [0.0, 0.0]}} and raw.count('"wp"') == 1, report["places"]
 
     # Days: yesterday can be asked for, and only keep_days files are kept.
     clock["now"] = at("09:00", "2026-11-15")
@@ -241,14 +244,15 @@ def main():
     # A visit the log is not sure of is left out of what is said to the wearer, and hedged when asked about.
     weak = day.DayLog(Path(tempfile.mkdtemp(prefix="day-test-")), clock=UTC, now=lambda: clock["now"])
     walk(weak, "08:00", "08:10", 4.0, 5.0)
-    weak.fix(fix("found", 1.5, 5.0), at=at("08:10:06"))  # one fix, right at the limit
+    shaky = {"state": "steady", "position": [1, 2, 0], "heading_deg": 0, "confidence_pct": 50, "waypoints": way(1.5)}
+    weak.fix({**fix("found", 1.5, 5.0), "stable": shaky}, at=at("08:10:06"))  # one fix, right at the limit, and the stabiliser is half sure
     walk(weak, "08:10:12", "08:20", 4.0, 5.0)
     weak.event({"id": "v1", "type": "object_moved", "source": "vision", "ts": "2026-11-15T08:15:00+00:00", "zone": "kitchen", "object": "keys", "confidence": 0.6})
     clock["now"] = at("08:30", "2026-11-15")
     spoken, shown = weak.summary(now=at("08:30")), weak.summary(for_="carer", now=at("08:30"))
     doubtful = [e for e in weak.timeline(now=at("08:30")) if e["kind"] == "place"]
     assert len(doubtful) == 1 and doubtful[0]["confidence_pct"] < day.SPEAK_PCT, doubtful
-    assert "pill box" not in spoken and "The wearer was near the pill box at 08:10." in shown and "1 of these entries is uncertain (under 60%)" in shown, (spoken, shown)
+    assert "pill box" not in spoken and "The wearer was near the pill box at 08:10 (uncertain)." in shown and "1 of these entries is uncertain (under 60%)" in shown, (spoken, shown)
     assert weak.answer("Did I go to the pill box today?", now=at("08:30"))["answer"] == "I may have seen you near the pill box at 08:10, but I am not sure."
     clock["now"] = at("09:00", "2026-11-15")
     assert all("ongoing" not in e or not e["ongoing"] for e in again.timeline(DAY)) and len([e for e in again.timeline(DAY) if e["kind"] == "gap"]) == 1
