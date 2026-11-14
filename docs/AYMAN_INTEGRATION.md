@@ -68,3 +68,14 @@ Provider credentials were not copied into this worktree or committed.
 
 This integration PR is a combined review candidate. Coordinate how it lands with PRs
 #6 and #13 rather than merging multiple copies independently.
+
+## Source storage limits
+
+UNO Q stores uploaded image bytes unchanged. Central face and metadata processing
+does not protect those source artifacts; resolve source privacy before using real
+household images. Metadata transfer never fetches or uploads those files.
+
+The importer accepts at most 10,000 events and 8 MiB per export. The source keeps
+event history, so reaching either limit stops further imports visibly; pagination
+or deliberate archival is required for longer operation. Source ISO 8601 timestamps
+are normalized to central-compatible timestamps while preserving their instant.

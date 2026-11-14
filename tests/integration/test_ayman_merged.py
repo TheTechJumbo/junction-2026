@@ -140,7 +140,8 @@ def assert_central_empty(services):
 
 def test_merged_store_image_stays_local_and_real_export_retries_deduplicate(merged_services):
     services = merged_services
-    event = seed(services, "merged-store-photo-event")
+    event = seed(services, "merged-store-photo-event",
+                 ts=datetime.now(UTC).strftime("%Y%m%dT%H%M%S+0000"))
     image = io.BytesIO()
     Image.new("RGB", (4, 3), "blue").save(image, "PNG")
     raw = image.getvalue()
@@ -163,6 +164,7 @@ def test_merged_store_image_stays_local_and_real_export_retries_deduplicate(merg
     page = services.api.get("/events").json()
     assert len(page["events"]) == 1
     assert page["events"][0]["id"] == event["id"]
+    assert datetime.fromisoformat(page["events"][0]["ts"].replace("Z", "+00:00")) == datetime.fromisoformat(event["ts"])
     assert page["events"][0]["evidence_url"] is None
     cursor = page["next_cursor"]
     second = import_cli(services)

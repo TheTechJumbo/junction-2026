@@ -1,6 +1,7 @@
 """Explicit one-shot transfer of UNO Q scalar observations; never copies images."""
 import argparse
 import os
+from datetime import datetime
 from urllib.parse import urlsplit
 
 import httpx
@@ -49,7 +50,16 @@ def transfer(source_origin, target_origin, source_token, target_token, *, client
             raise ExportUnavailable("UNO Q returned an unsupported export")
         if not isinstance(payload["events"], list) or len(payload["events"]) > 10000:
             raise ExportUnavailable("UNO Q returned an unsupported export")
-        events = [Event.model_validate(item) for item in payload["events"]]
+        # Match the source's ISO 8601 parser without relaxing central validation.
+        normalized = []
+        for item in payload["events"]:
+            item = dict(item)
+            stamp = datetime.fromisoformat(item["ts"].replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                raise ExportUnavailable("UNO Q timestamp needs a timezone")
+            item["ts"] = stamp.isoformat()
+            normalized.append(item)
+        events = [Event.model_validate(item) for item in normalized]
         # Fail closed if the source contract changes: never transport local artifact URLs.
         if any(event.evidence_url is not None for event in events):
             raise ExportUnavailable("UNO Q export unexpectedly contains image references")
