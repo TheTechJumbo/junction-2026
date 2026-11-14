@@ -79,7 +79,8 @@ def set_baseline(job, req):
     zone.mkdir(parents=True, exist_ok=True)
     for old in zone.glob("*.jpg"):
         old.unlink()
-    (zone / "waypoints.json").unlink(missing_ok=True)  # places were picked in the old pictures
+    for chosen in ("waypoints.json", "watch.json", "scale.json"):  # places, watched spots and the scale
+        (zone / chosen).unlink(missing_ok=True)  # were all picked in the old pictures
     for i, frame in enumerate(frames):
         cv2.imwrite(str(zone / f"{i:02d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
     return {"frames": len(frames)}

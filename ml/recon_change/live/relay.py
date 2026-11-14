@@ -30,6 +30,18 @@ It prints the link to open. The link carries an access key, and every request ne
     POST /reminder                body = {"text": "Time to take your pills", "time": "14:00", "place": "pill box"}
     POST /reminder?id=ID&now=1    show it now (also &done=1: finished by hand, &delete=1)
 
+What the carer sets once, on /places (the gateway keeps it next to the baseline pictures):
+
+    POST /scale?zone=kitchen&a=pill+box&b=front+door&metres=2.4   the real distance between two named
+                                  places, so distances come out in real metres (&delete=1 removes it;
+                                  GET /waypoints shows it as "scale")
+    POST /watch?zone=kitchen&name=pill+box+shelf&frame=3&u0=0.2&v0=0.3&u1=0.5&v1=0.6
+                                  a box in baseline picture 3 to check for changes (&name=...&delete=1 removes it)
+    GET  /watch?zone=kitchen      the zone's watched spots
+    POST /enroll?name=keys        body = one photo of that exact item (JPEG, PNG or WebP), up to five per item
+    POST /enroll?name=keys&delete=1   forget the item (&n=1 too: only that photo)
+    GET  /enrolled                the items and how many photos each has; a photo is /enrolled/keys/0.jpg
+
 A reminder is shown and spoken on the glasses display when it is due, with the way to its place.
 One for the pill box is done when a sensor reports the box was opened (read from the event API).
 
@@ -273,6 +285,49 @@ def post_events(url, events):
     request = urllib.request.Request(url, json.dumps(events).encode(), {"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=5) as response:
         return response.status
+
+
+# ---------------------------------------------------------------- what the carer sets once
+# The room's real scale, the spots to watch and the items shown to the camera once. The relay
+# checks what the page sends, and the gateway, which writes the files, checks all of it again.
+ZONE_NAME = r"[a-z0-9_-]{1,32}"
+ITEM_NAME = r"[a-z0-9]+(?:_[a-z0-9]+)*"  # an enrolled item as its folder is named: "remote_control"
+PHOTO_BYTES = 20 * 1024 * 1024  # the largest photo of an item
+
+
+def item_name(text):
+    """"Remote control" -> "remote_control", or "" if it is not a plain name of at most 32 characters."""
+    name = "_".join(text.lower().split())
+    return name if len(name) <= 32 and re.fullmatch(ITEM_NAME, name) else ""
+
+
+def plain_name(text):
+    """A typed name with single spaces, or "" unless it starts with a letter or a digit and goes on
+    with letters, digits, spaces, ' and -, at most 40 characters in all."""
+    name = " ".join(text.split())
+    return name if re.fullmatch(r"[^\W_][\w '-]{0,39}", name) else ""
+
+
+def in_range(text, low, high):
+    """A number from the query string, if it is a finite one from low to high. ValueError otherwise."""
+    value = float(text)
+    if not (math.isfinite(value) and low <= value <= high):
+        raise ValueError(text)
+    return value
+
+
+def item_photo(photo):
+    """A photo of an item as a JPEG with its long side at most BIG_SIDE, so little goes over the SSH
+    connection. Without OpenCV it is passed on as it is, and the gateway shrinks it."""
+    if cv2 is None:
+        return photo
+    frame = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise ValueError("not a picture")
+    scale = BIG_SIDE / max(frame.shape[:2])
+    if scale < 1:
+        frame = cv2.resize(frame, (round(frame.shape[1] * scale), round(frame.shape[0] * scale)), interpolation=cv2.INTER_AREA)
+    return cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
 
 
 REPO = "TheTechJumbo/junction-2026"
@@ -548,6 +603,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if url.path == "/waypoints":
                 header, _ = link.call({"op": "waypoints", "zone": zone})
                 return self.send_json(200 if header.get("ok") else 404, header)
+            if url.path == "/watch":  # the zone's watched spots
+                if not re.fullmatch(ZONE_NAME, zone):
+                    return self.send_json(400, {"ok": False, "error": "GET /watch?zone=NAME"})
+                header, _ = link.call({"op": "watches", "zone": zone})
+                return self.send_json(200 if header.get("ok") else 404, header)
+            if url.path == "/enrolled":  # the items shown to the camera once, for the whole home
+                header, _ = link.call({"op": "enrolled"})
+                return self.send_json(200 if header.get("ok") else 502, header)
+            match = re.fullmatch(rf"/enrolled/({ITEM_NAME})/(\d{{1,2}})\.jpg", url.path)
+            if match and len(match[1]) <= 32:
+                header, picture = link.call({"op": "enrolled_image", "name": match[1], "n": int(match[2])})
+                if header.get("ok"):
+                    return self.send_bytes(200, picture, "image/jpeg")
+                return self.send_json(404, header)
             match = re.fullmatch(r"/baseline/([a-z0-9_-]{1,32})/(\d{1,2})\.jpg", url.path)
             if match:
                 header, picture = link.call({"op": "baseline_image", "zone": match[1], "frame": int(match[2])})
@@ -642,6 +711,66 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 save_reminders()
                 return self.send_json(200, {"ok": True, "reminders": reminder_list(), "sensors": bool(api_base)})
 
+        def change_setup(self, op, query, zone, size):
+            """What the carer sets once. /scale: the real distance between two named places. /watch: a box
+            in a baseline picture to check for changes. /enroll: a photo of an item to recognise.
+            Everything but the photo is in the query. The gateway checks it all again before it writes."""
+            first = lambda name: query.get(name, [""])[0]  # noqa: E731
+            delete = bool(first("delete"))
+            if op == "enroll":
+                name, photo = item_name(first("name")), b""
+                req = {"op": "enroll", "name": name}
+                if not name:
+                    self.rfile.read(min(size, 65536))
+                    return self.send_json(400, {"ok": False, "error": "Give the item a plain name: letters, digits and spaces, at most 32 characters."})
+                if delete:  # the whole item, or with n= one of its photos
+                    self.rfile.read(min(size, 65536))
+                    req["delete"] = True
+                    if first("n"):
+                        if not re.fullmatch(r"\d{1,2}", first("n")):
+                            return self.send_json(400, {"ok": False, "error": "POST /enroll?name=ITEM&n=PHOTO&delete=1"})
+                        req["n"] = int(first("n"))
+                else:
+                    if not 0 < size <= PHOTO_BYTES:
+                        return self.send_json(400, {"ok": False, "error": f"Send one photo of the item, at most {PHOTO_BYTES >> 20} MB."})
+                    photo = self.rfile.read(size)
+                    try:
+                        if not is_photo(photo):
+                            raise ValueError("not a picture")
+                        photo = item_photo(photo)
+                    except ValueError:
+                        return self.send_json(400, {"ok": False, "error": "That is not a photo. Use a JPEG, PNG or WebP picture."})
+                header, _ = link.call(req, photo)
+                return self.send_json(200 if header.get("ok") else 400, header)
+            self.rfile.read(min(size, 65536))  # scale and watch: everything is in the query
+            if not re.fullmatch(ZONE_NAME, zone):
+                return self.send_json(400, {"ok": False, "error": "Pick a room first."})
+            req = {"op": op, "zone": zone}
+            try:
+                if op == "scale" and delete:
+                    req["delete"] = True
+                elif op == "scale":
+                    a, b = " ".join(first("a").split()), " ".join(first("b").split())
+                    if not a or not b or a == b or max(len(a), len(b)) > 40:
+                        raise ValueError("two different places")
+                    req.update(a=a, b=b, metres=in_range(first("metres"), 0.1, 50))
+                else:
+                    req["name"] = plain_name(first("name"))
+                    if not req["name"]:
+                        raise ValueError("a plain name")
+                    if delete:
+                        req["delete"] = True
+                    else:
+                        if not re.fullmatch(r"\d{1,2}", first("frame")):
+                            raise ValueError("a baseline picture")
+                        req.update(frame=int(first("frame")), box=[in_range(first(k), 0, 1) for k in ("u0", "v0", "u1", "v1")])
+            except ValueError:
+                return self.send_json(400, {"ok": False, "error": {
+                    "scale": "Pick two different places and type the distance between them in metres, from 0.1 to 50.",
+                    "watch": "Give the spot a plain name (letters, digits and spaces) and drag a box in the picture."}[op]})
+            header, _ = link.call(req)
+            return self.send_json(200 if header.get("ok") else 400, header)
+
         def do_POST(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
@@ -675,6 +804,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     return self.send_json(400, {"ok": False, "error": "POST /waypoint?zone=NAME&name=PLACE&frame=N&u=0..1&v=0..1"})
                 header, _ = link.call(req)
                 return self.send_json(200 if header.get("ok") else 400, header)
+            if op in ("scale", "watch", "enroll"):  # what the carer sets once: see change_setup
+                return self.change_setup(op, query, zone, size)
             if op not in FRAMES or not zone or not 0 < size <= MAX_BODY:
                 return self.send_json(400, {"ok": False, "error": "POST /baseline, /check or /locate with ?zone=NAME and a video (or, for /locate, a photo) as the body."})
             t0 = time.time()
