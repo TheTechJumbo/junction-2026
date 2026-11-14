@@ -38,3 +38,18 @@ network configuration was changed during this work.
 - Real before/after inference, Gaussian splatting and actual fallback filming are pending.
 - Service restart persistence is tested; full power-cycle and physically disconnected
   network tests remain to be performed at rehearsal.
+
+## Follow-up: quantized VGGT executes locally
+
+The FP32 gate above still applies to the original checkpoint. A separate INT8
+experiment now succeeds: two public kitchen images, 224x224 padded inputs, finite
+depth/confidence/camera pose outputs. Checkpoint size 1,916,630,560 bytes;
+load 20.10 seconds, inference 270.79 seconds, peak process RSS 2,405,060 KiB
+(2.29 GiB). See `quant/two-frame-board-result.json` and `quant/README.md`.
+This proves execution, not acceptable geometric accuracy or real-time operation.
+Storage stayed active. No personal imagery or remote inference was used.
+
+Three-frame quantized inference also passed: 400.14 s, peak RSS 2.31 GiB, finite
+calibration matrices and correct local reconstruction output shapes. The nine-frame
+run timed out at 600.46 s without completed outputs. Memory limits did not stop it.
+Thus execution is proved for small batches; full before/after quality remains pending.
