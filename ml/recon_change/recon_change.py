@@ -530,7 +530,9 @@ def appearance(r, lab, valid, query, ref, tol, beyond=True):
         out["frame"].append(np.full(int(ok.sum()), q))
         out["cell"].append(cell[ok])
         out["point"].append(pts[ok])
-        out["colour"].append((c_ref - c_own)[ok])
+        with np.errstate(invalid="ignore"):  # cells no frame could be compared with are dropped by ok
+            surplus = c_ref - c_own
+        out["colour"].append(surplus[ok])
         out["feature"].append((s_own - s_ref)[ok] if feat is not None else np.zeros(int(ok.sum()), np.float32))
     return {k: np.concatenate(v) if len(v) else np.zeros(0) for k, v in out.items()}
 
