@@ -122,7 +122,9 @@ under-two-second question-to-audible-answer on the phone or performance on UNO Q
 
 Read-only Linear handoff refresh of JUN-19, JUN-6, JUN-11 and JUN-20 plus comments found
 no change to the agreed source snapshot. Their statuses were not changed. D1–D9 in
-`DECISIONS.md` remain unresolved team decisions, not implied approval.
+`DECISIONS.md` track team decisions. Bartek subsequently confirmed observation-only
+medication answers (see the dated decision there); team-wide agreement and the other
+release gates remain outstanding.
 
 Ed: confirm SSE upsert/no re-trigger on evidence-only updates, multipart field `file`,
 Bearer auth, MP3 response and local speech fallback; time question-to-audible-answer.

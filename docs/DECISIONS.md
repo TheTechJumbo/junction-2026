@@ -36,3 +36,16 @@ Existing unmerged code inspected:
 
 These observations are snapshots, not authorization to merge other owners' branches.
 Worker contracts are provisional; only integrator changes shared types and examples.
+
+## Bartek product decision — 14 November 2026
+
+Bartek explicitly selected observation-only medication answers. Describe recorded sensor
+observations, timestamps and available photos for review by the person, carer or doctor;
+do not answer yes/no about ingestion, recommend dosing, or make medical decisions.
+Example: “The pill box was opened at 08:00. I cannot confirm that the pills were taken.”
+Call these recorded observations or supporting records, not verified medical evidence.
+A photo or lid opening does not establish ingestion, dose, adherence or safety.
+This confirms the current conservative implementation for Bartek's scope. It is not
+team-wide approval, clinical validation, or a conclusion about legal responsibility.
+No Linear update or teammate message was sent. Live spoken-response timing under two
+seconds remains a separate acceptance check.
