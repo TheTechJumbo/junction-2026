@@ -47,6 +47,10 @@ data class MetaState(
     val speech: String = "STOPPED",
     val motion: String = "STOPPED",
     val error: String? = null,
+    /** Counts sessions that timed out, reported an error or could not be created; lets callers retry. */
+    val sessionFailures: Int = 0,
+    /** Counts started sessions the glasses ended themselves (they do so after a few idle minutes). */
+    val sessionEnds: Int = 0,
 )
 data class MotionReading(val timestampNs: Long, val x: Float, val y: Float, val z: Float)
 
@@ -93,6 +97,14 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     }
 
     private fun fail(message: String) { mutableState.update { it.copy(error = message) } }
+    private fun sessionFailed(message: String) {
+        mutableState.update { it.copy(error = message, sessionFailures = it.sessionFailures + 1) }
+    }
+    /** Routine, not an error: the glasses end a started session after a few idle minutes. */
+    private fun sessionEnded() {
+        mutableState.update { it.copy(error = "Glasses ended the idle session. They reconnect when needed.", sessionEnds = it.sessionEnds + 1) }
+    }
+    private var sessionStarted = false
     private fun runCommand(block: suspend CoroutineScope.() -> Unit) = scope.launch {
         try { block() } catch (e: CancellationException) { throw e }
         catch (_: Exception) { fail("Glasses operation failed. Check permissions and reconnect.") }
@@ -122,6 +134,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         if (session != null) return
         Wearables.createSession(AutoDeviceSelector()).onSuccess { connected ->
             session = connected
+            sessionStarted = false
             val owner = SupervisorJob(job)
             sessionJob = owner
             val listeners = CoroutineScope(scope.coroutineContext + owner)
@@ -130,17 +143,54 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
             listeners.launch {
                 connected.state.collect { status ->
                     mutableState.update { it.copy(connection = status.name) }
+                    if (status == DeviceSessionState.STARTED) sessionStarted = true
                     if (status == DeviceSessionState.STARTED && state.value.displayEnabled && display == null) attachDisplay(connected, listeners)
-                    if (status == DeviceSessionState.STOPPED) disconnect()
+                    if (status == DeviceSessionState.STOPPED) { if (sessionStarted) sessionEnded(); disconnect() }
                 }
             }
-            listeners.launch { connected.errors.collect { fail("Glasses session failed: ${it.description}"); disconnect() } }
+            listeners.launch { connected.errors.collect {
+                val description = "${it.description}"
+                if (description.contains("ended by device", ignoreCase = true)) sessionEnded()
+                else sessionFailed("Glasses session failed: $description")
+                disconnect()
+            } }
             connected.start()
             listeners.launch {
                 delay(20_000)
-                if (state.value.connection != "STARTED") { fail("Glasses connection timed out. Put on the glasses and retry."); disconnect() }
+                if (!sessionStarted) { sessionFailed("Glasses connection timed out. Put on the glasses and retry."); disconnect() }
             }
-        }.onFailure { _, _ -> fail("Cannot create glasses session. Check pairing and SDK/device compatibility.") }
+        }.onFailure { _, _ -> sessionFailed("Cannot create glasses session. Check pairing and SDK/device compatibility.") }
+    }
+
+    /**
+     * Connects when needed and waits up to [timeoutMs] for STARTED, so features keep working after the
+     * glasses ended an idle session. False when not registered or the session does not start in time.
+     */
+    suspend fun ensureStarted(timeoutMs: Long = 20_000): Boolean {
+        if (session != null && state.value.connection == "STARTED") return true
+        connect()
+        if (session == null) return false
+        val reached = withTimeoutOrNull(timeoutMs) {
+            state.first { it.connection == "STARTED" || it.connection == "DISCONNECTED" }
+        }
+        return reached?.connection == "STARTED" && session != null
+    }
+
+    /**
+     * Asks Meta AI for glasses camera and then microphone consent through the same path camera and
+     * listening use, skipping any already granted. Starts no camera or microphone stream. [onFinished]
+     * runs on Main once both answers are settled, whatever they are; not if this adapter closes first.
+     */
+    fun requestConsent(onFinished: () -> Unit) {
+        if (!state.value.initialized) { onFinished(); return }
+        scope.launch {
+            for (permission in listOf(Permission.CAMERA, Permission.MICROPHONE)) {
+                try { permission(permission) }
+                catch (_: CancellationException) { ensureActive() }
+                catch (_: Exception) { fail("Glasses consent request failed. Camera and microphone ask again when used.") }
+            }
+            onFinished()
+        }
     }
 
     /** Audio-first by default. Changing mode tears down the old hardware session. */
@@ -209,11 +259,13 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
 
     fun startCamera() = runCommand {
         if (camera != null || cameraStarting) return@runCommand
-        val connected = session?.takeIf { state.value.connection == "STARTED" }
-            ?: run { fail("Connect glasses before starting the camera."); return@runCommand }
         cameraStarting = true
         val generation = ++cameraGeneration
         try {
+            // Connect on demand: the glasses end idle sessions by themselves.
+            val connected = (if (ensureStarted()) session else null)
+                ?: run { fail("Connect glasses before starting the camera."); return@runCommand }
+            if (generation != cameraGeneration) return@runCommand
             if (!permission(Permission.CAMERA)) { fail("Glasses camera permission was not granted."); return@runCommand }
             if (session !== connected || generation != cameraGeneration) return@runCommand
             connected.addCamera(StreamConfiguration(videoQuality = VideoQuality.MEDIUM, frameRate = 15)).onSuccess { added ->
@@ -270,12 +322,14 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
 
     fun startListening() = runCommand {
         if (speechStarting) return@runCommand
-        val connected = session?.takeIf { state.value.connection == "STARTED" }
-            ?: run { fail("Connect glasses before listening."); return@runCommand }
         speechStarting = true
         listeningRequested = true
         val generation = ++listenGeneration
         try {
+            // Connect on demand: the glasses end idle sessions by themselves.
+            val connected = (if (ensureStarted()) session else null)
+                ?: run { fail("Connect glasses before listening."); return@runCommand }
+            if (generation != listenGeneration || !listeningRequested) return@runCommand
             if (!permission(Permission.MICROPHONE)) { fail("Glasses microphone permission was not granted."); return@runCommand }
             if (session !== connected || generation != listenGeneration || !listeningRequested) return@runCommand
             if (speech == null) connected.addSpeech().onSuccess { added ->

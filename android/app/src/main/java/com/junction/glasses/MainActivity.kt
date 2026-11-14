@@ -4,7 +4,12 @@ import android.app.AlertDialog
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,17 +17,32 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.text.InputType
+import android.view.Gravity
 import android.view.WindowManager
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.junction.glasses.core.*
 import com.junction.glasses.meta.MetaGlassesAdapter
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        /** Tests that drive the controls by hand switch this off before creating the Activity. */
+        internal var automaticSetup = true
+        /** Tests replace the Android Keystore memory with a software key; production leaves this null. */
+        internal var backendMemoryOverride: BackendMemory? = null
+        private val PHONE_PERMISSIONS = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+        private const val STATE_PERMISSIONS_REQUESTED = "auto_setup_permissions_requested"
+        private const val STATE_REGISTRATION_REQUESTED = "auto_setup_registration_requested"
+        private const val STATE_CONSENT_REQUESTED = "auto_setup_consent_requested"
+        private const val REGISTRATION_SETTLE_MS = 3_000L
+    }
     private val main = Handler(Looper.getMainLooper())
     private lateinit var glasses: MetaGlassesAdapter
     private lateinit var audio: AndroidAudioOutput
@@ -58,6 +78,22 @@ class MainActivity : ComponentActivity() {
     private var pendingPhoneListen = false
     private var recognitionGeneration = 0L
     private var displayJob: Job? = null
+    private lateinit var colors: Palette
+    private lateinit var setupStatus: TextView
+    private lateinit var backendChip: TextView
+    private lateinit var glassesChip: TextView
+    private lateinit var micChip: TextView
+    private var autoGlasses = AutoGlassesSetup()
+    private var autoPermissionsRequested = false
+    private var autoPermissionsPending = false
+    private var registrationWatchStarted = false
+    private var registrationSettled = false
+    private var autoRetryJob: Job? = null
+    private var backendInterrupted = false
+    /** DEBUG builds with automatic setup only; release builds never persist the backend. */
+    private val backendMemory: BackendMemory? by lazy {
+        if (BuildConfig.DEBUG && automaticSetup) backendMemoryOverride ?: BackendMemory.androidKeystore(applicationContext) else null
+    }
     private fun stopRecognition() {
         recognitionGeneration++
         pendingPhoneListen = false
@@ -67,51 +103,87 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) glasses.initialize()
         if (pendingPhoneListen) { pendingPhoneListen = false; startPhoneListening() }
         updatePermissionStatus()
+        autoPermissionsPending = false
+        continueAutomaticSetup()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        autoPermissionsRequested = savedInstanceState?.getBoolean(STATE_PERMISSIONS_REQUESTED) == true
+        autoGlasses = AutoGlassesSetup(
+            registrationRequested = savedInstanceState?.getBoolean(STATE_REGISTRATION_REQUESTED) == true,
+            consentRequested = savedInstanceState?.getBoolean(STATE_CONSENT_REQUESTED) == true,
+        )
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         audio = AndroidAudioOutput(this)
         glasses = MetaGlassesAdapter(this, lifecycleScope)
+        colors = Palette((resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)
         val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24)
-            setBackgroundColor(Color.rgb(246, 248, 248))
+            orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(24))
+            setBackgroundColor(colors.background)
         }
+        var container: LinearLayout = column
         fun label(text: String, size: Float = 16f): TextView = TextView(this).apply {
-            this.text = text; textSize = size; setPadding(0, 12, 0, 8); column.addView(this)
+            this.text = text; textSize = size; setTextColor(colors.text)
+            setPadding(0, dp(6), 0, dp(6)); container.addView(this)
+        }
+        fun note(text: String): TextView = label(text, 13f).apply { setTextColor(colors.secondaryText) }
+        fun card(heading: String) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(16))
+                background = rounded(colors.surface, 16, colors.cardStroke)
+                elevation = dp(2).toFloat()
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    .apply { topMargin = dp(12) }
+            }
+            column.addView(card)
+            container = card
+            label(heading, 20f).setTypeface(null, Typeface.BOLD)
         }
         fun field(hintText: String, secret: Boolean = false): EditText = EditText(this).apply {
             hint = hintText; isSingleLine = true; isSaveEnabled = false
             inputType = if (secret) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
-            column.addView(this)
+            setTextColor(colors.text); setHintTextColor(colors.secondaryText)
+            container.addView(this)
         }
-        fun button(title: String, action: () -> Unit): Button = Button(this).apply {
-            text = title; setOnClickListener { action() }; column.addView(this)
+        fun button(title: String, primary: Boolean = false, action: () -> Unit): Button = Button(this).apply {
+            text = title; setOnClickListener { action() }; stylePill(this, primary); container.addView(this)
         }
-        label("Memory with receipts", 26f)
-        label("Gen 2 glasses: spoken answers, with records on your phone. No glasses display required.")
-        label("Recorded observations, not confirmation that medication was taken.")
-        label("1. Backend setup", 22f)
-        label("Use the backend API_TOKEN, not an ElevenLabs key or database URL. Emulator: http://10.0.2.2:8000. USB phone: http://127.0.0.1:8000 with adb reverse.")
+        label("Memory with receipts", 26f).setTypeface(null, Typeface.BOLD)
+        note("Gen 2 glasses: spoken answers, with records on your phone. No glasses display required.")
+        note("Recorded observations, not confirmation that medication was taken.")
+        card("Status")
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
+        container.addView(chips)
+        fun chip(): TextView = TextView(this).apply {
+            textSize = 13f; gravity = Gravity.CENTER; maxLines = 2
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) }
+            chips.addView(this)
+        }
+        backendChip = chip(); glassesChip = chip(); micChip = chip()
+        setupStatus = note("Setting up automatically…")
+        card("1. Backend setup")
+        note("Use the backend API_TOKEN, not an ElevenLabs key or database URL. Emulator: http://10.0.2.2:8000. USB phone: http://127.0.0.1:8000 with adb reverse.")
         endpoint = field("Backend HTTPS URL").apply {
             if (BuildConfig.DEBUG) setText(if (android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.MODEL.contains("Emulator")) "http://10.0.2.2:8000" else "http://127.0.0.1:8000")
         }
-        token = field("Session token — kept only while app is open", true)
-        connectButton = button("Connect backend") { connectBackend() }
+        token = field(if (BuildConfig.DEBUG) "Session token — debug builds remember it, encrypted" else "Session token — kept only while app is open", true)
+        connectButton = button("Connect backend", primary = true) { connectBackend() }
         backendStatus = label("Backend: not checked.")
-        label("2. Ask and listen", 22f)
+        if (BuildConfig.DEBUG) button("Forget saved backend") { forgetBackend() }
+        card("2. Ask and listen")
         status = label("Enter your backend address and session token.")
         speechStatus = label("Speech source: not tested.")
         question = field("Ask a question")
-        button("Ask") { submit(question.text.toString()) }
+        button("Ask", primary = true) { submit(question.text.toString()) }
         button("Use phone microphone") {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 pendingPhoneListen = true; permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
             } else startPhoneListening()
         }
-        button("Ask through glasses") {
+        button("Ask through glasses", primary = true) {
             if (controller == null) { status.text = "Connect the backend first." }
             else { stopTurn(); glasses.startListening() }
         }
@@ -128,21 +200,20 @@ class MainActivity : ComponentActivity() {
                     question.setText(request); submit(request)
                 }.show()
         }
-        label("Directions use the backend’s latest location estimate. Replay re-checks direction requests. No continuous guidance or obstacle detection.")
+        note("Directions use the backend’s latest location estimate. Replay re-checks direction requests. No continuous guidance or obstacle detection.")
         answerView = label("Your answer will appear here.", 22f)
         evidenceView = label("")
-        label("3. Glasses setup and tests", 22f)
-        label("Pair your glasses in Meta AI, enable Developer Mode, then enable access, register and connect below.")
+        card("3. Glasses setup and tests")
+        note("Pair your glasses in Meta AI, enable Developer Mode, then enable access, register and connect below.")
         permissionStatus = label("")
         deviceStatus = label("Not initialized. Enable Developer Mode in Meta AI and pair the glasses.")
-        button("Enable glasses access") {
-            permissions.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
-        }
+        button("Enable glasses access") { permissions.launch(PHONE_PERMISSIONS) }
         button("Register with Meta AI") { glasses.register() }
-        button("Connect / reconnect glasses") { glasses.connect() }
+        button("Connect / reconnect glasses", primary = true) { glasses.connect() }
         diagnosticStatus = label("Hardware tests: not run. A successful SDK call still needs confirmation on the glasses.")
         val displayOption = CheckBox(this).apply {
             text = "Optional: I am using display glasses"
+            setTextColor(colors.text)
             isChecked = false
             setOnCheckedChangeListener { _, enabled ->
                 stopTurn(); glasses.setDisplayEnabled(enabled); shownAnswer = null
@@ -150,14 +221,15 @@ class MainActivity : ComponentActivity() {
                 diagnosticStatus.text = "Glasses mode changed. Reconnect glasses; audio and phone answers remain available."
             }
         }
-        column.addView(displayOption)
+        container.addView(displayOption)
         displayTestButton = button("Test display") { testDisplay() }.apply { visibility = android.view.View.GONE }
         button("Test audio") {
             if (controller == null) status.text = "Connect the backend first to test provider speech and phone fallback."
             else { stopTurn(); lastQuestion = null; controller?.testAudio() }
         }
-        label("Audio uses Android’s selected media output. Confirm you hear it and check the phone’s Bluetooth media route.")
-        label("Camera is off until requested. Each capture stops it; an unused camera session stops after 60 seconds. Start it again for another photo.")
+        note("Audio uses Android’s selected media output. Confirm you hear it and check the phone’s Bluetooth media route.")
+        card("Glasses camera and motion")
+        note("Camera is off until requested. Each capture stops it; an unused camera session stops after 60 seconds. Start it again for another photo.")
         button("Start glasses camera") { glasses.startCamera() }
         button("Capture and attach supporting photo") { attachPhoto() }
         button("Stop glasses camera") { glasses.stopCamera() }
@@ -165,9 +237,11 @@ class MainActivity : ComponentActivity() {
         motionStatus = label("Motion readings are off; no gestures have been inferred.")
         button("Start glasses motion") { glasses.startMotion() }
         button("Stop glasses motion") { glasses.stopMotion() }
-        button("Disconnect glasses") { stopTurn(); glasses.disconnect() }
-        label("Audio uses Android’s selected media output. Check the Bluetooth output at the venue. Phone recognition may use the device’s speech service; no recordings are saved by this app.")
+        button("Disconnect glasses") { stopTurn(); cancelAutomaticRetry(); autoGlasses.userDisconnected(); glasses.disconnect() }
+        note("Audio uses Android’s selected media output. Check the Bluetooth output at the venue. Phone recognition may use the device’s speech service; no recordings are saved by this app.")
         setContentView(ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(colors.background)
             addView(column)
             setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
@@ -177,6 +251,7 @@ class MainActivity : ComponentActivity() {
         })
         lifecycleScope.launch { glasses.state.collect { s ->
             deviceStatus.text = "Registration: ${s.registration}\nDevices: ${s.deviceCount} · ${s.connection}\nCamera: ${s.camera} · ${displayDescription(s.display)}\nSpeech: ${s.speech} · Motion: ${s.motion}\nGlasses consent — Camera: ${s.cameraPermission}; microphone: ${s.microphonePermission}" + (s.error?.let { "\n$it" } ?: "")
+            refreshAutomaticSetup()
         } }
         lifecycleScope.launch { glasses.motion.collect { reading ->
             motionStatus.text = reading?.let { "Glasses acceleration: %.2f, %.2f, %.2f".format(it.x, it.y, it.z) }
@@ -187,12 +262,181 @@ class MainActivity : ComponentActivity() {
         } }
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) glasses.initialize()
         updatePermissionStatus()
+        if (!consumeDebugBackendExtras(apply = savedInstanceState == null)) connectRememberedBackend()
+        startAutomaticSetup()
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeDebugBackendExtras(apply = true)
+    }
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_PERMISSIONS_REQUESTED, autoPermissionsRequested)
+        outState.putBoolean(STATE_REGISTRATION_REQUESTED, autoGlasses.registrationRequested)
+        outState.putBoolean(STATE_CONSENT_REQUESTED, autoGlasses.consentRequested)
+    }
+    /**
+     * DEBUG builds only: adb extras backend_url/api_token fill the endpoint and token fields as if typed
+     * and connect. They are removed from the Intent first; a restored Activity ([apply] false) never
+     * reuses them. Release builds ignore them entirely. Returns true when extras were present.
+     */
+    private fun consumeDebugBackendExtras(apply: Boolean): Boolean {
+        val source: Intent = intent ?: return false
+        val extras = DebugBackendLaunch.read(source, BuildConfig.DEBUG) ?: return false
+        setIntent(DebugBackendLaunch.withoutExtras(source))
+        if (!apply) return false
+        extras.backendUrl?.let { endpoint.setText(it) }
+        extras.apiToken?.let { connectAutomatically(it) }
+        return true
+    }
+    /** DEBUG builds only: reconnect with the Keystore-encrypted backend remembered from an earlier run. */
+    private fun connectRememberedBackend() {
+        val (origin, remembered) = backendMemory?.load() ?: return
+        endpoint.setText(origin)
+        connectAutomatically(remembered)
+    }
+    /** Same path as typing the token and tapping Connect backend; the token never stays in the field. */
+    private fun connectAutomatically(secret: String) {
+        token.setText(secret)
+        connectBackend()
+        token.text.clear()
+    }
+    private fun forgetBackend() {
+        backendMemory?.forget()
+        backendStatus.text = "Backend: saved address and token forgotten on this phone. The current connection lasts until the app closes."
+    }
+    private fun isGranted(permission: String) = checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    /** Automatic setup step 1: request missing phone permissions once per launch, never again if denied. */
+    private fun startAutomaticSetup() {
+        if (automaticSetup && !autoPermissionsRequested && PHONE_PERMISSIONS.any { !isGranted(it) }) {
+            autoPermissionsRequested = true; autoPermissionsPending = true
+            permissions.launch(PHONE_PERMISSIONS)
+        } else continueAutomaticSetup()
+        renderSetupStatus()
+    }
+    /** Automatic glasses setup: follows the registration state flow; Meta AI is opened at most once. */
+    private fun continueAutomaticSetup() {
+        if (automaticSetup && isGranted(Manifest.permission.BLUETOOTH_CONNECT)) {
+            glasses.initialize()
+            if (!registrationWatchStarted && glasses.state.value.initialized) {
+                registrationWatchStarted = true
+                lifecycleScope.launch { delay(REGISTRATION_SETTLE_MS); registrationSettled = true; refreshAutomaticSetup() }
+            }
+        }
+        refreshAutomaticSetup()
+    }
+    private fun refreshAutomaticSetup() {
+        advanceAutomaticGlasses()
+        renderSetupStatus()
+    }
+    private fun advanceAutomaticGlasses() {
+        if (!automaticSetup || !registrationWatchStarted) return
+        val step = autoGlasses.next(glasses.state.value, foreground = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED),
+            externalFlowPending = glasses.isExternalFlowPending, registrationSettled = registrationSettled)
+        when (step) {
+            AutoGlassesSetup.Step.REGISTER -> glasses.register()
+            AutoGlassesSetup.Step.REQUEST_CONSENT -> glasses.requestConsent { autoGlasses.consentFinished(); refreshAutomaticSetup() }
+            AutoGlassesSetup.Step.CONNECT -> glasses.connect()
+            AutoGlassesSetup.Step.RETRY_LATER -> {
+                cancelAutomaticRetry()
+                val wait = autoGlasses.retryDelayMs
+                autoRetryJob = lifecycleScope.launch { delay(wait); autoGlasses.retryDue(); refreshAutomaticSetup() }
+            }
+            AutoGlassesSetup.Step.WAIT -> Unit
+        }
+    }
+    private fun cancelAutomaticRetry() { autoRetryJob?.cancel(); autoRetryJob = null }
+    private fun renderSetupStatus() {
+        if (!::setupStatus.isInitialized) return
+        renderStatusChips()
+        if (!automaticSetup) { setupStatus.text = "Automatic setup is off. Use the buttons below."; return }
+        val phone = when {
+            PHONE_PERMISSIONS.all { isGranted(it) } -> "allowed."
+            autoPermissionsPending -> "waiting for your answer…"
+            else -> "not all allowed. Tap Enable glasses access to ask again."
+        }
+        val backend = when {
+            controller != null -> "connected."
+            connectionCheck != null -> "checking…"
+            configuredOrigin != null -> "not connected. See the backend status below."
+            else -> "enter the address and session token below."
+        }
+        val s = glasses.state.value
+        val glassesStep = when {
+            !s.initialized -> if (isGranted(Manifest.permission.BLUETOOTH_CONNECT)) "starting Meta SDK…" else "needs Bluetooth access."
+            s.registration != AutoGlassesSetup.REGISTERED ->
+                if (autoGlasses.registrationRequested) "approve this app in Meta AI." else "checking Meta AI registration…"
+            autoGlasses.consentRunning -> "asking for glasses camera and microphone consent in Meta AI…"
+            s.connection == AutoGlassesSetup.STARTED -> "connected."
+            autoGlasses.idleReconnect -> "Glasses idle, reconnecting… (the glasses end idle sessions; this is normal)"
+            autoGlasses.retryPending -> "Waiting for glasses: put them on / unfold them. Retry ${autoGlasses.retriesUsed} of ${AutoGlassesSetup.MAX_RETRIES} in a few seconds."
+            s.connection != "DISCONNECTED" -> "connecting (${s.connection}). Waiting for glasses: put them on / unfold them."
+            autoGlasses.retriesUsed >= AutoGlassesSetup.MAX_RETRIES -> "not connected. Put on / unfold the glasses, then tap Connect / reconnect glasses."
+            else -> "not connected. Tap Connect / reconnect glasses."
+        }
+        setupStatus.text = "Setting up automatically:\nPermissions: $phone\nBackend: $backend\nGlasses: $glassesStep" +
+            (autoGlasses.lastFailure?.let { "\nLast glasses error: $it" } ?: "")
+    }
+    private fun renderStatusChips() {
+        when {
+            controller != null -> paintChip(backendChip, ChipLevel.GOOD, "Backend connected")
+            connectionCheck != null -> paintChip(backendChip, ChipLevel.WAIT, "Backend checking…")
+            configuredOrigin != null -> paintChip(backendChip, ChipLevel.BAD, "Backend not connected")
+            else -> paintChip(backendChip, ChipLevel.WAIT, "Backend not set up")
+        }
+        val s = glasses.state.value
+        when {
+            !s.initialized && isGranted(Manifest.permission.BLUETOOTH_CONNECT) -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses starting")
+            !s.initialized -> paintChip(glassesChip, ChipLevel.BAD, "Glasses need Bluetooth")
+            s.registration != AutoGlassesSetup.REGISTERED -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses not registered")
+            s.connection == AutoGlassesSetup.STARTED -> paintChip(glassesChip, ChipLevel.GOOD, "Glasses STARTED")
+            automaticSetup && autoGlasses.idleReconnect -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses idle, reconnecting")
+            s.connection == "DISCONNECTED" && !autoGlasses.retryPending -> paintChip(glassesChip, ChipLevel.BAD, "Glasses DISCONNECTED")
+            else -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses ${s.connection}")
+        }
+        val phoneMic = isGranted(Manifest.permission.RECORD_AUDIO)
+        when {
+            s.speech == "STARTED" -> paintChip(micChip, ChipLevel.GOOD, "Mic listening")
+            s.microphonePermission == "GRANTED" -> paintChip(micChip, ChipLevel.GOOD, "Mic ready")
+            phoneMic -> paintChip(micChip, ChipLevel.WAIT, "Mic needs consent")
+            else -> paintChip(micChip, ChipLevel.BAD, "Mic not allowed")
+        }
+    }
+    private fun paintChip(chip: TextView, level: ChipLevel, text: String) {
+        chip.text = text
+        chip.setTextColor(colors.chipText(level))
+        chip.background = rounded(colors.chipFill(level), 14, null)
+    }
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
+    private fun rounded(fill: Int, radiusDp: Int, stroke: Int?): GradientDrawable = GradientDrawable().apply {
+        setCornerRadius(dp(radiusDp).toFloat())
+        setColor(fill)
+        if (stroke != null) setStroke(dp(1), stroke)
+    }
+    /** Primary actions are filled pills, secondary ones outlined; the button text is never changed. */
+    private fun stylePill(button: Button, primary: Boolean) {
+        val shape = if (primary) rounded(colors.primary, 22, null) else rounded(Color.TRANSPARENT, 22, colors.outline)
+        val mask = rounded(Color.WHITE, 22, null)
+        button.background = RippleDrawable(ColorStateList.valueOf(colors.ripple), shape, mask)
+        button.setTextColor(ColorStateList(
+            arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+            intArrayOf(colors.secondaryText, if (primary) colors.onPrimary else colors.primary),
+        ))
+        button.isAllCaps = false
+        button.textSize = 15f
+        button.stateListAnimator = null
+        button.minHeight = dp(44)
+        button.setPadding(dp(16), dp(8), dp(16), dp(8))
+        button.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            .apply { topMargin = dp(8) }
     }
     private fun cancelConnectionCheck() {
         connectionGeneration++
         if (connectionCheck != null) backendStatus.text = "Backend check cancelled. Tap Connect backend to retry."
         connectionCheck?.cancel(); connectionCheck = null
         connectButton.isEnabled = true
+        renderSetupStatus()
     }
     private fun connectBackend() {
         stopTurn()
@@ -211,6 +455,7 @@ class MainActivity : ComponentActivity() {
             }
             configuredClient = client; configuredOrigin = origin
             token.text.clear()
+            val rememberToken = suppliedToken.takeIf { it.isNotBlank() }
             val generation = connectionGeneration
             backendStatus.text = "Backend: checking authentication and event API…"
             connectButton.isEnabled = false
@@ -220,6 +465,8 @@ class MainActivity : ComponentActivity() {
                 result.fold(onSuccess = {
                     evidenceClient = configuredEvidence
                     controller = VoiceTurnController(client, audio, { work -> if (Looper.myLooper() == main.looper) work() else main.post(work) }, ::renderTurn)
+                    // DEBUG only: a verified origin and token are remembered, encrypted, for the next launch.
+                    if (rememberToken != null) backendMemory?.save(origin, rememberToken)
                     backendStatus.text = "Backend: reachable and authenticated at last check."
                     status.text = "Backend connection verified. Ask a question or test audio."
                 }, onFailure = { failure ->
@@ -232,7 +479,9 @@ class MainActivity : ComponentActivity() {
                     }
                     status.text = "Backend not connected."
                 })
+                renderSetupStatus()
             } }
+            renderSetupStatus()
         } catch (_: Exception) {
             backendStatus.text = "Backend: not connected. Use a server origin and API_TOKEN. HTTPS is required except debug loopback."
         }
@@ -389,8 +638,10 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStop() {
         // Meta registration and consent intentionally leave this Activity briefly.
+        backendInterrupted = connectionCheck != null
         cancelConnectionCheck(); cancelDiagnostic()
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
+        cancelAutomaticRetry()
         if (!glasses.isExternalFlowPending) { glasses.stopListening(); glasses.suspendLifecycle() }
         super.onStop()
     }
@@ -398,9 +649,48 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         if (::glasses.isInitialized) glasses.onResume()
         updatePermissionStatus()
+        // Leaving the foreground disconnects the glasses (onStop); automatic setup reconnects once per return.
+        if (::glasses.isInitialized) {
+            resumeInterruptedBackendCheck()
+            cancelAutomaticRetry()
+            autoGlasses.onForeground()
+            continueAutomaticSetup()
+        }
+    }
+    /** A backend check cut short by leaving the app (e.g. Meta AI consent) is re-run with the in-memory client. */
+    private fun resumeInterruptedBackendCheck() {
+        val interrupted = backendInterrupted
+        backendInterrupted = false
+        if (automaticSetup && interrupted && controller == null && configuredClient != null &&
+            token.text.isEmpty() && endpoint.text.toString().trim() == configuredOrigin) connectBackend()
     }
     override fun onDestroy() {
         recognizer?.destroy(); glasses.close(); audio.close()
         super.onDestroy()
+    }
+}
+
+internal enum class ChipLevel { GOOD, WAIT, BAD }
+
+/** Light and dark colours for the programmatic views; the theme switches with the system night mode. */
+internal class Palette(private val night: Boolean) {
+    val background = if (night) Color.rgb(17, 19, 21) else Color.rgb(242, 245, 246)
+    val surface = if (night) Color.rgb(32, 36, 40) else Color.WHITE
+    val cardStroke = if (night) Color.rgb(52, 58, 64) else Color.rgb(222, 227, 231)
+    val text = if (night) Color.rgb(232, 234, 237) else Color.rgb(32, 33, 36)
+    val secondaryText = if (night) Color.rgb(154, 160, 166) else Color.rgb(95, 99, 104)
+    val primary = if (night) Color.rgb(138, 180, 248) else Color.rgb(26, 115, 232)
+    val onPrimary = if (night) Color.rgb(16, 32, 64) else Color.WHITE
+    val outline = if (night) Color.rgb(95, 99, 104) else Color.rgb(189, 193, 198)
+    val ripple = if (night) Color.argb(64, 255, 255, 255) else Color.argb(40, 0, 0, 0)
+    fun chipFill(level: ChipLevel): Int = when (level) {
+        ChipLevel.GOOD -> if (night) Color.rgb(30, 58, 43) else Color.rgb(230, 244, 234)
+        ChipLevel.WAIT -> if (night) Color.rgb(61, 52, 32) else Color.rgb(254, 247, 224)
+        ChipLevel.BAD -> if (night) Color.rgb(68, 36, 36) else Color.rgb(252, 232, 230)
+    }
+    fun chipText(level: ChipLevel): Int = when (level) {
+        ChipLevel.GOOD -> if (night) Color.rgb(129, 201, 149) else Color.rgb(19, 115, 51)
+        ChipLevel.WAIT -> if (night) Color.rgb(253, 214, 99) else Color.rgb(156, 86, 0)
+        ChipLevel.BAD -> if (night) Color.rgb(242, 139, 130) else Color.rgb(197, 34, 31)
     }
 }
