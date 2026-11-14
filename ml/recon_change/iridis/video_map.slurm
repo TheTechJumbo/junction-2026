@@ -25,6 +25,11 @@ if [ -d "$GS/pkgs" ]; then
     export CC=gcc CXX=g++
     export PYTHONPATH="$GS/pkgs${PYTHONPATH:+:$PYTHONPATH}" PATH="$GS/pkgs/bin:$PATH" TORCH_CUDA_ARCH_LIST="8.9" MAX_JOBS=4
 fi
+# Labels (OWLv2, the workers' item finder): its packages and weights, as worker.slurm finds them.
+ITEMS_ENV="$(realpath -m "${RECON_ITEMS_ENV:-items}")"
+if [ -d "$ITEMS_ENV/pkgs" ]; then
+    export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$ITEMS_ENV/pkgs" RECON_ITEMS_CACHE="${RECON_ITEMS_CACHE:-$ITEMS_ENV/hf/hub}"
+fi
 echo "== $(hostname) $(date +%T) $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
 "$PY" -u video_map.py "$@"
 echo "== done $(date +%T)"

@@ -10,6 +10,13 @@
   canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   #note { position: fixed; left: 10px; bottom: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
   #key { position: fixed; right: 10px; top: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
+  #play { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); display: none; gap: 10px; align-items: center;
+    background: rgba(13,19,27,.85); border: 1px solid #223040; border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+  #play button { font: inherit; color: #e8eef5; background: #12202d; border: 1px solid #4fc3ff; border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  #play input[type=range] { width: min(40vw, 420px); }
+  #play label { display: flex; gap: 4px; align-items: center; color: #93a1b2; }
+  #playStart { position: fixed; right: 12px; bottom: 34px; display: none; font: inherit; color: #e8eef5; background: #12202d;
+    border: 1px solid #4fc3ff; border-radius: 8px; padding: 7px 14px; cursor: pointer; }
   #key b.g { color: #3cdc78; } #key b.r { color: #ff6b5b; }
 </style>
 </head>
@@ -17,6 +24,14 @@
 <canvas id="view"></canvas>
 <div id="note">Loading…</div>
 <div id="key"><b class="g">green</b> appeared · <b class="r">red</b> gone · <b style="color:#4aa3ff">blue</b> wearer · drag to orbit</div>
+<button id="playStart">▶ Play the recording</button>
+<div id="play">
+  <button id="playPause">⏸</button>
+  <input type="range" id="playAt" min="0" max="1" step="0.01" value="0" aria-label="Where in the recording">
+  <label>speed <select id="playSpeed"><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+  <label><input type="checkbox" id="playAll"> all surfaces</label>
+  <label><input type="checkbox" id="playSplat"> 3D splat</label>
+</div>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
@@ -55,7 +70,139 @@ function resize() {
 }
 addEventListener('resize', resize);
 resize();
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+const onFrame = [];  // more to do every frame (the playback below)
+renderer.setAnimationLoop((now) => { onFrame.forEach(f => f(now)); controls.update(); renderer.render(scene, camera); });
+
+// ---- playback: the recording's keyframes as photo-textured surfaces (video_map.py: views.json, depths.bin, kfNNN.jpg).
+// Each keyframe is a grid of triangles at its own depth (a quarter of its pixels, none across a depth jump) with its photo
+// laid on it, so from where it was taken it is as sharp as the photo. The camera follows the recorded path and fades
+// from each keyframe's surface to the next; paused, it is a 3D space to orbit, with every surface or the trained splat.
+let playing = null;
+// ---- labels (video_map.py labels.json): the named things found in the keyframes, as name tags at their place in 3D ----
+let labelGroup = null;
+function labelSprite(text, size) {
+  const c = document.createElement('canvas'), g = c.getContext('2d'), px = 44;
+  g.font = `600 ${px}px system-ui, sans-serif`;
+  c.width = Math.ceil(g.measureText(text).width) + 28; c.height = px + 22;
+  g.font = `600 ${px}px system-ui, sans-serif`;
+  g.fillStyle = 'rgba(5, 7, 10, 0.78)'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#ffd228'; g.fillText(text, 14, px + 2);
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, depthTest: false, transparent: true }));
+  sprite.renderOrder = 20;
+  sprite.scale.set(size * c.width / c.height, size, 1);
+  return sprite;
+}
+async function showLabels(url, depth) {
+  const reply = await fetch(url, { cache: 'no-store' });
+  if (!reply.ok) return;
+  const found = await reply.json();
+  if (labelGroup) scene.remove(labelGroup);
+  labelGroup = new THREE.Group();
+  for (const o of found.objects || []) {
+    const tag = labelSprite(`${o.name}${o.views > 1 ? ` ×${o.views}` : ''}`, 0.05 * (depth || 1));
+    tag.position.set(o.position[0], -o.position[1], -o.position[2]);  // the splat's axes turned as the splats are
+    labelGroup.add(tag);
+  }
+  scene.add(labelGroup);
+}
+function half(h) {  // a float16 as a number
+  const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, f = h & 1023;
+  return e === 0 ? s * 2 ** -14 * (f / 1024) : e === 31 ? (f ? NaN : s * Infinity) : s * 2 ** (e - 15) * (1 + f / 1024);
+}
+function poseOf(E) {  // a world-to-camera matrix (OpenCV axes) as a three.js position and rotation, the scene turned as the splats are
+  const R = [0, 1, 2].map(i => E[i].slice(0, 3)), t = [E[0][3], E[1][3], E[2][3]];
+  const c = [0, 1, 2].map(k => -(R[0][k] * t[0] + R[1][k] * t[1] + R[2][k] * t[2]));
+  const turn = (v) => new THREE.Vector3(v[0], -v[1], -v[2]);
+  const x = turn(R[0]), y = turn(R[1]).negate(), z = turn(R[2]).negate();
+  return { pos: turn(c), quat: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z)) };
+}
+async function startPlayback(viewsUrl, splat) {
+  if (playing) return;
+  const key = q.get('k') || '';
+  const file = (name) => viewsUrl.split('?')[0].replace(/[^/]*$/, name) + `?k=${encodeURIComponent(key)}`;
+  const v = await (await fetch(viewsUrl, { cache: 'no-store' })).json();
+  const [W, H] = v.size, [w, h] = v.depth_size, S = v.files.length;
+  const raw = new Uint16Array(await (await fetch(file(v.depths), { cache: 'no-store' })).arrayBuffer());
+  const group = new THREE.Group();
+  group.quaternion.set(1, 0, 0, 0);
+  scene.add(group);
+  const textures = new THREE.TextureLoader();
+  const meshes = v.files.map((name, i) => {
+    const K = v.K[i], E = v.E[i], R = [0, 1, 2].map(r => E[r].slice(0, 3)), t = [E[0][3], E[1][3], E[2][3]];
+    const pos = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2), d = new Float32Array(w * h), index = [];
+    for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) {
+      const n = yy * w + xx, z = half(raw[i * w * h + n]);
+      d[n] = z > 0 ? z : 0;
+      const cam = [((xx + 0.5) * W / w - K[0][2]) / K[0][0] * d[n] - t[0], ((yy + 0.5) * H / h - K[1][2]) / K[1][1] * d[n] - t[1], d[n] - t[2]];
+      for (let k = 0; k < 3; k++) pos[3 * n + k] = R[0][k] * cam[0] + R[1][k] * cam[1] + R[2][k] * cam[2];
+      uv[2 * n] = (xx + 0.5) / w; uv[2 * n + 1] = 1 - (yy + 0.5) / h;
+    }
+    for (let yy = 0; yy < h - 1; yy++) for (let xx = 0; xx < w - 1; xx++) {
+      const a = yy * w + xx, b = a + 1, c = a + w, e = c + 1, four = [d[a], d[b], d[c], d[e]];
+      if (Math.min(...four) > 0 && Math.max(...four) < 1.06 * Math.min(...four)) index.push(a, c, b, b, c, e);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geometry.setIndex(index);
+    const map = textures.load(file(name));
+    map.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide, transparent: true, opacity: 0 }));
+    mesh.visible = false;
+    group.add(mesh);
+    return mesh;
+  });
+  const poses = v.E.map(poseOf);
+  const fy = v.K[0][1][1];
+  camera.fov = 2 * Math.atan(H / 2 / fy) * 180 / Math.PI;
+  camera.near = v.median_depth * 0.01; camera.far = v.median_depth * 200; camera.updateProjectionMatrix();
+  if (splat) splat.visible = false;
+  playing = { at: 0, run: true, last: null };
+  const $ = (id) => document.getElementById(id);
+  $('play').style.display = 'flex'; $('playStart').style.display = 'none';
+  $('playAt').max = String(S - 1);
+  $('key').textContent = 'playing the recording · pause to look around · each surface is a keyframe with its own photo';
+  const show = () => {
+    const at = Math.min(playing.at, S - 1), i = Math.floor(at), f = at - i, j = Math.min(i + 1, S - 1);
+    meshes.forEach((m, k) => {
+      const all = $('playAll').checked;
+      m.visible = all || k === i || k === j;
+      m.material.opacity = all ? 1 : k === i ? 1 - f : k === j ? f : 0;
+      m.renderOrder = k === i ? 0 : 1;
+    });
+    if (playing.run) {
+      camera.position.lerpVectors(poses[i].pos, poses[j].pos, f);
+      camera.quaternion.slerpQuaternions(poses[i].quat, poses[j].quat, f);
+    }
+    $('playAt').value = String(at);
+  };
+  const pause = (run) => {
+    playing.run = run;
+    $('playPause').textContent = run ? '⏸' : '▶';
+    controls.enabled = !run;
+    if (!run) {  // look around from here
+      const ahead = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      controls.target.copy(camera.position).addScaledVector(ahead, v.median_depth);
+      controls.update();
+    }
+  };
+  $('playPause').onclick = () => pause(!playing.run);
+  $('playAt').oninput = () => { playing.at = Number($('playAt').value); pause(true); show(); pause(false); show(); };
+  $('playAll').onchange = show;
+  $('playSplat').onchange = () => { if (splat) splat.visible = $('playSplat').checked; };
+  onFrame.push((now) => {
+    if (playing.last !== null && playing.run) {
+      playing.at += (now - playing.last) / 1000 * Number($('playSpeed').value);
+      if (playing.at >= S - 1) { playing.at = S - 1; pause(false); }
+    }
+    playing.last = now;
+    show();
+  });
+  pause(true);
+  note.textContent = `${S} keyframes as photo surfaces · ${v.size[0]}×${v.size[1]} photos`;
+}
 
 async function load(url) {  // one .splat file as a mesh in the scene, turned into three.js axes (see above)
   const bytes = new Uint8Array(await (await fetch(url, { cache: 'no-store' })).arrayBuffer());
@@ -67,7 +214,14 @@ async function load(url) {  // one .splat file as a mesh in the scene, turned in
 }
 
 const live = q.get('live');  // ?live=ZONE&k=KEY: follow the newest position fix of that room
-if (!live) {
+if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=...labels.json]: a result opened by its files
+  (async () => {
+    let splat = null;
+    if (q.get('src')) splat = (await load(q.get('src'))).mesh;
+    if (q.get('labels')) showLabels(q.get('labels'), 1);
+    startPlayback(q.get('views'), splat);
+  })();
+} else if (!live) {
   try {
     const { mesh, count } = await load(q.get('src'));
     note.textContent = `${count.toLocaleString('en-US')} Gaussians` + (/trained/.test(q.get('src')) ? ', trained on Iridis' : ', built on a CPU with no training');
@@ -125,6 +279,12 @@ if (!live) {
       camera.position.set(0, 0, 0); controls.target.set(0, 0, -d);
       camera.near = d * 0.005; camera.far = d * 200; camera.updateProjectionMatrix(); controls.update();
       roomMesh = mesh; roomJob = trained;
+      if (info.trained.labels) showLabels(api(info.trained.labels), info.trained.median_depth);
+      if (info.trained.views) {
+        const start = document.getElementById('playStart');
+        start.style.display = 'block';
+        start.onclick = () => startPlayback(api(info.trained.views), roomMesh);
+      }
       return true;
     }
     if (info.job === roomJob) return true;

@@ -63,6 +63,55 @@ def keyframes(source, most, change):
     return picked, count[0]
 
 
+LABELS = "crisp packet, 3D printer, laptop, bottle, cup, backpack, monitor, chair"  # --labels: things to find and name
+LABEL_SCORE = 0.3  # a box counts from this score of the detector (OWLv2, items.py: the vision transformer the workers use)
+
+
+def label_objects(r, picked, out, names, log, score=LABEL_SCORE):
+    """The named things in the keyframes (OWLv2 on each keyframe's middle square at full size), placed in 3D at the
+    depth inside their box, the same thing seen from several keyframes merged: OUT/labels.json with "objects" (name,
+    score, position in the splat's axes, how many keyframes saw it) and "boxes" (every box, per keyframe). None
+    without the detector's packages (see iridis/video_map.slurm)."""
+    try:
+        import items
+        detector = items.load(device="cuda")
+    except Exception as err:  # noqa: BLE001  the splat does not need labels
+        log(f"no labels: {type(err).__name__}: {err}"[:200])
+        return None
+    phrases = [n.strip() for n in names.split(",") if n.strip()]
+    S, H, W = r.depth.shape
+    found = []
+    for q, (_, frame) in enumerate(picked):
+        got = detector.detect(square_up(frame), phrases, floor=score)
+        for name, (boxes, scores) in got.items():
+            for box, s in zip(boxes, scores):
+                u0, v0, u1, v1 = (float(b) for b in box)
+                window = r.depth[q][int(v0 * H):max(int(v0 * H) + 1, int(v1 * H)), int(u0 * W):max(int(u0 * W) + 1, int(u1 * W))]
+                if not (window > 0).any():
+                    continue
+                d = float(np.median(window[window > 0]))
+                K = r.K[q]
+                cam = np.array([((u0 + u1) / 2 * W - K[0, 2]) / K[0, 0] * d, ((v0 + v1) / 2 * H - K[1, 2]) / K[1, 1] * d, d])
+                world = (cam - r.E[q][:, 3]) @ r.E[q][:, :3]
+                found.append({"name": name, "score": round(float(s), 3), "keyframe": q, "box": [round(u0, 4), round(v0, 4), round(u1, 4), round(v1, 4)],
+                              "position": [round(float(x), 4) for x in world]})
+    reach = 0.15 * float(np.median(r.depth))
+    merged = []
+    for f in sorted(found, key=lambda f: -f["score"]):
+        same = next((m for m in merged if m["name"] == f["name"] and np.linalg.norm(np.subtract(m["position"], f["position"])) < reach), None)
+        if same:
+            same["views"] += 1
+        else:
+            merged.append({**f, "views": 1})
+    (out / "labels.json").write_text(json.dumps({"names": phrases, "score": score, "objects": merged, "boxes": found}))
+    counts = {}
+    for m in merged:
+        counts[m["name"]] = counts.get(m["name"], 0) + 1
+    log(f"labels: {len(merged)} things ({', '.join(f'{n} {c}' for n, c in counts.items()) or 'none'}) from {len(found)} boxes")
+    del detector
+    return merged
+
+
 DEPTH_STEP = 4  # the depth of each keyframe is exported at a quarter of its size: 130 x 130 points for 518 x 518
 
 
@@ -283,7 +332,8 @@ def main():
     ap.add_argument("--change", type=float, default=0.9, help="a new keyframe once the view is less alike than this")
     ap.add_argument("--steps", type=int, default=7000)
     ap.add_argument("--no-train", action="store_true")
-    args = ap.parse_args()
+    ap.add_argument("--labels", default=LABELS, help="things to find and name in the keyframes, comma separated (empty: none)")
+    args = ap.parse_intermixed_args()  # two optional positionals next to options: plain parse_args reads them differently by Python version
     if args.flythrough_only:
         flythrough(args.flythrough_only)
         return
@@ -324,6 +374,10 @@ def main():
     pts, cols, sizes = start_points(r, keep)
     # the page's playback surfaces: depth edges out, but no need for two other keyframes to confirm a pixel of its own photo
     summary["views"] = export_views(r, out, valid & (agree >= 1) if (valid & (agree >= 1)).mean() > 0.05 else valid)
+    if args.labels.strip():
+        labelled = label_objects(r, picked, out, args.labels, log)
+        summary["labels"] = None if labelled is None else len(labelled)
+        torch.cuda.empty_cache()
     quat = np.tile([1.0, 0, 0, 0], (len(pts), 1))
     summary["untrained_gaussians"] = write_splat(out / "untrained.splat", pts, np.repeat(sizes[:, None] * 0.75, 3, 1), cols,
                                                  np.full(len(pts), 255.0), quat)

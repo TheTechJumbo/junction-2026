@@ -1053,7 +1053,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                                        "psnr": summary.get("psnr_median"), "keyframes": summary.get("keyframes"),
                                        "gaussians": summary.get("trained_gaussians"), "median_depth": summary.get("median_depth"),
                                        "fov_deg": summary.get("fov_deg"),
-                                       "views": f"/evidence/{out.name}/views.json" if (out / "views.json").exists() else None}
+                                       "views": f"/evidence/{out.name}/views.json" if (out / "views.json").exists() else None,
+                                       "labels": f"/evidence/{out.name}/labels.json" if (out / "labels.json").exists() else None}
                     try:
                         rooms_file.write_text(json.dumps(rooms))
                     except OSError:
