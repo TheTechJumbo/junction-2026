@@ -195,6 +195,7 @@ def replay(room, rec, data, interval, phase, mix=None, seed=0, tail=None):
         if gap < 0.05 and raw is not None:
             out = tr.current(when)
             g = {"room": room, "rec": rec, "t": when, "state": out["state"], "features": tr.features(when), "age": out["age_s"],
+                 "warm": when > events[1][0],
                  "raw_arrow": raw["state"] != "lost" and raw.get("position") is not None, "has_pose": out["position"] is not None}
             if g["raw_arrow"]:
                 g["raw_err"] = errors(raw["position"], raw["heading_deg"], true_pos, true_head, scale)
@@ -294,12 +295,16 @@ def pct(k, n):
 
 def display_stats(runs, shown, err_key):
     """Over the time grid of every stream: share of time an arrow is shown, the share of that time it
-    is right, and changes between arrow and no arrow per minute. shown(g) says whether an arrow is drawn."""
+    is right, and changes between arrow and no arrow per minute. shown(g) says whether an arrow is drawn.
+    Counted from each stream's second photo on: the replays are short pieces cut from longer use, and
+    the steady answer needs two photos to start, which would count as one change per piece."""
     time_all = time_arrow = time_right = time_strict = flips = 0
     for _, grid in runs:
         last = None
         for g in grid:
             arrow = bool(shown(g))
+            if not g["warm"]:
+                continue
             time_all += 1
             if arrow:
                 time_arrow += 1
