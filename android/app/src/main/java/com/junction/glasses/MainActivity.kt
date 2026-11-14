@@ -26,10 +26,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.junction.glasses.core.*
 import com.junction.glasses.live.CameraFrame
+import com.junction.glasses.live.CameraSource
+import com.junction.glasses.live.GlassesCamera
 import com.junction.glasses.live.LiveRelayLoop
 import com.junction.glasses.live.LiveSnapshot
+import com.junction.glasses.live.LiveSources
 import com.junction.glasses.live.PhoneCamera
 import com.junction.glasses.live.RelayClient
+import com.junction.glasses.live.RoomRecorder
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import com.junction.glasses.meta.MetaGlassesAdapter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -101,9 +107,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var liveHeadline: TextView
     private lateinit var liveDetails: TextView
     private lateinit var liveThumb: ImageView
-    /** Created only when the live camera is switched on; no CameraX object exists before that. */
-    private var phoneCamera: PhoneCamera? = null
+    /** Created only when the live camera or a recording starts; no camera object exists before a frame is wanted. */
+    private var liveSources: LiveSources<CameraFrame>? = null
+    private var cameraSource = CameraSource.PHONE
     private var liveLoop: LiveRelayLoop<CameraFrame>? = null
+    private var recordJob: Job? = null
+    private lateinit var zoneField: EditText
+    private lateinit var secondsField: EditText
+    private lateinit var recordButton: Button
+    private lateinit var recordStatus: TextView
     private var pendingLiveCamera = false
     private var relayUrl = RelayClient.DEFAULT_URL
     private var relayKey: String? = null
@@ -188,7 +200,23 @@ class MainActivity : ComponentActivity() {
         backendChip = chip(); glassesChip = chip(); micChip = chip()
         setupStatus = note("Setting up automatically…")
         card("Live camera")
-        note("Sends the phone's back camera to the relay one photo at a time, so the laptop can rebuild the room. Frames go only to the configured relay; nothing is saved on the phone.")
+        note("Sends the selected camera to the relay one photo at a time, so the laptop can rebuild the room. Frames go only to the configured relay; nothing is saved on the phone.")
+        val sourceGroup = RadioGroup(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (source in CameraSource.values()) {
+            sourceGroup.addView(RadioButton(this).apply {
+                id = android.view.View.generateViewId()
+                text = source.label
+                tag = source
+                setTextColor(colors.text)
+                isChecked = source == cameraSource
+            })
+        }
+        sourceGroup.setOnCheckedChangeListener { group, checkedId ->
+            val picked = group.findViewById<RadioButton>(checkedId)?.tag as? CameraSource
+            if (picked != null) selectCameraSource(picked)
+        }
+        container.addView(sourceGroup)
+        zoneField = field("Zone (a-z, 0-9, _ or -)").apply { setText(relayZone) }
         liveButton = button("Start live camera", primary = true) { toggleLiveCamera() }
         liveHeadline = label("Live camera is off.", 18f).apply { setTypeface(null, Typeface.BOLD) }
         liveDetails = label("")
@@ -201,6 +229,13 @@ class MainActivity : ComponentActivity() {
                 .apply { topMargin = dp(8) }
             container.addView(this)
         }
+        note("Record room takes about 3 photos per second from the selected camera, then replaces the zone's baseline on the relay (what the room should look like). Walk slowly around the room.")
+        secondsField = field("Seconds to record (10 to 60)").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText((RoomRecorder.DEFAULT_DURATION_MS / 1000).toString())
+        }
+        recordButton = button("Record room") { if (recordJob != null) stopRecording("Recording stopped. Nothing was uploaded.") else confirmRecording() }
+        recordStatus = label("")
         card("1. Backend setup")
         note("Use the backend API_TOKEN, not an ElevenLabs key or database URL. Emulator: http://10.0.2.2:8000. USB phone: http://127.0.0.1:8000 with adb reverse.")
         endpoint = field("Backend HTTPS URL").apply {
@@ -301,7 +336,7 @@ class MainActivity : ComponentActivity() {
         } }
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) glasses.initialize()
         updatePermissionStatus()
-        backendMemory?.loadRelay()?.let { (url, key, zone) -> relayUrl = url; relayKey = key; relayZone = zone }
+        backendMemory?.loadRelay()?.let { (url, key, zone) -> relayUrl = url; relayKey = key; relayZone = zone; zoneField.setText(zone) }
         if (!consumeDebugBackendExtras(apply = savedInstanceState == null)) connectRememberedBackend()
         renderRelaySettings()
         startAutomaticSetup()
@@ -338,7 +373,7 @@ class MainActivity : ComponentActivity() {
     private fun applyRelaySettings(url: String?, key: String?, zone: String?) {
         url?.let { relayUrl = it }
         key?.let { relayKey = it }
-        zone?.let { relayZone = it }
+        zone?.let { relayZone = it; zoneField.setText(it) }
         relayKey?.let { backendMemory?.saveRelay(relayUrl, it, relayZone) }
         renderRelaySettings()
         if (liveLoop != null) { stopLiveCamera("Live camera restarting with the new relay settings."); startLiveCamera() }
@@ -351,47 +386,149 @@ class MainActivity : ComponentActivity() {
     private fun toggleLiveCamera() {
         if (liveLoop != null) stopLiveCamera("Live camera is off.") else startLiveCamera()
     }
+    /** Phone or glasses. A running stream or recording takes its next frame from the new source; no automatic fallback. */
+    private fun selectCameraSource(source: CameraSource) {
+        cameraSource = source
+        liveSources?.select(source)
+        if (liveLoop != null) liveHeadline.text = "Live camera on · ${source.label} · zone ${zoneField.text.toString().trim()}"
+    }
+    /** The frame source for the live stream and recordings; it creates the selected camera only when a frame is wanted. */
+    private fun sources(): LiveSources<CameraFrame> = liveSources ?: LiveSources<CameraFrame>(cameraSource) { source ->
+        when (source) {
+            CameraSource.PHONE -> PhoneCamera(this)
+            CameraSource.GLASSES -> GlassesCamera(glasses)
+        }
+    }.also { liveSources = it }
+    /** Stops the camera once neither the live stream nor a recording needs it. */
+    private fun releaseSources() {
+        if (liveLoop != null || recordJob != null) return
+        liveSources?.stop()
+        liveSources = null
+    }
+    private fun updateKeepScreenOn() {
+        if (liveLoop != null || recordJob != null) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+    /** The relay client for the zone on the card, or null after saying on [status] what is missing. */
+    private fun relayClient(status: TextView): RelayClient? {
+        val key = relayKey
+        if (key.isNullOrBlank()) {
+            status.text = if (BuildConfig.DEBUG) "No relay key yet. Send it with adb: --es relay_key … (see README)."
+                else "The live camera needs a debug build with a relay key."
+            return null
+        }
+        val zone = zoneField.text.toString().trim()
+        if (!RelayClient.isZone(zone)) {
+            status.text = "Zone names use a-z, 0-9, _ and - (for example kitchen)."
+            return null
+        }
+        return try { RelayClient(relayUrl, key, zone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) {
+            status.text = "Relay address not accepted. Use HTTPS (debug builds may use http://127.0.0.1)."
+            null
+        }
+    }
     /** Starts the send loop: capture the newest frame, post it, wait for the reply, repeat. */
     private fun startLiveCamera() {
         if (liveLoop != null) return
-        val key = relayKey
-        if (key.isNullOrBlank()) {
-            liveDetails.text = if (BuildConfig.DEBUG) "No relay key yet. Send it with adb: --es relay_key … (see README)."
-                else "The live camera needs a debug build with a relay key."
-            return
-        }
-        val client = try { RelayClient(relayUrl, key, relayZone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) {
-            liveDetails.text = "Relay address or zone not accepted. Use HTTPS (debug builds may use http://127.0.0.1) and a zone such as kitchen."
-            return
-        }
-        if (!isGranted(Manifest.permission.CAMERA)) {
+        if (recordJob != null) { liveDetails.text = "Recording the room; start the live camera after it."; return }
+        val client = relayClient(liveDetails) ?: return
+        if (cameraSource == CameraSource.PHONE && !isGranted(Manifest.permission.CAMERA)) {
             pendingLiveCamera = true
             permissions.launch(arrayOf(Manifest.permission.CAMERA))
             return
         }
-        val camera = PhoneCamera(this)
-        phoneCamera = camera
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val frames = sources()
         liveButton.text = "Stop live camera"
-        liveHeadline.text = "Live camera on · zone $relayZone"
-        liveDetails.text = "Starting the camera…"
+        liveHeadline.text = "Live camera on · ${cameraSource.label} · zone ${zoneField.text.toString().trim()}"
+        liveDetails.text = if (cameraSource == CameraSource.GLASSES) "Connecting the glasses camera…" else "Starting the camera…"
         liveLoop = LiveRelayLoop<CameraFrame>(
             scope = lifecycleScope,
-            capture = { camera.capture() },
+            capture = { frames.capture() },
             post = { frame -> client.locate(frame.jpeg) },
             onUpdate = { renderLive(it) },
         ).also { it.start() }
+        updateKeepScreenOn()
     }
     private fun stopLiveCamera(message: String) {
         pendingLiveCamera = false
         val wasRunning = liveLoop != null
         liveLoop?.stop(); liveLoop = null
-        phoneCamera?.stop(); phoneCamera = null
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        releaseSources()
+        updateKeepScreenOn()
         if (!::liveButton.isInitialized || !wasRunning) return
         liveButton.text = "Start live camera"
         liveHeadline.text = message
     }
+    /** Record room replaces the zone's baseline on the relay, so it asks first, naming the zone. */
+    private fun confirmRecording() {
+        val client = relayClient(recordStatus) ?: return
+        val zone = zoneField.text.toString().trim()
+        val seconds = (secondsField.text.toString().trim().toLongOrNull() ?: (RoomRecorder.DEFAULT_DURATION_MS / 1000))
+            .coerceIn(RoomRecorder.MIN_DURATION_MS / 1000, RoomRecorder.MAX_DURATION_MS / 1000)
+        secondsField.setText(seconds.toString())
+        if (cameraSource == CameraSource.PHONE && !isGranted(Manifest.permission.CAMERA)) {
+            recordStatus.text = "The phone camera needs the camera permission. Allow it, then tap Record room again."
+            permissions.launch(arrayOf(Manifest.permission.CAMERA))
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Replace the baseline of zone \"$zone\"?")
+            .setMessage("Records $seconds s from the ${cameraSource.label.lowercase(Locale.US)} camera at about 3 photos per second, then replaces " +
+                "what the relay knows of how zone \"$zone\" should look. Walk slowly around the room. Photos stay in memory and go only to the relay.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Record") { _, _ -> startRecording(client, zone, seconds) }
+            .show()
+    }
+    private fun startRecording(client: RelayClient, zone: String, seconds: Long) {
+        if (recordJob != null) return
+        if (liveLoop != null) stopLiveCamera("Live camera paused for the room recording.")
+        val frames = sources()
+        val recorder = RoomRecorder(capture = { frames.capture().jpeg }, durationMs = seconds * 1000)
+        recordButton.text = "Stop recording"
+        recordStatus.text = "Recording zone $zone from the ${cameraSource.label.lowercase(Locale.US)} camera…"
+        // LAZY: lifecycleScope starts coroutines immediately on the main thread; recordJob must be set first.
+        val job = lifecycleScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val zip = recorder.record { progress ->
+                    recordStatus.text = "Recording zone $zone: ${progress.frames} frames · ${megabytes(progress.bytes)} · " +
+                        "${progress.elapsedMs / 1000} of $seconds s" + (if (progress.failedFrames > 0) " · ${progress.failedFrames} frames failed" else "")
+                }
+                liveSources?.stop()
+                liveSources = null
+                if (zip.count < RoomRecorder.MIN_FRAMES) {
+                    recordStatus.text = "Only ${zip.count} frames were captured; the relay needs at least ${RoomRecorder.MIN_FRAMES}. Nothing was uploaded."
+                    return@launch
+                }
+                val bytes = zip.bytes()
+                recordStatus.text = "Uploading ${zip.count} frames (${megabytes(bytes.size)}) as the baseline of zone $zone. The relay rebuilds the room; this can take a minute or more…"
+                val reply = client.baseline(bytes, zone)
+                recordStatus.text = "Baseline saved for zone ${reply.zone ?: zone}: the relay kept ${reply.framesKept ?: "?"} of ${zip.count} frames."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                recordStatus.text = "Recording not saved: ${LiveRelayLoop.describe(e)}"
+            } finally {
+                if (recordJob === coroutineContext[Job]) {
+                    recordJob = null
+                    recordButton.text = "Record room"
+                    releaseSources()
+                    updateKeepScreenOn()
+                }
+            }
+        }
+        recordJob = job
+        updateKeepScreenOn()
+        job.start()
+    }
+    private fun stopRecording(message: String) {
+        val job = recordJob ?: return
+        recordJob = null
+        job.cancel()
+        recordButton.text = "Record room"
+        recordStatus.text = message
+        releaseSources()
+        updateKeepScreenOn()
+    }
+    private fun megabytes(bytes: Int): String = String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
     private fun renderLive(snapshot: LiveSnapshot<CameraFrame>) {
         if (liveLoop == null) return
         // The camera makes a thumbnail at most twice a second; other frames leave the picture as it is.
@@ -775,6 +912,7 @@ class MainActivity : ComponentActivity() {
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
         cancelAutomaticRetry()
         stopLiveCamera("Live camera stopped because the app left the screen.")
+        stopRecording("Recording stopped because the app left the screen. Nothing was uploaded; record again when ready.")
         if (!glasses.isExternalFlowPending) { glasses.stopListening(); glasses.suspendLifecycle() }
         super.onStop()
     }
@@ -799,6 +937,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         stopLiveCamera("Live camera is off.")
+        stopRecording("Recording stopped.")
         recognizer?.destroy(); glasses.close(); audio.close()
         super.onDestroy()
     }

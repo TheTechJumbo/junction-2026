@@ -177,7 +177,7 @@ class AutomaticSetupActivityTest {
         assertFalse(activity.intent.hasExtra(DebugBackendLaunch.EXTRA_RELAY_KEY))
         assertTrue(text("liveDetails").contains("key set"))
         assertNoVisibleText("synthetic-relay-key")
-        assertNull(field("phoneCamera").get(activity))
+        assertNull(field("liveSources").get(activity))
         button("Forget saved backend").performClick()
         assertNull(memory.loadRelay())
     }
@@ -186,7 +186,7 @@ class AutomaticSetupActivityTest {
         MainActivity.automaticSetup = false
         launch(Intent(app(), MainActivity::class.java))
         button("Start live camera").performClick()
-        assertNull(field("phoneCamera").get(activity))
+        assertNull(field("liveSources").get(activity))
         assertNull(field("liveLoop").get(activity))
         assertTrue(text("liveDetails").contains("No relay key"))
     }
@@ -195,11 +195,21 @@ class AutomaticSetupActivityTest {
         MainActivity.automaticSetup = false
         launch(Intent(app(), MainActivity::class.java).putExtra(DebugBackendLaunch.EXTRA_RELAY_KEY, "synthetic-relay-key"))
         button("Start live camera").performClick()
-        assertNull(field("phoneCamera").get(activity))
+        assertNull(field("liveSources").get(activity))
         assertNull(field("liveLoop").get(activity))
         assertTrue(field("pendingLiveCamera").getBoolean(activity))
         assertEquals(listOf(Manifest.permission.CAMERA), shadowOf(activity).lastRequestedPermission.requestedPermissions.toList())
         assertNoVisibleText("synthetic-relay-key")
+    }
+
+    @Test fun recordRoomWithoutRelayKeyExplainsAndRecordsNothing() {
+        MainActivity.automaticSetup = false
+        launch(Intent(app(), MainActivity::class.java))
+        button("Record room").performClick()
+        assertNull(field("recordJob").get(activity))
+        assertNull(field("liveSources").get(activity))
+        assertTrue(text("recordStatus").contains("No relay key"))
+        assertEquals(RelayClient.DEFAULT_ZONE, (field("zoneField").get(activity) as EditText).text.toString())
     }
 
     @Test fun backendMemoryKeepsOnlyCiphertextAndNeedsTheSameKey() {

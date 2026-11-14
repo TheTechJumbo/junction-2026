@@ -449,6 +449,33 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         mutableState.update { it.copy(camera = "STOPPED") }
     }
 
+    /**
+     * Live camera source: one photo from the already streaming glasses camera, which keeps running for
+     * the next one (unlike [capturePhoto]); each call restarts the 60 s unused-camera deadline. Memory
+     * only. Null when the camera is not streaming or the capture fails or times out.
+     */
+    suspend fun captureLiveBitmap(): Bitmap? {
+        val active = camera ?: return null
+        if (active.stream.state.value != StreamState.STREAMING) return null
+        cameraDeadline?.cancel()
+        cameraDeadline = scope.launch {
+            delay(60_000)
+            if (camera === active) stopCamera()
+        }
+        return try {
+            val photo = withTimeoutOrNull(10_000) { active.stream.capturePhoto().getOrNull() } ?: return null
+            withContext(Dispatchers.Default) {
+                when (photo) {
+                    is PhotoData.Bitmap -> photo.bitmap
+                    is PhotoData.HEIC -> ImageDecoder.decodeBitmap(ImageDecoder.createSource(photo.data.duplicate())) { decoder, _, _ ->
+                        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    }
+                }
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
+
     /** JPEG in memory only. Caller must enforce its own event/evidence consent gate. */
     suspend fun capturePhoto(): ByteArray? = try {
         capturePhotoInternal()
