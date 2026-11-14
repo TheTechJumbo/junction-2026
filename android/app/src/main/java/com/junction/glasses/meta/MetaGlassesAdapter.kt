@@ -1,7 +1,11 @@
 package com.junction.glasses.meta
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
 import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -140,6 +144,81 @@ internal object GlassesSessions {
                 else "Glasses dropped the session ${startedForMs / 1000} s after it started: $reason."
             SessionOutcome.FAILED -> "Glasses session failed: $reason."
         }
+    }
+}
+
+/**
+ * Decoded glasses video frames (VideoFrame with compressVideo = false) to pictures. The SDK says only
+ * "YUV pixel data", so the 4:2:0 layout is worked out from the buffer: the row stride from its size,
+ * and planar (I420: U plane, then V) versus semi-planar (NV12: U and V interleaved, as Android
+ * decoders write it) from how much neighbouring chroma bytes differ. Pure byte work is JVM tested.
+ */
+internal object YuvFrames {
+    /** [semiPlanar] is null when this frame's chroma is too flat (grey) to tell; callers keep a decided one. */
+    class Layout(val stride: Int, val semiPlanar: Boolean?)
+
+    /** Null when the buffer cannot hold a 4:2:0 frame of [width] x [height]. */
+    fun layout(data: ByteArray, width: Int, height: Int): Layout? {
+        if (width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0) return null
+        val size = data.size
+        if (size < width * height * 3 / 2) return null
+        // Padded rows: size = stride * height * 3 / 2 with stride >= width.
+        val stride = if ((size * 2) % (height * 3) == 0 && size * 2 / (height * 3) >= width) size * 2 / (height * 3) else width
+        val ySize = stride * height
+        if (size - ySize < stride * height / 2) return null
+        // Interleaved U/V: neighbours (U to V) differ more than bytes two apart (U to U); planar: less.
+        var adjacent = 0L; var apart = 0L; var samples = 0L
+        val rows = height / 2
+        val step = maxOf(1, rows / 32)
+        for (row in 0 until rows step step) {
+            val base = ySize + row * stride
+            var i = 0
+            while (i + 2 < width && base + i + 2 < size) {
+                adjacent += kotlin.math.abs((data[base + i].toInt() and 0xFF) - (data[base + i + 1].toInt() and 0xFF))
+                apart += kotlin.math.abs((data[base + i].toInt() and 0xFF) - (data[base + i + 2].toInt() and 0xFF))
+                samples++; i += 2
+            }
+        }
+        val semiPlanar = when {
+            samples == 0L || adjacent + apart < samples * 2 -> null
+            adjacent * 2 >= apart * 3 -> true
+            adjacent <= apart -> false
+            else -> null
+        }
+        return Layout(stride, semiPlanar)
+    }
+
+    fun describe(layout: Layout): String =
+        "${when (layout.semiPlanar) { true -> "NV12"; false -> "I420"; null -> "chroma too flat to tell" }}, stride ${layout.stride}"
+
+    /** The frame as NV21 (Y, then V/U interleaved), the layout android.graphics.YuvImage takes. */
+    fun toNv21(data: ByteArray, width: Int, height: Int, stride: Int, semiPlanar: Boolean): ByteArray {
+        val out = ByteArray(width * height * 3 / 2)
+        for (row in 0 until height) System.arraycopy(data, row * stride, out, row * width, width)
+        val ySize = stride * height
+        val half = stride / 2
+        val vPlane = ySize + stride * height / 4
+        var o = width * height
+        for (row in 0 until height / 2) {
+            for (col in 0 until width / 2) {
+                if (semiPlanar) {
+                    val i = ySize + row * stride + col * 2
+                    out[o++] = data[i + 1]; out[o++] = data[i]
+                } else {
+                    out[o++] = data[vPlane + row * half + col]; out[o++] = data[ySize + row * half + col]
+                }
+            }
+        }
+        return out
+    }
+
+    fun toBitmap(data: ByteArray, width: Int, height: Int, stride: Int, semiPlanar: Boolean): Bitmap? {
+        val nv21 = toNv21(data, width, height, stride, semiPlanar)
+        val jpeg = ByteArrayOutputStream().use { out ->
+            if (!YuvImage(nv21, ImageFormat.NV21, width, height, null).compressToJpeg(Rect(0, 0, width, height), 92, out)) return null
+            out.toByteArray()
+        }
+        return BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
     }
 }
 
@@ -513,6 +592,18 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
                 val collectors = CoroutineScope(scope.coroutineContext + collectorJob)
                 collectors.launch { added.stream.state.collect { status -> mutableState.update { it.copy(camera = status.name) } } }
                 collectors.launch { added.stream.errorStream.collect { fail("Glasses camera failed: ${it.description}") } }
+                // The newest decoded video frame, copied off the SDK buffer, for instant live frames.
+                latestFrame.value = null; frameSemiPlanar = null
+                collectors.launch(Dispatchers.Default) {
+                    added.stream.videoStream.collect { frame ->
+                        if (frame.isCompressed || frame.isCodecConfig) return@collect
+                        val buffer = frame.buffer.duplicate()
+                        val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
+                        if (latestFrame.value == null) Log.i(TAG, "first video frame ${frame.width}x${frame.height}, ${bytes.size} bytes, " +
+                            (YuvFrames.layout(bytes, frame.width, frame.height)?.let { YuvFrames.describe(it) } ?: "not 4:2:0"))
+                        latestFrame.value = StreamFrame(bytes, frame.width, frame.height, frame.presentationTimeUs)
+                    }
+                }
                 cameraDeadline?.cancel()
                 cameraDeadline = scope.launch {
                     delay(60_000)
@@ -528,13 +619,32 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         cameraGeneration++
         cameraCollectors?.cancel(); cameraCollectors = null
         camera?.stop(); session?.removeCamera(); camera = null
+        latestFrame.value = null
         mutableState.update { it.copy(camera = "STOPPED") }
     }
 
+    private class StreamFrame(val data: ByteArray, val width: Int, val height: Int, val timeUs: Long)
+    private val latestFrame = MutableStateFlow<StreamFrame?>(null)
+    /** Presentation time of the last frame handed out, so each live frame is a new one. */
+    private var servedFrameUs = Long.MIN_VALUE
+    /** The stream's chroma layout once a colourful frame showed it; NV12 (Android decoders) until then. */
+    @Volatile private var frameSemiPlanar: Boolean? = null
+
+    private fun frameBitmap(frame: StreamFrame): Bitmap? {
+        val layout = YuvFrames.layout(frame.data, frame.width, frame.height) ?: return null
+        if (frameSemiPlanar == null && layout.semiPlanar != null) {
+            frameSemiPlanar = layout.semiPlanar
+            Log.i(TAG, "video frame layout ${YuvFrames.describe(layout)}")
+        }
+        return YuvFrames.toBitmap(frame.data, frame.width, frame.height, layout.stride, frameSemiPlanar ?: true)
+    }
+
     /**
-     * Live camera source: one photo from the already streaming glasses camera, which keeps running for
-     * the next one (unlike [capturePhoto]); each call restarts the 60 s unused-camera deadline. Memory
-     * only. Null when the camera is not streaming or the capture fails or times out.
+     * Live camera source: the newest frame of the glasses video stream (15 frames/s), so a caller can take
+     * one every 0.1 s; it waits at most [FRAME_WAIT_MS] for a frame newer than the last one handed out.
+     * Falls back to a photo capture (up to 10 s) only when no video frame comes. The camera keeps
+     * running; each call restarts the 60 s unused-camera deadline. Memory only. Null when the camera is
+     * not streaming or nothing arrives in time.
      */
     suspend fun captureLiveBitmap(): Bitmap? {
         val active = camera ?: return null
@@ -543,6 +653,13 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         cameraDeadline = scope.launch {
             delay(60_000)
             if (camera === active) stopCamera()
+        }
+        val frame = withTimeoutOrNull(FRAME_WAIT_MS) { latestFrame.first { it != null && it.timeUs > servedFrameUs } }
+        if (frame != null) {
+            servedFrameUs = frame.timeUs
+            val picture = try { withContext(Dispatchers.Default) { frameBitmap(frame) } }
+                catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            if (picture != null) return picture
         }
         return try {
             val photo = withTimeoutOrNull(10_000) { active.stream.capturePhoto().getOrNull() } ?: return null
@@ -684,6 +801,8 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         const val RECONNECT_GAP_MS = 500L
         const val ON_DEMAND_GAP_MS = 10_000L
         const val PERMISSION_CHECK_MS = 5_000L
+        /** Longest wait for a new video frame before falling back to a photo capture. */
+        const val FRAME_WAIT_MS = 1_000L
         /** After a consent request comes back not granted, Meta AI is not opened again for this long. */
         const val CONSENT_RETRY_MS = 60_000L
         val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
