@@ -83,6 +83,21 @@ frames skipped and a thumbnail (refreshed at most twice a second). Errors are sh
 retried after 2 s. It stops with Stop live camera or when the app leaves the screen,
 and keeps the screen on while running.
 
+The card chooses the camera: **Phone** or **Glasses**. Glasses frames come from the
+connected glasses session: starting uses the app's glasses camera start, which connects
+on demand and asks for the glasses camera consent in Meta AI first (that hand-off leaves
+the app, so the stream stops; start it again after answering). Each request takes one
+photo from the running glasses camera (the DAT 1.0.1 stream offers photo capture), so the
+rate is lower than the phone's; the session stays busy, so the glasses do not end it as
+idle. If the glasses are not connected the card says so; it never switches to the phone.
+
+**Record room** records the zone typed on the card for 30 s (10 to 60) at about 3 photos
+per second from the selected camera, then uploads them in memory as a stored zip of
+`000.jpg`, `001.jpg`, ... to `{relay}/baseline?zone={zone}` (same `X-Key` header) and
+shows what the relay kept. That replaces the zone's baseline, so the app asks first,
+naming the zone. The relay needs at least 6 photos. Leaving the app stops the recording
+and nothing is uploaded. The live stream pauses while recording.
+
 Debug builds only (placeholders shown; relay defaults: `http://127.0.0.1:8090`, zone
 `kitchen`; add `--es relay_url ...` for another address):
 

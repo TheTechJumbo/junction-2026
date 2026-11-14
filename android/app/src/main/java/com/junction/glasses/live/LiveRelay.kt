@@ -126,6 +126,10 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         .connectTimeout(5, TimeUnit.SECONDS).writeTimeout(20, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS).callTimeout(60, TimeUnit.SECONDS).build()
 
+    /** A baseline upload takes the relay's vision worker a while: generous timeouts for this call only. */
+    private val slowHttp = http.newBuilder().writeTimeout(5, TimeUnit.MINUTES)
+        .readTimeout(15, TimeUnit.MINUTES).callTimeout(16, TimeUnit.MINUTES).build()
+
     fun request(jpeg: ByteArray): Request = Request.Builder()
         .url(base.newBuilder().addPathSegment("locate").addQueryParameter("zone", zone).build())
         .header("X-Key", key)
@@ -133,8 +137,25 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         .post(jpeg.toRequestBody(JPEG))
         .build()
 
-    suspend fun locate(jpeg: ByteArray): LocateReply = suspendCancellableCoroutine { cont ->
-        val call = http.newCall(request(jpeg))
+    /** POST {relay}/baseline?zone={zone} with a zip of 000.jpg, 001.jpg, ...: replaces that zone's baseline. */
+    fun baselineRequest(zip: ByteArray, zone: String): Request {
+        require(ZONE.matches(zone)) { "Zone names use a-z, 0-9, _ and -" }
+        return Request.Builder()
+            .url(base.newBuilder().addPathSegment("baseline").addQueryParameter("zone", zone).build())
+            .header("X-Key", key)
+            .header("Accept", "application/json")
+            .post(zip.toRequestBody(ZIP))
+            .build()
+    }
+
+    suspend fun locate(jpeg: ByteArray): LocateReply = LocateReply.parse(send(http, request(jpeg)))
+
+    suspend fun baseline(zip: ByteArray, zone: String): BaselineReply =
+        BaselineReply.parse(send(slowHttp, baselineRequest(zip, zone)))
+
+    /** The reply body of a successful call; a RelayFailure (never containing the key) otherwise. */
+    private suspend fun send(client: OkHttpClient, request: Request): String = suspendCancellableCoroutine { cont ->
+        val call = client.newCall(request)
         cont.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -150,7 +171,7 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         })
     }
 
-    private fun read(response: Response): LocateReply {
+    private fun read(response: Response): String {
         val body = response.body ?: throw RelayFailure("Relay HTTP ${response.code}: empty reply.")
         val source = body.source()
         if (source.request(MAX_REPLY_BYTES + 1)) throw RelayFailure("Relay reply too large.")
@@ -158,7 +179,7 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         if (!response.isSuccessful) {
             throw RelayFailure("Relay HTTP ${response.code}" + (LocateReply.errorText(text)?.let { ": $it" } ?: "."))
         }
-        return LocateReply.parse(text)
+        return text
     }
 
     companion object {
@@ -166,8 +187,11 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         const val DEFAULT_ZONE = "kitchen"
         private const val MAX_REPLY_BYTES = 8L * 1024 * 1024
         private val JPEG = "image/jpeg".toMediaType()
+        private val ZIP = "application/zip".toMediaType()
         private val LOOPBACK = setOf("localhost", "127.0.0.1", "::1", "10.0.2.2")
         private val ZONE = Regex("[a-z0-9_-]{1,32}")
+
+        fun isZone(name: String): Boolean = ZONE.matches(name)
     }
 }
 

@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
-import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.hardware.Sensor
@@ -29,27 +28,20 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.math.max
-import kotlin.math.roundToInt
-
-/**
- * One frame for the relay: an upright JPEG and, at most twice a second, a small thumbnail for the
- * screen. [shakySkipped] counts frames skipped so far because the phone was moving fast. Memory only.
- */
-internal class CameraFrame(val jpeg: ByteArray, val thumbnail: Bitmap?, val shakySkipped: Int)
 
 /**
  * The phone's back camera as a CameraX ImageAnalysis stream (keep only the latest frame), bound to
- * the Activity lifecycle. Created only when the live camera is switched on. A frame is encoded only
- * when the send loop asks for one, so the photo sent is always the newest; while the gyroscope shows
- * fast turning, frames are skipped for up to 1 s. Frames stay in memory; nothing is written to storage.
+ * the Activity lifecycle. Created only when a frame is first wanted. A frame is encoded only when the
+ * send loop asks for one, so the photo sent is always the newest; while the gyroscope shows fast
+ * turning, frames are skipped for up to 1 s. Frames stay in memory; nothing is written to storage.
  */
-internal class PhoneCamera(private val activity: ComponentActivity, longSide: Int = DEFAULT_LONG_SIDE) {
-    private val longSide = longSide.coerceIn(MIN_LONG_SIDE, MAX_LONG_SIDE)
+internal class PhoneCamera(
+    private val activity: ComponentActivity,
+    private val encoder: FrameEncoder = FrameEncoder(),
+) : FrameCamera<CameraFrame> {
     private val slot = FrameSlot<CameraFrame>(SystemClock::elapsedRealtimeNanos)
     private val steady = SteadyGate()
     private val picker = FramePicker(slot, steady)
-    private var lastThumbnailNs = 0L // analyzer thread only
     private var provider: ProcessCameraProvider? = null
     private var analysis: ImageAnalysis? = null
     private var analyzerThread: ExecutorService? = null
@@ -63,13 +55,13 @@ internal class PhoneCamera(private val activity: ComponentActivity, longSide: In
     }
 
     /** The next frame the camera delivers after this call (binds the camera on first use). */
-    suspend fun capture(): CameraFrame {
+    override suspend fun capture(): CameraFrame {
         if (analysis == null) bind()
         return withTimeoutOrNull(FRAME_TIMEOUT_MS) { slot.take() }
             ?: throw CameraFailure("No camera frame for 5 s. Is another app using the camera?")
     }
 
-    fun stop() {
+    override fun stop() {
         sensors?.unregisterListener(gyroscope)
         analysis?.let { stream ->
             stream.clearAnalyzer()
@@ -85,7 +77,9 @@ internal class PhoneCamera(private val activity: ComponentActivity, longSide: In
     // The caller only creates this class after the CAMERA permission is granted; checked again here.
     @SuppressLint("MissingPermission")
     private suspend fun bind() {
-        check(activity.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) { "Camera permission is needed" }
+        if (activity.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            throw CameraFailure("The phone camera needs the camera permission. Allow it, then start again.")
+        }
         val future = ProcessCameraProvider.getInstance(activity)
         val cameraProvider = suspendCancellableCoroutine<ProcessCameraProvider> { cont ->
             future.addListener({
@@ -125,7 +119,7 @@ internal class PhoneCamera(private val activity: ComponentActivity, longSide: In
         val picture = try { readBitmap(image) } catch (_: Exception) { null } finally { image.close() }
         if (picture == null) { slot.fail(CameraFailure("A camera frame could not be read.")); return }
         try {
-            slot.offer(encode(picture, rotation, now))
+            slot.offer(encoder.encode(picture, rotation, now, picker.shakySkipped))
         } catch (_: Exception) {
             slot.fail(CameraFailure("A camera frame could not be encoded."))
         }
@@ -166,35 +160,7 @@ internal class PhoneCamera(private val activity: ComponentActivity, longSide: In
         return out
     }
 
-    /** Upright, long side [longSide] at most, JPEG quality 80; a thumbnail at most twice a second. */
-    private fun encode(picture: Bitmap, rotation: Int, nowNs: Long): CameraFrame {
-        val scale = minOf(1f, longSide.toFloat() / max(picture.width, picture.height))
-        val matrix = Matrix().apply {
-            postScale(scale, scale)
-            postRotate(rotation.toFloat())
-        }
-        val upright = Bitmap.createBitmap(picture, 0, 0, picture.width, picture.height, matrix, true)
-        val jpeg = ByteArrayOutputStream().use { out ->
-            check(upright.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) { "JPEG encoding failed" }
-            out.toByteArray()
-        }
-        var thumbnail: Bitmap? = null
-        if (nowNs - lastThumbnailNs >= THUMBNAIL_EVERY_NS) {
-            lastThumbnailNs = nowNs
-            val thumbScale = THUMB_SIDE.toFloat() / max(upright.width, upright.height)
-            thumbnail = Bitmap.createScaledBitmap(upright,
-                max(1, (upright.width * thumbScale).roundToInt()), max(1, (upright.height * thumbScale).roundToInt()), true)
-        }
-        return CameraFrame(jpeg, thumbnail, picker.shakySkipped)
-    }
-
     companion object {
-        const val DEFAULT_LONG_SIDE = 960
-        const val MIN_LONG_SIDE = 640
-        const val MAX_LONG_SIDE = 1280
-        const val JPEG_QUALITY = 80
-        private const val THUMB_SIDE = 240
-        private const val THUMBNAIL_EVERY_NS = 500_000_000L
         private const val FRAME_TIMEOUT_MS = 5_000L
     }
 }
