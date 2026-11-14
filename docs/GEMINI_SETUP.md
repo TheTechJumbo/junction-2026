@@ -25,3 +25,18 @@ models, blocked outputs, invalid responses, busy state, and timeouts produce the
 uncertainty response. Live key access, model availability, and provider latency are
 not established by mocked integration checks. Medication and door answers do not depend
 on the provider's availability.
+
+
+The deterministic medical guard refuses recognized dosing/treatment decision requests
+before either optional adapter is called. Coverage includes the listed medication names,
+explicit milligram/microgram amounts, and medication-context questions about starting,
+stopping, changing, combining or safe use, including questions about another person.
+These questions are logged as intent `medical`; ordinary pill-box observation questions
+continue as `pills` and do not become dosing advice.
+
+This is a finite lexical guard, not a general medical-language classifier. Unlisted drug
+names and unfamiliar medical paraphrases may still be classified as open. The provider's
+system instruction also requests no diagnoses, treatment decisions or dosing advice, but
+that instruction and these tests do not establish a categorical guarantee for arbitrary
+natural language or model output. With no configured provider, the fixed uncertainty
+response remains in use. No live clinical-answer behavior has been validated.

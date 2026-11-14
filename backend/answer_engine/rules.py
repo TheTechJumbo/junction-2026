@@ -56,12 +56,25 @@ class RulesAnswerEngine:
 
     def classify(self, question: str) -> str:
         words = _words(question)
+        # A conservative lexical guard, not a general medical-language classifier.
+        # Medication observations still use the rules below; recognized decision
+        # requests receive a fixed refusal before navigation or any model adapter.
         if re.search(
-            r"\b(diagnos\w*|symptoms?|treatments?|dosages?|dose|overdose|prescri\w*|"
-            r"aspirin|ibuprofen|paracetamol|insulin|antibiotics?|pain|fever|dementia)\b"
+            r"\b(diagnos\w*|symptoms?|treatments?|dosages?|doses?|overdose|prescri\w*|"
+            r"aspirin|ibuprofen|paracetamol|acetaminophen|insulin|antibiotics?|"
+            r"warfarin|donepezil|metformin|pain|fever|dementia)\b"
+            r"|\b\d+\s*(?:mg|mcg|[uμ]g|milligrams?|micrograms?)\b"
             r"|\b(should|can|may|must) i (?:take|stop|skip|double|increase|reduce)\b"
             r"|\b(how (?:many|much)|when) (?:pills?|medicine|medication)\b", words
         ):
+            return "medical"
+        medication_context = re.search(
+            r"\b(pills?|tablets?|medicines?|medications?|meds|drugs?|injections?)\b", words)
+        decision_request = re.search(
+            r"\b(how (?:many|much|often)|safe|safety|interactions?|interact|combine|mix)\b"
+            r"|\b(should|can|may|must|could|would)\b.{0,100}"
+            r"\b(take|use|start|stop|skip|double|increase|decrease|reduce|replace)\b", words)
+        if medication_context and decision_request:
             return "medical"
         if re.search(r"\b(where|directions?|navigate|navigation)\b|\bhow (?:do i |can i )?get\b", words):
             return "navigation"

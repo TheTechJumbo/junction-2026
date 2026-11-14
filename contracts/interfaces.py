@@ -20,7 +20,7 @@ class QuestionLog(Protocol):
 
 class AnswerEngine(Protocol):
     def classify(self, question: str) -> str:
-        """pills, door, navigation, or open; no network calls."""
+        """pills, door, navigation, medical, or open; no network calls."""
         ...
 
     def answer(

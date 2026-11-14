@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const api = new ApiClient({origin:location.origin});
 let demo = false, controller, generation = 0, evidenceController, evidenceObject;
 const titles = {pillbox_open:'Pill box opened', door_open:'Door opened',door_closed:'Door closed',object_appeared:'Object appeared',object_gone:'Object no longer seen'};
-const intents = {pills:'Medication questions',door:'Door questions',navigation:'Finding the way'};
+const intents = {pills:'Medication questions',door:'Door questions',navigation:'Finding the way',medical:'Medical questions'};
 function node(tag, text, className) { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if(className) el.className = className; return el; }
 function empty(target,text) { $(target).replaceChildren(node('p',text,'empty')); }
 function status(message,error=false) { $('status').textContent=message; $('status').classList.toggle('error',error); }

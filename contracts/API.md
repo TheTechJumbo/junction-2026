@@ -73,7 +73,9 @@ URLs remain authenticated. No server fetch of arbitrary URLs. Retention default 
 clear stale evidence references. Synthetic fixtures have no actual images.
 
 /ask returns text without waiting for TTS or image access. API records classification
-once per request using QuestionLog; answer engine is pure for pills/door. No evidence
+once per request using QuestionLog (pills, door, navigation, medical, or open). Recognized
+medical/dosing requests receive a fixed refusal; the lexical guard is not a general
+medical-language classifier. The answer engine is pure for pills/door. No evidence
 means uncertainty, not a fabricated yes/no. Optional Gemini/navigation adapters have
 bounded deadlines and cannot affect deterministic intent latency. Cached /where must
 check state/age_s; do not call /locate. Navigation thresholds await D7.
