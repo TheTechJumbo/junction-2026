@@ -114,6 +114,14 @@
   <button id="noisy">Noisy photos</button>
 </div>
 <div id="note"></div>
+<!-- What the photo gate is doing, for the demo: the last minute as a strip, one column per quarter second. -->
+<canvas id="strip" width="600" height="34" style="width:min(600px,calc(100vw - 24px));border-radius:8px;background:#0c0d0f" hidden></canvas>
+<div id="gateline" style="color:#9aa1ab;text-align:center;max-width:600px;font-size:13px"></div>
+<div id="movedbox" class="row" hidden>
+  <figure style="margin:0;text-align:center"><img id="movedbefore" alt="Before" style="height:120px;border-radius:8px"><figcaption style="color:#9aa1ab;font-size:13px">before</figcaption></figure>
+  <figure style="margin:0;text-align:center"><img id="movednow" alt="Now" style="height:120px;border-radius:8px"><figcaption style="color:#9aa1ab;font-size:13px">now</figcaption></figure>
+  <div id="movedtext" style="max-width:180px"></div>
+</div>
 <video id="video" playsinline muted hidden></video>
 
 <script>
@@ -263,6 +271,14 @@ function draw() {
 
 function take(next) {
   fix = next; gotAt = Date.now();
+  // The relay's cheap gate found a small part of the view changed while the camera stood still: show that part.
+  const view = next.view;
+  if (view && view.kind === 'local' && view.images && view.images.now && next.job !== movedShown) {
+    movedShown = next.job;
+    $('movedbefore').src = api(view.images.before); $('movednow').src = api(view.images.now);
+    $('movedtext').textContent = `Something here was moved, taken or put down (${new Date().toTimeString().slice(0, 8)}).`;
+    show('movedbox', true);
+  }
   stable = useStable && next.stable || null;
   // Stand on the steady pose when there is one, else on the newest fix. Only when that pose is a new
   // one: a pose that is being held (a lost photo in between) keeps the compass turning from where it was.
@@ -410,7 +426,96 @@ function sampleAnswer(question) {  // stand-ins with the wording of the real ans
   return { answer: 'I do not have enough information to answer that question.', evidence: [] };
 }
 
+// ---------------------------------------------------------------- the photo gate
+// The old loop sent a photo every 6 s whatever happened. The gate sends one only when it can be used:
+//   moving     the picture is changing fast (or the motion sensor says so): no photo, it would be blurred
+//              and out of date before the answer came back;
+//   settling   movement stopped a moment ago: wait until it has been quiet for SETTLE_MS;
+//   photo      quiet, and the view differs from the last photo sent (or that one is KEEP_MS old): send one;
+//   still      quiet, and the view is the one already sent: nothing to do, the last answer holds.
+// Two small pictures are compared block by block with cosine similarity, the same way as in relay.py.
+const SETTLE_MS = 600, KEEP_MS = 40000, TICK_MS = 250;
+const gate = { ticks: [], sent: 0, since: 0, quiet: 0, last: null, lastSent: null, sentAt: 0, state: '', sensorUntil: 0, simUntil: 0, simMoved: true };
+let movedShown = '';
+
+function viewPrint(source) {  // 96 x 54 grey, with its own brightness and contrast taken out
+  const c = viewPrint.c || (viewPrint.c = Object.assign(document.createElement('canvas'), { width: 96, height: 54 }));
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.filter = 'blur(1px)';
+  g.drawImage(source, 0, 0, 96, 54);
+  const d = g.getImageData(0, 0, 96, 54).data, v = new Float32Array(96 * 54);
+  let sum = 0;
+  for (let i = 0; i < v.length; i++) { v[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2]; sum += v[i]; }
+  const mean = sum / v.length;
+  let sq = 0;
+  for (let i = 0; i < v.length; i++) { v[i] -= mean; sq += v[i] * v[i]; }
+  const std = Math.sqrt(sq / v.length) + 1e-3;
+  for (let i = 0; i < v.length; i++) v[i] /= std;
+  return v;
+}
+
+function changedShare(a, b, limit = 0.06) {  // the share of the 6 x 8 blocks that differ
+  let changed = 0;
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 8; c++) {
+    let ma = 0, mb = 0;
+    for (let y = 0; y < 9; y++) for (let x = 0; x < 12; x++) { const i = (r * 9 + y) * 96 + c * 12 + x; ma += a[i]; mb += b[i]; }
+    ma /= 108; mb /= 108;
+    let dot = 0, na = 0, nb = 0;
+    for (let y = 0; y < 9; y++) for (let x = 0; x < 12; x++) {
+      const i = (r * 9 + y) * 96 + c * 12 + x, p = a[i] - ma, q = b[i] - mb;
+      dot += p * q; na += p * p; nb += q * q;
+    }
+    const flat = Math.max(Math.sqrt(na), Math.sqrt(nb)) < 0.2 * Math.sqrt(108);
+    if ((flat ? Math.abs(ma - mb) : 1 - dot / (Math.sqrt(na * nb) + 1e-6)) > limit) changed++;
+  }
+  return changed / 48;
+}
+
+// One step of the gate. moving: is the picture or the device moving now. differs(): does the view differ from
+// the last photo sent (only asked once it is quiet). Returns true when a photo should be sent now.
+function gateStep(moving, differs, now) {
+  let send = false;
+  if (!gate.since) gate.since = now;
+  if (moving) { gate.quiet = 0; gate.state = 'moving'; }
+  else {
+    if (!gate.quiet) gate.quiet = now;
+    if (now - gate.quiet < SETTLE_MS) gate.state = 'settling';
+    else if (differs() || now - gate.sentAt > KEEP_MS) { send = true; gate.state = 'photo'; gate.sent++; gate.sentAt = now; }
+    else gate.state = 'still';
+  }
+  gate.ticks.push(gate.state);
+  if (gate.ticks.length > 240) gate.ticks.shift();
+  drawGate(now);
+  return send;
+}
+
+function drawGate(now) {
+  show('strip', true);
+  const g = $('strip').getContext('2d'), colour = { moving: '#f0b429', settling: '#7d6a1f', photo: '#4aa3ff', still: '#1f6f43' };
+  g.clearRect(0, 0, 600, 34);
+  gate.ticks.forEach((state, i) => { g.fillStyle = colour[state]; g.fillRect(600 - (gate.ticks.length - i) * 2.5, state === 'photo' ? 0 : 8, state === 'photo' ? 3 : 2.5, state === 'photo' ? 34 : 18); });
+  const timer = Math.max(1, Math.floor((now - gate.since) / 6000) + 1);  // what the old 6 s timer would have sent
+  const words = { moving: 'moving: no photo', settling: 'settling', photo: 'photo sent', still: 'still: last answer holds' };
+  $('gateline').textContent = `${words[gate.state]} · ${gate.sent} photo${gate.sent === 1 ? '' : 's'} sent, the 6 s timer would have sent ${timer}` +
+    ' · amber moving, green still, blue photo';
+}
+
+// A phone's motion sensor says "moving" sooner than the picture does (needs HTTPS on most phones).
+addEventListener('devicemotion', e => {
+  const a = e.acceleration, r = e.rotationRate;
+  const push = a && a.x != null ? Math.hypot(a.x, a.y, a.z) : 0, turn = r && r.alpha != null ? Math.hypot(r.alpha, r.beta, r.gamma) : 0;
+  if (push > 1.2 || turn > 40) gate.sensorUntil = Date.now() + 400;  // metres per second squared, degrees per second
+});
+
+// In the sample room there is no camera: the Turn and Walk buttons are the movement.
+setInterval(() => {
+  if (!demo) return;
+  const now = Date.now();
+  if (gateStep(now < gate.simUntil, () => gate.simMoved, now)) gate.simMoved = false;
+}, TICK_MS);
+
 function move(turn, walk) {
+  gate.simUntil = Date.now() + 700; gate.simMoved = true;
   const who = noisy ? noisy.real : me;  // with noisy photos on, the buttons move the wearer, and the display has to find out
   who.heading = wrap(who.heading + turn);
   who.x += Math.sin(who.heading * Math.PI / 180) * walk;
@@ -659,7 +764,7 @@ addEventListener('deviceorientationabsolute', e => {
   draw();
 });
 
-// A laptop or phone camera (HTTPS or localhost only): send a frame every few seconds.
+// A laptop or phone camera (HTTPS or localhost only). A photo goes out when the gate says so, not on a timer.
 if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
   show('camera', true);
   let timer = null;
@@ -680,7 +785,16 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       await send(await new Promise(done => canvas.toBlob(done, 'image/jpeg', 0.85)));
       busy = false;
     };
-    shot(); timer = setInterval(shot, 6000);
+    gate.last = gate.lastSent = null; gate.sent = 0; gate.since = 0; gate.ticks = [];
+    timer = setInterval(() => {
+      if ($('video').readyState < 2) return;
+      const now = Date.now(), print = viewPrint($('video'));
+      // moving: more than a third of the blocks changed since a quarter second ago (a looser limit: video is noisy)
+      const moving = now < gate.sensorUntil || !gate.last || changedShare(gate.last, print, 0.15) > 0.35;
+      gate.last = print;
+      if (busy) return;  // an answer is on its way
+      if (gateStep(moving, () => !gate.lastSent || changedShare(gate.lastSent, print) > 0, now)) { gate.lastSent = print; shot(); }
+    }, TICK_MS);
   };
 }
 

@@ -28,6 +28,11 @@ It prints the link to open. The link carries an access key, and every request ne
                                   ("Where are my keys?" is answered here: where a position fix last saw them)
     POST /forget?zone=kitchen&name=keys   forget where an item was seen (no name: every item in the zone)
     POST /speak                   body = {"text": "..."} -> the sentence as MP3 speech
+    GET  /changes?zone=kitchen    what was moved in view while the camera stood still, with before and now pictures
+
+Every photo sent to /locate first goes through a cheap gate (view_verdict): the same view as the last one
+the model saw gets the last answer again in milliseconds ("reused": true, at most 45 s long); a view with a
+small part changed is reported under "view" with the place of the change; &fresh=1 asks the model anyway.
     GET  /reminders               the reminders, each with its state today: later, due, done or missed
     POST /reminder                body = {"text": "Time to take your pills", "time": "14:00", "place": "pill box"}
     POST /reminder?id=ID&now=1    show it now (also &done=1: finished by hand, &delete=1)
@@ -225,6 +230,64 @@ def one_photo(photo):
         if big:
             z.writestr("big.jpg", big)  # a worker without the item finder ignores it
     return bundle.getvalue()
+
+
+# ---- the cheap gate: has the view changed at all? ----
+# A position fix costs seconds of a large model. So every new photo is first compared with the last photo
+# the model saw, as two small grey pictures cut into 6 x 8 blocks, by cosine similarity block by block.
+# Three outcomes, a mix of cheap and expensive work:
+#   same    no block differs: the camera has not moved and nothing in view changed. The last answer is
+#           given again and the model is not asked (milliseconds).
+#   local   a few blocks differ and the rest match: the camera is still and something in view was moved,
+#           taken or put down. The model is asked, and the place of the change is reported with a before
+#           and a now picture.
+#   moved   most blocks differ: the camera moved. The model is asked as usual.
+BLOCKS = (6, 8)       # rows and columns of blocks in the 54 x 96 picture
+FLAT = 0.2            # a block with less contrast than this (in units of the picture's own contrast) has no pattern
+BLOCK_CHANGED = 0.06  # a block has changed above this difference (1 minus cosine similarity; a flat block: its mean)
+LOCAL_SHARE = 0.35    # up to this share of changed blocks it is a change in view; above it the camera moved
+REUSE_FOR_S = 45      # an answer is given again for at most this long; then the model is asked anyway
+
+
+def view_print(photo):
+    """A photo as a 54 x 96 grey picture with its own brightness and contrast taken out, or None."""
+    if cv2 is None:
+        return None
+    frame = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if frame is None:
+        return None
+    small = cv2.GaussianBlur(cv2.resize(frame, (96, 54), interpolation=cv2.INTER_AREA), (3, 3), 0).astype(np.float32)
+    return (small - small.mean()) / (small.std() + 1e-3)
+
+
+def view_compare(a, b, flat=None):
+    """How much each of the 6 x 8 blocks differs between two view prints. A block with a pattern in it:
+    1 minus the cosine similarity of the two blocks, each with its own mean taken out, so a block that only
+    got brighter or darker still matches. A flat block has no pattern to compare: the difference of its mean."""
+    rows, cols = BLOCKS
+    cut = lambda v: v.reshape(rows, 54 // rows, cols, 96 // cols).transpose(0, 2, 1, 3).reshape(rows, cols, -1)  # noqa: E731
+    A, B = cut(a), cut(b)
+    mean_a, mean_b = A.mean(-1), B.mean(-1)
+    A, B = A - mean_a[..., None], B - mean_b[..., None]
+    size_a, size_b = np.linalg.norm(A, axis=-1), np.linalg.norm(B, axis=-1)
+    cosine = (A * B).sum(-1) / (size_a * size_b + 1e-6)
+    no_pattern = np.maximum(size_a, size_b) < (FLAT if flat is None else flat) * np.sqrt(A.shape[-1])
+    return np.where(no_pattern, np.abs(mean_a - mean_b), 1.0 - cosine)
+
+
+def view_verdict(a, b):
+    """same, local or moved (see above), with the share of changed blocks and, for a local change, its box
+    as fractions of the picture."""
+    rows, cols = BLOCKS
+    differs = view_compare(a, b)
+    changed = differs > BLOCK_CHANGED
+    share = float(changed.mean())
+    kind = "same" if not changed.any() else "local" if share <= LOCAL_SHARE else "moved"
+    box = None
+    if kind == "local":
+        r, c = np.nonzero(changed)
+        box = [round(float(v), 3) for v in (c.min() / cols, r.min() / rows, (c.max() + 1) / cols, (r.max() + 1) / rows)]
+    return {"kind": kind, "share": round(share, 3), "worst": round(float(differs.max()), 3), "box": box}
 
 
 # Things the wearer may ask for, and the words that mean them. Keep in step with the worker's RECON_ITEMS.
@@ -631,6 +694,30 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
         return out
 
+    # ---- the cheap gate (see view_verdict): per zone, the last photo the model saw and its answer ----
+    views, changes = {}, {}
+    gate_count = {"model_not_asked": 0, "something_moved": 0, "camera_moved": 0, "first_or_refresh": 0}
+
+    def change_pictures(job, before, now, box):
+        """The part of the view that changed, before and now, as two small pictures. Returns {name: url}."""
+        folder = evidence_dir / job
+        folder.mkdir(parents=True, exist_ok=True)
+        made = {}
+        for name, photo in (("moved_before", before), ("moved_now", now)):
+            frame = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+            h, w = frame.shape[:2]
+            u0, v0, u1, v1 = box
+            pad = 0.08  # a little of the surroundings, so the place can be recognised
+            crop = frame[int(max(0, v0 - pad) * h):int(min(1, v1 + pad) * h), int(max(0, u0 - pad) * w):int(min(1, u1 + pad) * w)]
+            scale = 480 / max(crop.shape[:2])
+            if scale < 1:
+                crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            cv2.imwrite(str(folder / f"{name}.jpg"), crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+            made[name.split("_")[1]] = f"/evidence/{job}/{name}.jpg"
+        return made
+
     def keep_evidence(job, blob):
         """Unpack the pictures and the 3D file a job produced. Returns ({name: url}, splat url)."""
         images, splat_url = {}, None
@@ -712,6 +799,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200, {"ok": True, "checks": history[-40:][::-1]})
             if url.path == "/work":
                 return self.send_json(200, {"ok": True, "repo": REPO, "pull_requests": pull_requests()})
+            if url.path == "/changes":  # what was moved in view, newest first, and how often the model was spared
+                zone = parse_qs(url.query).get("zone", [""])[0]
+                listed = changes.get(zone, []) if zone else [c for per_zone in changes.values() for c in per_zone]
+                return self.send_json(200, {"ok": True, "changes": sorted(listed, key=lambda c: -c["at"]), "counts": dict(gate_count)})
             if url.path == "/reminders":
                 with reminder_lock:
                     return self.send_json(200, {"ok": True, "reminders": reminder_list(), "sensors": bool(api_base)})
@@ -978,6 +1069,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             t0 = time.time()
             clip = self.rfile.read(size)
             seconds = {}
+            shot = clip if op == "locate" and is_photo(clip) else None  # the photo as it came, for the cheap gate
             try:
                 if op == "locate" and is_photo(clip):
                     clip = one_photo(clip)
@@ -986,6 +1078,25 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             except ValueError:
                 return self.send_json(400, {"ok": False, "error": "Could not read that file as a video or a photo."})
             seconds["pick_frames"] = round(time.time() - t0, 2)
+            # ---- the cheap gate: is this the view the model has already seen? (&fresh=1 asks the model anyway) ----
+            flag = lambda name: bool(query.get(name, [""])[0])  # noqa: E731
+            now_view, verdict, last = None, None, views.get(zone)
+            if shot is not None and not flag("fresh") and not flag("view"):
+                try:
+                    now_view = view_print(shot)
+                except Exception:  # noqa: BLE001  the gate is an extra: without it the model is simply asked
+                    now_view = None
+            if now_view is not None and last is not None:
+                verdict = view_verdict(last["print"], now_view)
+                if verdict["kind"] == "same" and time.time() - last["at"] <= REUSE_FOR_S:
+                    gate_count["model_not_asked"] += 1
+                    fix = {**last["fix"], "at": time.time(), "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                           "reused": True, "seconds": {"total": round(time.time() - t0, 3)},
+                           "view": {**verdict, "model_asked": False, "counts": dict(gate_count)}}
+                    where[zone] = fix
+                    stable = steady(zone, last["result"], t0)  # the same pose, seen again now
+                    log_fix(zone, fix, {**last["result"], "items": []})  # still here; nothing new was looked for
+                    return self.send_json(200, {**routed(fix, stable), "age_s": 0.0, "seen": seen_list(zone, fix), "stable": stable})
             device = "cpu" if query.get("device", [""])[0] == "cpu" else "gpu"
             job = {"op": op, "zone": zone, "device": device, "view": bool(query.get("view", [""])[0])}
             if op == "locate":  # the spots where items were seen, so the worker can look at them again
@@ -996,6 +1107,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(502, {**header, "seconds": seconds})
             result = header["result"]
             if op == "baseline":
+                views.pop(zone, None)  # new pictures of the room: the gate starts again
                 return self.send_json(200, {"ok": True, "zone": zone, "frames": result["frames"], "seconds": seconds})
             images, splat_url = keep_evidence(header["job"], blob)
             if op == "locate":
@@ -1007,6 +1119,21 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                        "images": images, "splat": splat_url, "seconds": {**seconds, **result.get("seconds", {})},
                        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "at": time.time()}
                 fix["confidence_pct"] = track.fix_confidence_pct(result)  # this one fix on its own, as a percentage
+                if now_view is not None:  # the cheap gate: this photo is now the one the model has seen
+                    kind = verdict["kind"] if verdict else "first"
+                    gate_count[{"local": "something_moved", "moved": "camera_moved"}.get(kind, "first_or_refresh")] += 1
+                    fix["view"] = {**(verdict or {"kind": "first"}), "model_asked": True, "counts": dict(gate_count)}
+                    if kind == "local":  # the camera stood still and something in view was moved, taken or put down
+                        try:
+                            fix["view"]["images"] = change_pictures(header["job"], last["photo"], shot, verdict["box"])
+                        except Exception:  # noqa: BLE001
+                            fix["view"]["images"] = {}
+                        changes.setdefault(zone, []).append({
+                            "zone": zone, "at": time.time(), "time": home_time(time.time()).strftime("%H:%M:%S"),
+                            "since_s": round(time.time() - last["at"]), "box": verdict["box"], "share": verdict["share"],
+                            "images": fix["view"]["images"], "job": header["job"]})
+                        del changes[zone][:-20]
+                    views[zone] = {"print": now_view, "photo": shot, "result": result, "fix": fix, "at": time.time()}
                 where[zone] = fix
                 try:
                     where_file.write_text(json.dumps(where))

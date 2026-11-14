@@ -218,6 +218,22 @@ next to it:
   it catches 74% of small changes at about 9% false alarms, against 7% for the room-wide check.
   Live on the lounge scene with its 20 labelled spots: 19 right, 1 wrong, 16 s for the whole
   check, of which the spots took 2 s.
+- *The cheap gate.* The model is only asked when it has to be. The relay compares every photo sent to
+  `/locate` with the last photo the model saw: two 96 x 54 grey pictures, cut into 6 x 8 blocks, cosine
+  similarity block by block (5 ms to shrink a 1280 px photo, 0.1 ms to compare). The same view gets the
+  last answer again without the model (`"reused": true`, for at most 45 s); a view where a few blocks
+  differ means the camera stood still and something was moved, taken or put down, which is reported
+  under `view` with a before and a now picture and listed at `/changes`; a view where most blocks differ
+  means the camera moved. `&fresh=1` asks the model anyway. On the display, the camera loop no longer
+  sends a photo every 6 s: it waits until movement has settled (the picture, or the phone's motion
+  sensor) and sends one only if the view differs from the last photo sent. The strip under the display
+  shows the last minute: amber moving, green still, blue photo.
+  Measured: the same view with noise, another exposure and harder compression came out "same" in 99 of
+  99 pairs (largest block difference 0.024, limit 0.06); a cube painted in was caught in 24 of 24;
+  another view was called "moved" in 24 of 24. Live, 11 photos (still, a phone taken away, still, a
+  new view, still) took 17 s of waiting instead of about 45: the model was asked 3 times, and the 8
+  other answers took 0.03 to 0.08 s. Not tested: a real camera's frame-to-frame noise, a hand held in
+  view, slow drift of the head. `python live/test_view_gate.py` tests the relay side offline.
 - `/hud?k=KEY&demo=1` rehearses all of it with stand-ins and no backend: "Remind me" and "Open
   the pill box" play the reminder and the sensor.
 - `python live/test_care_flow.py` tests the relay side offline, with a stand-in gateway and a
