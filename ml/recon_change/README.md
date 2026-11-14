@@ -37,6 +37,15 @@ A job takes about 40 seconds on an L4 GPU. The verdict is at the end of `slurm-j
 The before clip is split in two. One half is the reference and the other half is a control:
 nothing changed between them, so anything found there is a false alarm.
 
+`report.json` also has `lookalike_check`. When the two clips line up worse with each other than
+frames of one clip do, a tall object (a tree, a lamp) is rebuilt in a slightly different place
+and looks like "gone here, appeared there". The check drops a flagged surface when the other
+clip has a surface that looks the same within `reach` of it (a fraction of the viewing
+distance). "Looks the same" uses the DINOv2 patch features VGGT computes anyway, so it costs no
+extra model and no extra GPU time. `reach` grows with the measured misalignment and is zero
+for well-aligned clips, where the check is off and results are unchanged. `--no-lookalike`
+switches it off.
+
 | Verdict | Meaning |
 | --- | --- |
 | PASS | Changes found, and the control is clean |
@@ -112,7 +121,10 @@ Set `EVENT_API_URL` before starting the relay to have events POSTed to the event
   large as a real object, while the control stayed clean. Cause: the two clips line up less well
   than frames of one clip, so a tall object lands in a slightly different place and looks moved.
   With the cross-clip tolerance and the 15-pixel search window, three of those four are clean.
-  A portrait crop of the Colosseum clip still gives two or three small false clusters.
+  A portrait crop of the Colosseum clip still gave two or three small false clusters (a tree
+  rebuilt about 10% of the viewing distance off). The look-alike check removes them: all five
+  video cases and the kitchen set report nothing. Numbers, and what did not help (more frames),
+  are in [MAXQ_RESULTS.md](MAXQ_RESULTS.md).
 - **Not yet tested:** a real object moved between two real clips, indoor video, and footage
   from the glasses.
 
@@ -123,6 +135,9 @@ Set `EVENT_API_URL` before starting the relay to have events POSTed to the event
   not as fact, and record the second clip from roughly the same spots as the first.
 - When the two clips line up poorly, the thresholds widen and only large changes are reported.
   `depth_noise_between_clips` in the report shows how well they lined up.
+- When the look-alike check is active (poorly aligned clips), an object that moved less than
+  `reach` is treated as the same object and not reported, and so is a new object standing
+  within `reach` of one that looks just like it.
 - It sees depth steps of about 5% of the viewing distance or more (5 cm at 1 m). Flat things
   (paper, a pill strip lying on a table) are invisible to it.
 - A point only counts if at least two other frames of its own clip confirm it, so each part of
