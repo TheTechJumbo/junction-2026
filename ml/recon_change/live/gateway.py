@@ -96,6 +96,21 @@ def handle_places(op, zone, req):
     return {"ok": True, "zone": zone, "frames": frames, "waypoints": places}, b""
 
 
+def remembered(req):
+    """The spots where items were seen, as the relay sent them: [{"name", "position": [east, north, up]}].
+    Only well-formed entries are passed on to the worker, at most ten."""
+    spots = []
+    listed = req.get("remembered")
+    for spot in listed[:10] if isinstance(listed, list) else []:
+        try:
+            position = [float(v) for v in spot["position"]]
+            if len(position) == 3 and all(abs(v) < 1e4 for v in position):  # also rejects nan and inf
+                spots.append({"name": str(spot["name"])[:40], "position": position})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return spots
+
+
 def handle(req, blob):
     op = req.get("op")
     device = "cpu" if req.get("device") == "cpu" else "gpu"
@@ -120,7 +135,8 @@ def handle(req, blob):
     job.mkdir(parents=True)
     clip = "clip.zip" if blob[:2] == b"PK" else "clip.mp4"  # a zip of frames from the relay, or a video
     (job / clip).write_bytes(blob)
-    (job / "request.json").write_text(json.dumps({"op": op, "zone": req["zone"], "file": clip, "view": bool(req.get("view"))}))
+    (job / "request.json").write_text(json.dumps({"op": op, "zone": req["zone"], "file": clip, "view": bool(req.get("view")),
+                                                  "remembered": remembered(req)}))
     (job / "READY").touch()  # last, so the worker never sees a half-written job
 
     deadline = time.time() + WAIT_S

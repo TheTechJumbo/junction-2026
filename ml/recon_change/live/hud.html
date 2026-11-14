@@ -5,15 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Beacon directions</title>
 <!--
-  The glasses display: an arrow and a distance to a named place ("pill box", "bathroom door").
+  The glasses display. It does four things for the wearer:
 
-  It draws one position fix: where the wearer stands, which way they face, and where the places
-  are. Fixes come from the relay (GET /where?zone=..., polled), made by POST /locate with a
-  photo of what the wearer sees. The display is the black 600 x 600 square; everything under it
-  is for the demo only. Black is "off" on a see-through display, so the square stays mostly black.
+  1. Directions: an arrow and a distance to a named place ("pill box", "front door").
+  2. Answers: "Did I take my pills?" is asked through the relay (POST /ask), shown and spoken.
+     When no pill box opening is recorded, the arrow then points to the pill box.
+  3. Reminders: when one is due (GET /reminders) it is shown and spoken, with the way to its place.
+     A pill box reminder ends when the sensor reports the box was opened.
+  4. Lost items: "Where are my keys?" answers with where a position fix last saw them, and the
+     arrow points there.
+
+  It draws one position fix: where the wearer stands, which way they face, where the places are
+  and which items were seen. Fixes come from the relay (GET /where?zone=..., polled), made by
+  POST /locate with a photo of what the wearer sees. The display is the black 600 x 600 square;
+  everything under it is for the demo only (on the glasses, the question comes from the
+  microphone). Black is "off" on a see-through display, so the square stays mostly black.
 
   /hud?k=KEY            live, from the relay
-  /hud?k=KEY&demo=1     sample room, no relay needed: arrow keys or the buttons turn and walk
+  /hud?k=KEY&demo=1     sample room, no relay needed: arrow keys or the buttons turn and walk,
+                        and the answers, the reminder and the pill box are stand-ins
 -->
 <style>
   :root { color-scheme: dark; }
@@ -22,9 +32,13 @@
          display: flex; flex-direction: column; align-items: center; gap: 12px; }
   #display { width: min(600px, calc(100vw - 24px)); aspect-ratio: 1; background: #000; border-radius: 20px; display: block; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; max-width: 600px; }
-  button, select, label.file { font: inherit; color: inherit; background: #262a30; border: 1px solid #3a4048; border-radius: 10px;
-                               padding: 8px 12px; cursor: pointer; }
+  button, select, input, label.file { font: inherit; color: inherit; background: #262a30; border: 1px solid #3a4048; border-radius: 10px;
+                                      padding: 8px 12px; }
+  button, select, label.file { cursor: pointer; }
+  #question { flex: 1; min-width: 180px; }
   button.on { background: #1f6f43; border-color: #2c9a5e; color: #fff; }
+  button.item { border-style: dashed; }
+  #finish { background: #6b5310; border-color: #ffd23f; color: #fff; }
   label.file input { display: none; }
   #note { color: #9aa1ab; text-align: center; max-width: 600px; min-height: 1.4em; }
   [hidden] { display: none !important; }
@@ -52,9 +66,24 @@
     <g clip-path="url(#disc)"><g id="map"></g></g>
     <path d="M0 -13 L9 10 L0 5 L-9 10 Z" fill="#4aa3ff"/>
   </g>
+
+  <!-- An answer or a reminder covers the display for a few seconds, then the arrow is back. -->
+  <g id="card" hidden>
+    <rect width="600" height="600" fill="#000"/>
+    <text id="asked" x="300" y="64" text-anchor="middle" fill="#7fd6a4" font-size="24"></text>
+    <text id="answer" x="300" y="300" text-anchor="middle" fill="#fff" font-size="36" font-weight="600"></text>
+    <text id="next" x="300" y="556" text-anchor="middle" fill="#3ddc84" font-size="26"></text>
+  </g>
 </svg>
 
 <div class="row" id="targets"></div>
+<div class="row">
+  <input id="question" placeholder="Ask a question" maxlength="200" autocomplete="off">
+  <button id="askgo">Ask</button>
+  <button id="mic" hidden>Speak</button>
+  <button id="finish" hidden>Done</button>
+</div>
+<div class="row" id="quick"></div>
 <div class="row">
   <select id="zone" title="Room"></select>
   <label class="file">Take a photo to update<input id="photo" type="file" accept="image/*,video/*" capture="environment"></label>
@@ -63,6 +92,7 @@
 </div>
 <div class="row" id="pad" hidden>
   <button data-turn="-15">Turn left</button><button data-walk="0.4">Walk</button><button data-turn="15">Turn right</button>
+  <button data-sample="remind">Remind me</button><button data-sample="open">Open the pill box</button>
 </div>
 <div id="note"></div>
 <video id="video" playsinline muted hidden></video>
@@ -73,6 +103,15 @@ const key = query.get('k') || '';
 const $ = id => document.getElementById(id);
 const api = (path, more = '') => `${path}?k=${encodeURIComponent(key)}${more}`;
 const wrap = deg => ((deg + 180) % 360 + 360) % 360 - 180;
+const show = (id, on) => $(id).toggleAttribute('hidden', !on);  // the attribute, so it also works on the SVG parts
+const esc = s => String(s).replace(/[<&"]/g, c => ({ '<': '&lt;', '&': '&amp;', '"': '&quot;' }[c]));
+const words = s => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+const clock = () => new Date().toTimeString().slice(0, 5);
+const sideOf = b => Math.abs(b) <= 20 ? 'ahead' : Math.abs(b) >= 150 ? 'behind you' : b > 0 ? 'to your right' : 'to your left';
+const drawn = {};
+function setHTML(id, html) {  // only touch the page when something changed, so a click is never lost to a redraw
+  if (drawn[id] !== html) { drawn[id] = html; $(id).innerHTML = html; }
+}
 
 let demo = query.has('demo');
 let zone = query.get('zone') || '';
@@ -80,24 +119,37 @@ let target = query.get('to') || '';
 let fix = null;                       // the latest fix from the relay (or the sample room)
 let me = { x: 0, y: 0, heading: 0 };  // where the wearer is now: the fix, moved by the compass or the demo keys
 let fixSeen = '', compass = null, compassAtFix = null, gotAt = 0;
+let due = null, guidedFor = '';       // the reminder that is due now; the one the arrow was last pointed for
+const told = {};                      // when each reminder was last shown
+const sample = { pills: '', keys: { name: 'keys', position: [-1.5, 1.9, 0], time: '09:12', near: 'bathroom door' } };
+
+// Everything the arrow can point to: the named places, then the items a position fix has seen.
+// Not an item in doubt: the glasses have since looked at that spot and did not find it there.
+const spots = () => fix ? [...fix.waypoints, ...(fix.seen || []).filter(s => !s.doubt).map(s => ({ ...s, item: true }))] : [];
+
+function fromMe(position) {  // metres, and degrees from straight ahead (+ to the right)
+  const east = position[0] - me.x, north = position[1] - me.y;
+  return [Math.hypot(east, north), wrap(Math.atan2(east, north) * 180 / Math.PI - me.heading)];
+}
 
 // ---------------------------------------------------------------- drawing
 function draw() {
-  const places = fix ? fix.waypoints : [];
+  const places = spots();
+  // A due reminder points the arrow at its place once, as soon as the display knows that place.
+  if (due && due.place && guidedFor !== due.id + due.due_at && places.some(p => p.name === due.place)) {
+    target = due.place; guidedFor = due.id + due.due_at;
+  }
   const lost = !fix || fix.state === 'lost';
   const to = places.find(p => p.name === target) || places[0];
   $('place').textContent = to ? to.name : (fix ? 'No places named yet' : 'Waiting for a position');
-  $('going').setAttribute('visibility', to ? 'visible' : 'hidden');
-  let east = 0, north = 0, far = 0, bearing = 0;
-  if (to) {
-    east = to.position[0] - me.x; north = to.position[1] - me.y;
-    far = Math.hypot(east, north);
-    bearing = wrap(Math.atan2(east, north) * 180 / Math.PI - me.heading);  // 0 ahead, + to the right
-  }
-  const there = to && !lost && far < 0.8;
-  $('arrow').hidden = lost || !to || there;
-  $('there').hidden = !there;
-  $('lost').hidden = !lost || !fix;
+  $('going').textContent = due ? due.text.toUpperCase().slice(0, 34) : to && to.item ? `LAST SEEN ${to.time || ''}` : 'GOING TO';
+  $('going').setAttribute('fill', due ? '#ffd23f' : '#7fd6a4');
+  $('going').setAttribute('visibility', to || due ? 'visible' : 'hidden');
+  const [far, bearing] = to ? fromMe(to.position) : [0, 0];
+  const there = !!to && !lost && far < 0.8;
+  show('arrow', !lost && !!to && !there);
+  show('there', there);
+  show('lost', lost && !!fix);
   $('arrow').setAttribute('transform', `rotate(${bearing.toFixed(1)})`);
   const side = bearing > 0 ? 'right' : 'left', off = Math.abs(bearing);
   $('turn').textContent = !fix ? '' : lost ? 'Look around slowly' : !to ? '' : there ? 'You are there'
@@ -105,13 +157,15 @@ function draw() {
   $('far').textContent = lost || !to || there ? '' : `about ${far < 3 ? (Math.round(far * 2) / 2 || 0.5) : Math.round(far)} m`;
   $('age').textContent = !fix ? '' : demo ? 'sample room' : `${fix.state === 'unsure' ? 'rough fix, ' : ''}updated ${Math.round((Date.now() - gotAt) / 1000 + (fix.age_s || 0))} s ago`;
 
-  // Mini map, heading up: 1 m = 26 px, the wearer at the centre.
+  // Mini map, heading up: 1 m = 26 px, the wearer at the centre. Places are yellow, items are blue.
   const dots = fix ? fix.map.points.map(p => `<rect x="${(p[0] * 26).toFixed(1)}" y="${(-p[1] * 26).toFixed(1)}" width="2.4" height="2.4" fill="#2f7d55"/>`).join('') : '';
-  const pins = places.map(p => `<circle cx="${p.position[0] * 26}" cy="${-p.position[1] * 26}" r="${p === to ? 8 : 5}" fill="${p === to ? '#ffd23f' : '#8a7a2a'}"/>`).join('');
-  $('map').innerHTML = dots + pins;
+  const pins = places.map(p => `<circle cx="${p.position[0] * 26}" cy="${-p.position[1] * 26}" r="${p === to ? 8 : 5}" fill="${p.item ? (p === to ? '#7fb8ff' : '#3d6fa8') : (p === to ? '#ffd23f' : '#8a7a2a')}"/>`).join('');
+  setHTML('map', dots + pins);
   $('map').setAttribute('transform', `rotate(${(-me.heading).toFixed(1)}) translate(${(-me.x * 26).toFixed(1)} ${(me.y * 26).toFixed(1)})`);
 
-  $('targets').innerHTML = places.map(p => `<button class="${p === to ? 'on' : ''}" data-to="${encodeURIComponent(p.name)}">${p.name.replace(/[<&]/g, '')}</button>`).join('');
+  setHTML('targets', places.map(p => `<button class="${p === to ? 'on' : ''}${p.item ? ' item' : ''}" data-to="${encodeURIComponent(p.name)}">${esc(p.name)}${p.item ? ` · seen ${esc(p.time || '')}` : ''}</button>`).join(''));
+  const questions = ['Did I take my pills?', 'Where are my keys?', ...places.filter(p => !p.item).map(p => `Where is the ${p.name}?`)];
+  setHTML('quick', questions.slice(0, 6).map(q => `<button data-q="${esc(q)}">${esc(q)}</button>`).join(''));
 }
 
 function take(next) {
@@ -125,6 +179,111 @@ function take(next) {
   draw();
 }
 
+// An answer or a reminder, large, over the whole display. `way` is the line under it ("Showing the way to ...").
+let cardTimer = null;
+function card(title, text, way) {
+  const lines = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line && (line + ' ' + word).length > 26) { lines.push(line); line = word; } else line = line ? line + ' ' + word : word;
+  }
+  if (line) lines.push(line);
+  lines.length = Math.min(lines.length, 8);
+  $('asked').textContent = title.length > 40 ? title.slice(0, 39) + '…' : title;
+  $('answer').innerHTML = lines.map((l, i) => `<tspan x="300" dy="${i ? 46 : 0}">${esc(l)}</tspan>`).join('');
+  $('answer').setAttribute('y', 300 - (lines.length - 1) * 23);
+  $('next').textContent = way;
+  show('card', true);
+  clearTimeout(cardTimer);
+  cardTimer = setTimeout(() => show('card', false), 4000 + text.length * 70);
+}
+
+// Spoken through the relay (the team's voice service) when it is set up, else by the browser's own voice.
+let voice = null, voiceService = true;
+async function say(text) {
+  if (!text) return;
+  try { if (voice) voice.pause(); speechSynthesis.cancel(); } catch { /* nothing was speaking */ }
+  if (!demo && voiceService) {
+    try {
+      const reply = await fetch(api('/speak'), { method: 'POST', body: JSON.stringify({ text }) });
+      if (reply.ok) { voice = new Audio(URL.createObjectURL(await reply.blob())); await voice.play(); return; }
+      voiceService = false;  // no voice is set up there: stop asking, the browser speaks from now on
+    } catch { /* no voice service: the browser speaks */ }
+  }
+  try { speechSynthesis.speak(new SpeechSynthesisUtterance(text)); } catch { /* this browser cannot speak */ }
+}
+
+// Point the arrow at a place or an item the display knows. Returns the line to show under an answer.
+function guide(name) {
+  if (!name || !spots().some(p => p.name === name)) return '';
+  target = name;
+  return !fix || fix.state === 'lost' ? 'Look around slowly so I can find you' : `Showing the way to the ${name}`;
+}
+
+// ---------------------------------------------------------------- questions
+const ALIASES = { pills: 'pill box', pill: 'pill box', pillbox: 'pill box', medication: 'pill box', medicine: 'pill box',
+                  tablets: 'pill box', door: 'front door', toilet: 'bathroom', key: 'keys', spectacles: 'glasses',
+                  purse: 'wallet', mobile: 'phone', remote: 'remote control' };
+
+function placeFor(question) {  // the place or item a question is about, if the display knows one by that name
+  const q = words(question), names = spots().map(p => p.name);
+  const named = names.filter(n => q.includes(words(n))).sort((a, b) => b.length - a.length)[0];
+  if (named) return named;
+  const alias = Object.keys(ALIASES).find(a => q.includes(` ${a} `) && names.includes(ALIASES[a]));
+  return alias ? ALIASES[alias] : '';
+}
+
+async function ask(question) {
+  question = question.trim();
+  if (!question) return;
+  $('question').value = '';
+  $('note').textContent = 'Asking…';
+  let body;
+  if (demo) body = sampleAnswer(question);
+  else {
+    try {
+      const reply = await fetch(api('/ask', zone ? `&zone=${zone}` : ''), { method: 'POST', body: JSON.stringify({ question }) });
+      body = await reply.json();
+      if (!reply.ok) { $('note').textContent = body.error || 'That did not work.'; return; }
+      await poll();  // an item the answer points to arrives with the position
+    } catch { $('note').textContent = 'Cannot reach the relay.'; return; }
+  }
+  // Show the way when they asked where something is, or asked about the pills and no opening is recorded.
+  const asksWay = /\b(where|find|way|directions?|take me|show me|get to)\b/i.test(question);
+  const name = body.point ? body.point.name : placeFor(question);
+  const way = asksWay || body.point || !(body.evidence || []).length ? guide(name) : '';
+  draw();
+  card(question, body.answer, way);
+  say(body.answer);
+  $('note').textContent = demo ? 'Sample answer: the sample room has no sensors and no answer service.' : '';
+}
+
+// ---------------------------------------------------------------- reminders
+async function reminders() {
+  if (demo) return;
+  try {
+    const reply = await fetch(api('/reminders'));
+    if (!reply.ok) return;
+    const list = (await reply.json()).reminders;
+    const ended = due && list.find(r => r.id === due.id && r.due_at === due.due_at && r.state === 'done');
+    setDue(list.find(r => r.state === 'due') || null, ended);
+  } catch { /* the relay is down: nothing to remind */ }
+}
+
+function setDue(next, ended) {
+  if (ended) { const text = ended.done_note || 'Done.'; card('Reminder', text, ''); say(text); }
+  due = next;
+  show('finish', !!due);
+  const stamp = due && due.id + due.due_at;
+  if (due && Date.now() - (told[stamp] || 0) > 5 * 60e3) {  // show it, and again every five minutes until it is done
+    told[stamp] = Date.now();
+    const way = guide(due.place);
+    card('Reminder', due.text, way);
+    say(due.text + (way.startsWith('Showing') ? ` I will show you the way to the ${due.place}.` : ''));
+  }
+  draw();
+}
+
 // ---------------------------------------------------------------- sample room
 function sampleRoom() {
   const points = [];
@@ -133,7 +292,25 @@ function sampleRoom() {
   for (let t = 0; t <= 1; t += 0.12) points.push([0.6 + t, 3.4], [0.6 + t, 4.0], [-1.9, 0.2 + t]);
   return { state: 'found', confidence: 1, position: [0, 0, 0], heading_deg: 0, ts: 'sample', job: '', map: { points },
            waypoints: [{ name: 'pill box', position: [1.2, 3.6, 0] }, { name: 'bathroom door', position: [-1.9, 2.4, 0] },
-                       { name: 'front door', position: [0.4, -1.1, 0] }] };
+                       { name: 'front door', position: [0.4, -1.1, 0] }],
+           seen: [sample.keys] };
+}
+
+function sampleAnswer(question) {  // stand-ins with the wording of the real answers
+  const q = words(question), name = placeFor(question);
+  if (/ keys? /.test(q)) {
+    const [far, bearing] = fromMe(sample.keys.position);
+    return { answer: `Your keys were last seen at ${sample.keys.time} near the ${sample.keys.near}, about ${far.toFixed(1)} metres ${sideOf(bearing)}.`,
+             point: sample.keys, evidence: [] };
+  }
+  if (/ (where|find|way) /.test(q) && name) {
+    const [far, bearing] = fromMe(spots().find(p => p.name === name).position);
+    return { answer: `The ${name} is estimated to be about ${far.toFixed(1)} metres ${sideOf(bearing)}.`, evidence: [] };
+  }
+  if (/ (pills?|pillbox|medication|medicine|tablets) /.test(q))
+    return sample.pills ? { answer: `The pill box was opened at ${sample.pills}. I cannot confirm that the pills were taken.`, evidence: [sample.pills] }
+                        : { answer: 'I have no recent pill box opening recorded today. I cannot confirm whether the pills were taken.', evidence: [] };
+  return { answer: 'I do not have enough information to answer that question.', evidence: [] };
 }
 
 function move(turn, walk) {
@@ -161,9 +338,10 @@ async function send(blob) {
     const reply = await fetch(api('/locate', `&zone=${zone}`), { method: 'POST', body: blob });
     const body = await reply.json();
     if (!reply.ok) { $('note').textContent = body.error || 'That did not work.'; return; }
-    demo = false; $('pad').hidden = true; $('demo').classList.remove('on');
+    demo = false; show('pad', false); $('demo').classList.remove('on');
     take(body);
-    $('note').textContent = `${body.headline}. ${body.detail} (${((Date.now() - t0) / 1000).toFixed(0)} s)`;
+    const items = (body.items || []).map(i => i.name).join(', ');
+    $('note').textContent = `${body.headline}. ${body.detail} ${items ? `I can see: ${items}. ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`;
   } catch { $('note').textContent = 'Cannot reach the relay.'; }
 }
 
@@ -177,16 +355,53 @@ async function zones() {
 }
 
 // ---------------------------------------------------------------- controls
-$('targets').onclick = e => { if (e.target.dataset.to) { target = decodeURIComponent(e.target.dataset.to); draw(); } };
+$('targets').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.to) { target = decodeURIComponent(b.dataset.to); draw(); } };
+$('quick').onclick = e => { if (e.target.dataset.q) ask(e.target.dataset.q); };
+$('askgo').onclick = () => ask($('question').value);
+$('question').onkeydown = e => { if (e.key === 'Enter') ask($('question').value); };
+$('display').onclick = () => show('card', false);
+$('finish').onclick = async () => {
+  if (!due) return;
+  if (demo) return setDue(null, { done_note: '' });
+  try { await fetch(api('/reminder', `&id=${due.id}&done=1`), { method: 'POST' }); } catch { /* the next poll shows the truth */ }
+  reminders();
+};
 $('zone').onchange = e => { zone = e.target.value; fixSeen = ''; poll(); };
 $('photo').onchange = e => { if (e.target.files[0]) send(e.target.files[0]); e.target.value = ''; };
-$('demo').onclick = () => { demo = !demo; $('demo').classList.toggle('on', demo); $('pad').hidden = !demo; fixSeen = ''; if (demo) take(sampleRoom()); else { fix = null; draw(); poll(); } };
-$('pad').onclick = e => { const d = e.target.dataset; if (d.turn || d.walk) move(+d.turn || 0, +d.walk || 0); };
+$('demo').onclick = () => {
+  demo = !demo; $('demo').classList.toggle('on', demo); show('pad', demo); fixSeen = ''; due = null; show('finish', false);
+  if (demo) take(sampleRoom()); else { fix = null; draw(); poll(); reminders(); }
+};
+$('pad').onclick = e => {
+  const d = e.target.dataset;
+  if (d.turn || d.walk) move(+d.turn || 0, +d.walk || 0);
+  if (d.sample === 'remind') setDue({ id: 'sample', due_at: Date.now(), text: 'Time to take your pills', place: 'pill box' });
+  if (d.sample === 'open') {  // stands in for the sensor on the pill box
+    sample.pills = clock();
+    if (due) setDue(null, { done_note: `The pill box was opened at ${sample.pills}.` });
+    else $('note').textContent = `Sample sensor: the pill box was opened at ${sample.pills}.`;
+  }
+};
 addEventListener('keydown', e => {
-  if (!demo) return;
+  if (!demo || e.target.tagName === 'INPUT') return;
   const step = { ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, 0.25], ArrowDown: [0, -0.25] }[e.key];
   if (step) { e.preventDefault(); move(...step); }
 });
+
+// A stand-in for the glasses' microphone. The browser may send the audio to its maker to turn it into words.
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (Recognition) {
+  show('mic', true);
+  $('mic').onclick = () => {
+    const listen = new Recognition();
+    listen.lang = 'en-GB';
+    listen.onresult = e => ask(e.results[0][0].transcript);
+    listen.onerror = () => { $('note').textContent = 'I did not catch that.'; };
+    listen.onend = () => $('mic').classList.remove('on');
+    $('mic').classList.add('on');
+    try { listen.start(); } catch { $('mic').classList.remove('on'); }
+  };
+}
 
 // Between fixes, a phone's compass keeps the arrow turning with the wearer (needs HTTPS on most phones).
 addEventListener('deviceorientationabsolute', e => {
@@ -199,12 +414,12 @@ addEventListener('deviceorientationabsolute', e => {
 
 // A laptop or phone camera (HTTPS or localhost only): send a frame every few seconds.
 if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-  $('camera').hidden = false;
+  show('camera', true);
   let timer = null;
   $('camera').onclick = async () => {
     if (timer) { clearInterval(timer); timer = null; $('video').srcObject.getTracks().forEach(t => t.stop()); $('camera').classList.remove('on'); return; }
     try {
-      $('video').srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: 960 } });
+      $('video').srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: 1280 } });
       await $('video').play();
     } catch { $('note').textContent = 'The camera is not available here.'; return; }
     $('camera').classList.add('on');
@@ -222,10 +437,11 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
   };
 }
 
-if (demo) { $('demo').classList.add('on'); $('pad').hidden = false; take(sampleRoom()); }
+if (demo) { $('demo').classList.add('on'); show('pad', true); take(sampleRoom()); }
 draw();
-zones().then(poll);
+zones().then(poll).then(reminders);  // the position first, so a due reminder can show the way at once
 setInterval(poll, 1500);
+setInterval(reminders, 10000);
 setInterval(() => { if (fix && !demo) draw(); }, 5000);  // keeps "updated N s ago" honest
 </script>
 </body>
