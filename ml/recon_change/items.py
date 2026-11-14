@@ -35,7 +35,7 @@ MODEL_ID = os.environ.get("RECON_ITEMS_MODEL", "google/owlv2-base-patch16-ensemb
 CACHE = os.environ.get("RECON_ITEMS_CACHE") or None
 DEFAULT_ITEMS = "keys, glasses, wallet, phone, remote control"
 # A box counts from this score on. Chosen in eval/ITEMS_RESULTS.md; higher = fewer wrong answers, more misses.
-SCORE = float(os.environ.get("RECON_ITEMS_SCORE", "0.3"))
+SCORE = float(os.environ.get("RECON_ITEMS_SCORE", "0.45"))
 # Rows of square tiles across the picture's short side, looked at besides the whole picture.
 # 0 = whole picture only (1 pass), 1 = tiles as high as the picture (16:9 and 4:3: 3 passes), 2 = 2 rows.
 TILES = int(os.environ.get("RECON_ITEMS_TILES", "1"))
@@ -53,6 +53,21 @@ PHRASES = {
     "remote control": ["a remote control"],
 }
 ITEM_COLOUR = (255, 90, 200)  # an item in the 3D view: pink (RGB)
+# Looking again at a remembered spot (check): rough real size of each item's long side in metres,
+# and the size in pixels (long side, in the whole picture scaled to the detector's 960) from which
+# the detector is worth trusting to see it. Below that size it misses most things (eval/ITEMS_RESULTS.md).
+REAL_SIZE_M = {"keys": 0.08, "glasses": 0.14, "wallet": 0.10, "phone": 0.15, "remote control": 0.18}
+OTHER_SIZE_M = 0.10
+CLOSE_PX = 64.0
+VIEW_MARGIN = 0.03  # a spot this close to the frame's edge (share of the frame) does not count as in view
+BLOCKED_SHARE, BLOCKED_M = 0.12, 0.10  # "something is in front": seen depth nearer than the spot by 12 % and by 10 cm
+NEAR_M = 0.5  # a detection this close to the remembered spot is "the item is still there"
+# A thing that is in the wearer's picture but not in the baseline photos often gets depth the model
+# is not sure of (eval/ITEMS_RESULTS.md). Small things lie on something, so then the trusted depth of
+# the surface right around the box is asked: the item is placed only if the model's depth on the item
+# is within SURFACE_SHARE of it. RECON_ITEMS_SURFACE=0 turns this off (untrusted depth = no position).
+SURFACE = os.environ.get("RECON_ITEMS_SURFACE", "1") != "0"
+SURFACE_SHARE = 0.15
 
 
 def wanted(text=None):
@@ -293,9 +308,26 @@ def crop_window(shape, like):
 
 
 # ----------------------------------------------------------------------------- on the map
-def place(found, r, base, q, valid, window, state, typical_m=2.0):
+def surface_depth(depth, valid, x, y, half_w, half_h, middle):
+    """Depth for an item whose own depth is not trusted: the model's depth in the middle of its box,
+    but only when the trusted surface in a band around the box lies at the same depth. None otherwise."""
+    H, W = depth.shape
+    grow_x, grow_y = max(4, half_w // 2), max(4, half_h // 2)
+    top, left = max(0, y - half_h - grow_y), max(0, x - half_w - grow_x)
+    piece, trusted = depth[top:y + half_h + grow_y + 1, left:x + half_w + grow_x + 1], valid[top:y + half_h + grow_y + 1, left:x + half_w + grow_x + 1]
+    band = np.ones(piece.shape, bool)
+    band[max(0, y - half_h - top):y + half_h + 1 - top, max(0, x - half_w - left):x + half_w + 1 - left] = False
+    around = trusted & band & (piece > 0)
+    middle = middle[middle > 0]
+    if around.sum() < max(8, 0.25 * band.sum()) or not len(middle):
+        return None
+    surface, own = float(np.median(piece[around])), float(np.median(middle))
+    return own if abs(own - surface) <= SURFACE_SHARE * surface else None
+
+
+def place(found, r, base, q, valid, window, state, typical_m=2.0, room=None):
     """Put detections on the room map, with the same axes and the same distance and bearing as the
-    named places in locate.locate.
+    named places in locate.locate (the map transform is locate.map_frame, or `room` if given).
     found    detections, boxes in 0..1 of the picture the detector saw
     r, base  the reconstruction of this fix and the indices of its baseline frames
     q        index in r of the frame that picture became (the wearer's newest frame)
@@ -304,15 +336,13 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0):
     state    the fix: "found", "unsure" or "lost". Without a fix nothing is placed.
     Returns (items, marks): JSON-ready dicts, and balls for the 3D view. An item that cannot be
     placed keeps position None and says why in "note"."""
-    up, north, east = locate.axes(r.E, base)
-    metres = typical_m / float(np.median(r.depth[base][valid[base]]))
-    origin = locate.camera(r.E[base[0]])[0]
+    room = locate.map_frame(r, base, valid, typical_m) if room is None else room
+    metres = room["metres"]
     eye, forward = locate.camera(r.E[q])
-    heading = float(np.degrees(np.arctan2(forward @ east, forward @ north)))
+    heading = float(np.degrees(np.arctan2(forward @ room["east"], forward @ room["north"])))
 
     def on_map(point):
-        d = (point - origin) * metres
-        return np.array([d @ east, d @ north, d @ up])
+        return locate.to_map(room, point)[0]
 
     here = on_map(eye)
     H, W = r.depth[q].shape
@@ -337,11 +367,15 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0):
         ry = max(2, int(round((v1 - v0) / (y1 - y0) * (H - 1) / 4)))
         rows, cols = slice(max(0, y - ry), y + ry + 1), slice(max(0, x - rx), x + rx + 1)
         ok = valid[q][rows, cols] & (r.depth[q][rows, cols] > 0)
-        if ok.sum() < max(3, 0.25 * ok.size):
-            item["note"] = (f"The depth there is not trusted ({int(ok.sum())} of {ok.size} pixels in the middle of the box), "
-                            "so it is not on the map.")
-            continue
-        depth = float(np.median(r.depth[q][rows, cols][ok]))
+        if ok.sum() >= max(3, 0.25 * ok.size):
+            depth = float(np.median(r.depth[q][rows, cols][ok]))
+        else:
+            depth = surface_depth(r.depth[q], valid[q], x, y, 2 * rx, 2 * ry, r.depth[q][rows, cols]) if SURFACE else None
+            if depth is None:
+                item["note"] = (f"The depth there is not trusted ({int(ok.sum())} of {ok.size} pixels in the middle of the box), "
+                                "so it is not on the map.")
+                continue
+            item["note"] = "Placed with the help of the surface around it: the depth on the item itself is not trusted."
         cam = np.array([(x - K[0, 2]) / K[0, 0] * depth, (y - K[1, 2]) / K[1, 1] * depth, depth])
         world = (cam - E[:, 3]) @ E[:, :3]
         at = on_map(world)
@@ -351,6 +385,85 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0):
                     bearing_deg=int(round(float(bearing))))
         marks.append((world, 1.2 * 0.07 / metres, ITEM_COLOUR))
     return items, marks
+
+
+def check(remembered, names, seen, r, q, valid, window, room, picture_shape, input_side=960):
+    """Look again at spots where items were seen before, in the wearer's newest frame. Four facts
+    per spot, no verdict: the detector misses small things, so "gone" is for the caller to decide
+    over several looks.
+    remembered  [{"name", "position": [east, north, up]}] in map coordinates (as place() gives them)
+    names       what the detector looked for in this frame
+    seen        every detection of this frame after place(): its "box" and, when placed, "position"
+    r, q, valid, window, room   as for place(); picture_shape: the picture the detector saw
+    Returns (checked, left_out). checked: one dict per usable remembered spot with
+      in_view        in front of the camera and inside the frame the position fix used, off its edge
+      blocked        the depth seen at that pixel is clearly nearer than the spot, or not trusted
+      close_enough   at that distance the item would be at least CLOSE_PX long in the detector's picture
+      detected_near  the detector found that item within NEAR_M of the spot (or, for a detection
+                     that could not be placed, with the spot's pixel inside its box)
+      pixel          [u, v] in 0..1 of the picture the detector saw (like "box"); None if behind the camera
+      distance_m     along the floor from the wearer, like every other distance_m
+      size_px, depth_gap_m   what close_enough and blocked were decided from (None when unknown):
+                     expected long side in pixels; seen depth minus the spot's depth in metres
+    left_out: names of remembered entries that were skipped (malformed, or not looked for)."""
+    H, W = r.depth[q].shape
+    K, E = r.K[q], r.E[q]
+    x0, y0, x1, y1 = window
+    metres = room["metres"]
+    eye, _ = locate.camera(E)
+    here = locate.to_map(room, eye)[0]
+    # one pixel of the model's frame is this many pixels of the detector's whole-picture pass
+    zoom = (x1 - x0) * picture_shape[1] * (input_side / max(picture_shape[:2])) / W
+    checked, left_out = [], []
+    for entry in list(remembered)[:50]:
+        try:
+            name = " ".join(str(entry["name"]).lower().split())
+            spot = np.array([float(v) for v in entry["position"]])
+            usable = spot.shape == (3,) and bool(np.isfinite(spot).all()) and name in names
+        except (KeyError, TypeError, ValueError):
+            name, usable = str(entry.get("name", "?") if isinstance(entry, dict) else "?"), False
+        if not usable:
+            left_out.append(name)
+            continue
+        world = locate.from_map(room, spot)[0]
+        cam = E[:, :3] @ world + E[:, 3]
+        depth = float(cam[2])
+        floor = float(np.hypot(spot[0] - here[0], spot[1] - here[1]))
+        fact = {"name": name, "in_view": False, "blocked": False, "close_enough": False, "detected_near": False,
+                "pixel": None, "distance_m": round(floor, 1), "size_px": None, "depth_gap_m": None}
+        checked.append(fact)
+        for d in seen:  # is the item itself still there?
+            if d["name"] != name:
+                continue
+            if d.get("position") is not None:
+                fact["detected_near"] |= bool(np.linalg.norm(np.array(d["position"]) - spot) <= NEAR_M)
+        if depth <= 1e-6:
+            continue  # behind the wearer
+        x, y = K[0, 0] * cam[0] / depth + K[0, 2], K[1, 1] * cam[1] / depth + K[1, 2]
+        cu, cv = x / (W - 1), y / (H - 1)
+        u, v = x0 + cu * (x1 - x0), y0 + cv * (y1 - y0)
+        fact["pixel"] = [round(float(u), 4), round(float(v), 4)]
+        for d in seen:  # a detection that has no position: is the spot inside its box?
+            if d["name"] == name and d.get("position") is None:
+                bu0, bv0, bu1, bv1 = d["box"]
+                grow_u, grow_v = 0.25 * (bu1 - bu0), 0.25 * (bv1 - bv0)
+                fact["detected_near"] |= bool(bu0 - grow_u <= u <= bu1 + grow_u and bv0 - grow_v <= v <= bv1 + grow_v)
+        size = REAL_SIZE_M.get(name, OTHER_SIZE_M) / max(float(np.linalg.norm(cam)) * metres, 1e-6) * float(K[0, 0]) * zoom
+        fact["size_px"] = int(round(min(size, 9999)))
+        fact["close_enough"] = bool(size >= CLOSE_PX)
+        fact["in_view"] = bool(VIEW_MARGIN <= cu <= 1 - VIEW_MARGIN and VIEW_MARGIN <= cv <= 1 - VIEW_MARGIN)
+        if not fact["in_view"]:
+            continue
+        px, py = int(round(x)), int(round(y))
+        rows, cols = slice(max(0, py - 2), py + 3), slice(max(0, px - 2), px + 3)
+        ok = valid[q][rows, cols] & (r.depth[q][rows, cols] > 0)
+        if ok.sum() < max(3, 0.25 * ok.size):
+            fact["blocked"] = True  # the depth there is not trusted: we cannot say the spot was seen
+            continue
+        gap = float(np.median(r.depth[q][rows, cols][ok])) - depth  # negative: something nearer than the spot
+        fact["depth_gap_m"] = round(gap * metres, 2)
+        fact["blocked"] = bool(-gap > max(BLOCKED_SHARE * depth, BLOCKED_M / metres))
+    return checked, left_out
 
 
 def write_crops(picture, items, out):
@@ -375,20 +488,35 @@ def write_crops(picture, items, out):
             item["image"] = name
 
 
-def look(detector, names, clip, newest, like, r, base, q, valid, state, out):
+def look(detector, names, clip, newest, like, r, base, q, valid, state, out, remembered=None):
     """The whole lost-items step of one position fix. newest: the wearer's newest frame before it
-    was cropped for the model; like: a baseline frame (the shape it was cropped to).
+    was cropped for the model; like: a baseline frame (the shape it was cropped to); remembered:
+    spots where items were seen before, to look at again (see check).
     Returns (fields to add to the locate result, balls for the 3D view)."""
-    fields = {"items": [], "items_looked_for": list(names)}
+    fields = {"items": [], "items_looked_for": list(names), "items_checked": []}
     picture, saw = big_frame(clip), BIG
     if picture is not None and abs(picture.shape[1] / picture.shape[0] / (newest.shape[1] / newest.shape[0]) - 1) > 0.03:
         picture = None  # not the same picture as the newest frame: its boxes could not be mapped into the fix
         fields["items_note"] = f"{BIG} has another shape than the newest frame, so the small frame was searched."
     if picture is None:
         picture, saw = newest, "newest frame"
-    found = best_per_name(detector.find(picture, names))
-    items, marks = place(found, r, base, q, valid, crop_window(newest.shape, like.shape), state)
+    every = detector.find(picture, names)
+    found = best_per_name(every)
+    room = locate.map_frame(r, base, valid)
+    window = crop_window(newest.shape, like.shape)
+    items, marks = place(found, r, base, q, valid, window, state, room=room)
     write_crops(picture, items, out)
     fields["items"] = items
     fields["items_frame"] = {"source": saw, "width": picture.shape[1], "height": picture.shape[0], **detector.last}
+    if remembered and state != "lost":  # without a fix a remembered spot cannot be found in this frame
+        try:
+            rest, _ = place([d for d in every if d not in found], r, base, q, valid, window, state, room=room)
+            fields["items_checked"], left_out = check(remembered, names, items + rest, r, q, valid, window, room, picture.shape,
+                                                      detector.side)
+            if left_out:
+                fields["items_note"] = (fields.get("items_note", "") + " Remembered spots left out (not looked for, or unreadable): "
+                                        + ", ".join(left_out[:10]) + ".").strip()
+        except Exception as error:  # the fix and the items found must still go out
+            fields["items_checked"] = []
+            fields["items_note"] = (fields.get("items_note", "") + f" Remembered spots were not checked: {type(error).__name__}: {error}").strip()[:300]
     return fields, marks

@@ -106,7 +106,61 @@ def main():
     untrusted[q] = False
     bad, _ = items.place([{"name": "keys", "score": 0.5, "box": box}], r, base, q, untrusted, window, "found")
     assert bad[0]["position"] is None and "note" in bad[0], bad
-    print("4 ok: lost, outside the crop, untrusted depth -> no position, with a note")
+    H, W = r.depth[q].shape
+    px, py = int(round(u * (W - 1))), int(round(v * (H - 1)))
+    hole = valid.copy()
+    hole[q, py - 4:py + 5, px - 4:px + 5] = False  # only the item's own depth is untrusted: the surface around it helps
+    helped, _ = items.place([{"name": "keys", "score": 0.5, "box": box}], r, base, q, hole, window, "found")
+    assert np.allclose(helped[0]["position"], item["position"], atol=0.02) and "surface" in helped[0]["note"], helped
+    bump = rc.Recon(depth=r.depth.copy(), conf=r.conf, K=r.K, E=r.E, rgb=r.rgb)
+    bump.depth[q, py - 4:py + 5, px - 4:px + 5] *= 0.6  # ... but not when the item's depth disagrees with that surface
+    apart, _ = items.place([{"name": "keys", "score": 0.5, "box": box}], bump, base, q, hole, window, "found")
+    assert apart[0]["position"] is None and "note" in apart[0], apart
+    print("4 ok: lost, outside the crop, untrusted depth -> no position, with a note; surface around an item helps")
+
+    # 5. looking again at a remembered spot (items.check): projection, blocked, close enough, detected near
+    there = locate.map_frame(r, base, valid)
+    points = np.random.default_rng(1).normal(size=(5, 3))
+    assert np.allclose(locate.from_map(there, locate.to_map(there, points)), points, atol=1e-5)
+    names, shape = ["keys", "remote control"], (720, 1280)
+    spot = {"name": "keys", "position": item["position"]}
+
+    def check(remembered, seen, recon=r, mask=valid):
+        return items.check(remembered, names, seen, recon, q, mask, window, there, shape)
+
+    facts, left = check([spot], found)
+    fact = facts[0]
+    assert not left and fact["in_view"] and not fact["blocked"] and fact["detected_near"], fact
+    assert abs(fact["pixel"][0] - cu) < 0.01 and abs(fact["pixel"][1] - cv) < 0.01, (fact, cu, cv)  # back where the box was
+    assert abs(fact["distance_m"] - item["distance_m"]) <= 0.1 and abs(fact["depth_gap_m"]) < 0.05, fact
+    assert not fact["close_enough"] and fact["size_px"] < items.CLOSE_PX, fact  # keys from 2 m are a few pixels
+    gone = check([spot], [])[0][0]
+    assert gone["in_view"] and not gone["blocked"] and not gone["detected_near"], gone
+    unplaced = check([spot], [{"name": "keys", "box": box, "position": None}])[0][0]
+    assert unplaced["detected_near"], unplaced  # a detection without a position still counts when the spot is in its box
+    elsewhere = check([spot], [{"name": "keys", "box": box, "position": [v + 1.0 for v in item["position"]]}])[0][0]
+    assert not elsewhere["detected_near"], elsewhere
+    other_name = check([spot], [{"name": "remote control", "box": box, "position": item["position"]}])[0][0]
+    assert not other_name["detected_near"], other_name
+    nearer = rc.Recon(depth=r.depth.copy(), conf=r.conf, K=r.K, E=r.E, rgb=r.rgb)
+    nearer.depth[q, py - 6:py + 7, px - 6:px + 7] *= 0.6  # something stands in front of the spot
+    hidden = check([spot], [], recon=nearer)[0][0]
+    assert hidden["in_view"] and hidden["blocked"] and hidden["depth_gap_m"] < -0.5, hidden
+    behind_it = rc.Recon(depth=r.depth.copy(), conf=r.conf, K=r.K, E=r.E, rgb=r.rgb)
+    behind_it.depth[q, py - 6:py + 7, px - 6:px + 7] *= 1.5  # the surface is further away: the spot is in plain view
+    assert not check([spot], [], recon=behind_it)[0][0]["blocked"]
+    assert check([spot], [], mask=untrusted)[0][0]["blocked"]  # no trusted depth there: we cannot say we saw the spot
+    eye, forward = locate.camera(r.E[q])
+    behind = check([{"name": "keys", "position": locate.to_map(there, eye - forward)[0].tolist()}], [])[0][0]
+    assert not behind["in_view"] and behind["pixel"] is None and not behind["blocked"], behind
+    aside = check([{"name": "keys", "position": [item["position"][0] + 30.0, item["position"][1], item["position"][2]]}], [])[0][0]
+    assert not aside["in_view"], aside
+    close = check([{"name": "remote control", "position": locate.to_map(there, eye + 0.4 * forward)[0].tolist()}], [])[0][0]
+    assert close["close_enough"] and close["size_px"] >= items.CLOSE_PX, close  # a remote at 40 cm is large
+    facts, left = check([{"name": "umbrella", "position": [0, 0, 0]}, {"name": "keys"}, "junk", spot], [])
+    assert len(facts) == 1 and len(left) == 3, (facts, left)
+    assert check([], found) == ([], [])
+    print("5 ok: remembered spot ->", fact)
     print("all ok")
 
 

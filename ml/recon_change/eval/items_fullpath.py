@@ -90,6 +90,7 @@ def main():
     ap.add_argument("--device", default=None)
     ap.add_argument("--spot", type=float, nargs=2, default=[0.33, 0.72], help="where the item is pasted, u v in the baseline photo")
     ap.add_argument("--repeat", type=int, default=3)
+    ap.add_argument("--short", action="store_true", help="only the same-room fix and the look-again check")
     args = ap.parse_args()
     if args.device:
         os.environ["RECON_DEVICE"] = args.device
@@ -139,7 +140,7 @@ def main():
 
     # paint the items in: one inside the part the fix uses, one on the mirrored strip outside it
     records = json.loads(Path(args.set).read_text())
-    spot = (side + u * (view.shape[1] - 1), v * (H - 1))
+    spot = spot_xy = (side + u * (view.shape[1] - 1), v * (H - 1))
     picture = None
     for inside_name, outside_name in (("remote control", "phone"), ("phone", "remote control")):
         for piece in pieces(records, args.img, inside_name):
@@ -193,6 +194,23 @@ def main():
     print("crops written:", sorted(p.name for p in (work / "same_room" / "out").glob("item_*.jpg")), flush=True)
     viewed = fix("same_room_view", [small_frame], picture, view=True)
     print("with the 3D view asked for:", {"gaussians": viewed.get("gaussians"), "seconds": viewed["seconds"]}, flush=True)
+
+    print("\n== 1b. looking again at the remembered spot: with the item, without it, and with something in front", flush=True)
+    placed = [item for item in result["items"] if item["position"]]
+    spot = placed[0] if placed else {"name": inside_name, "position": place["position"]}
+    remembered = [{"name": spot["name"], "position": spot["position"]}, {"name": "keys", "position": [50.0, 50.0, 0.0]}]
+    again = fix("look_again_there", [small_frame], picture, remembered=remembered)
+    print("LOOK item still there:", json.dumps(again["items_checked"]), again.get("items_note"), flush=True)
+    empty = cv2.resize(wide, (640, 360), interpolation=cv2.INTER_AREA)
+    again = fix("look_again_gone", [empty], wide, remembered=remembered)
+    print("LOOK item taken away:", json.dumps(again["items_checked"]), again.get("items_note"), flush=True)
+    covered = wide.copy()
+    if spot["name"] == inside_name:  # a big bright card over the spot: no depth change (it is paint), so "blocked" should stay false
+        cv2.rectangle(covered, (int(spot_xy[0]) - 90, int(spot_xy[1]) - 90), (int(spot_xy[0]) + 90, int(spot_xy[1]) + 90), (235, 235, 235), -1)
+        again = fix("look_again_painted", [cv2.resize(covered, (640, 360), interpolation=cv2.INTER_AREA)], covered, remembered=remembered)
+        print("LOOK spot painted over:", json.dumps(again["items_checked"]), again.get("items_note"), flush=True)
+    if args.short:
+        return
 
     print("\n== 2. the same without big.jpg (detector looks at the 640 px frame)", flush=True)
     print(json.dumps(brief(fix("no_big", [small_frame], None)), indent=1), flush=True)

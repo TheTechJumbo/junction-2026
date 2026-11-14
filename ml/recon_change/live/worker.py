@@ -190,18 +190,20 @@ def where(model, job, req):
     out.mkdir(exist_ok=True)
     cv2.imwrite(str(out / "view.jpg"), new[-1], [cv2.IMWRITE_JPEG_QUALITY, 88])
     seconds["locate"] = round(time.time() - t0, 2)
-    result.update({"items": [], "items_looked_for": ITEMS})
+    result.update({"items": [], "items_looked_for": ITEMS, "items_checked": []})
     if ITEMS:  # lost items: found in the newest picture, placed with this fix's depth (items.py)
         t0 = time.time()
         try:
             if "model" not in ITEM_DETECTOR:
                 raise RuntimeError(ITEM_DETECTOR.get("error", "not loaded"))
             found, item_marks = items.look(ITEM_DETECTOR["model"], ITEMS, job / req["file"], seen[-1], base[0], recon,
-                                           list(range(len(base))), len(base) + len(new) - 1, valid, result["state"], out)
+                                           list(range(len(base))), len(base) + len(new) - 1, valid, result["state"], out,
+                                           remembered=req.get("remembered"))
             result.update(found)
             marks += item_marks
         except Exception as error:  # the position fix must still go out
-            result.update({"items": [], "items_note": f"Items were not looked for: {type(error).__name__}: {error}"[:300]})
+            result.update({"items": [], "items_checked": [],
+                           "items_note": f"Items were not looked for: {type(error).__name__}: {error}"[:300]})
             print(f"{job.name} items FAILED: {traceback.format_exc()}", flush=True)
         seconds["items"] = round(time.time() - t0, 2)
     if req.get("view"):  # the room as a splat, with the wearer (blue) and the places (yellow) marked
