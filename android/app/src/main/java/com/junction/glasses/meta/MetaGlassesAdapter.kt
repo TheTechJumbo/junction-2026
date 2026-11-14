@@ -187,7 +187,12 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     }
 
     /** JPEG in memory only. Caller must enforce its own event/evidence consent gate. */
-    suspend fun capturePhoto(): ByteArray? {
+    suspend fun capturePhoto(): ByteArray? = try {
+        capturePhotoInternal()
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { fail("Photo capture unavailable. Reconnect and retry."); null }
+
+    private suspend fun capturePhotoInternal(): ByteArray? {
         val active = camera ?: run { fail("Start the glasses camera first."); return null }
         if (active.stream.state.value != StreamState.STREAMING) { fail("Wait for the glasses camera to start."); return null }
         val photo = withTimeoutOrNull(10_000) { active.stream.capturePhoto().getOrNull() }
@@ -261,7 +266,12 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     }
     fun stopMotion() { motionRequested = false; motionHandle?.stop(); mutableMotion.value = null }
 
-    suspend fun showAnswer(text: String): Boolean {
+    suspend fun showAnswer(text: String): Boolean = try {
+        showAnswerInternal(text)
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { fail("Display unavailable. Read the answer on the phone."); false }
+
+    private suspend fun showAnswerInternal(text: String): Boolean {
         val panel = display ?: return false
         if (panel.state.value != DisplayState.STARTED) return false
         return withTimeoutOrNull(5_000) {
