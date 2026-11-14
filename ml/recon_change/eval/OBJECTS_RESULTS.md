@@ -16,11 +16,12 @@ two models once per scene), `eval/objects_eval.py` (everything after that, numpy
 - **The diary says little, and what it said about the changed rooms was right.** In four changed
   rooms it reported 2 events, both on a hand-labelled change and both of the right kind by eye. It
   held 14 more back as "unconfirmed", 11 of them on a labelled change. With the watched-spot check
-  of `watch.py` switched in (three scenes) it reported 4, all right. Against the labelled regions
+  of `watch.py` switched in it reported 4, all right. Against the labelled regions
   it hit 0 of 151 small, 6 of 103 medium and 8 of 81 large ones, where the whole-room detector hits
   2 %, 20 % and 62 % indoors. So it does not replace the whole-room detector; it adds names.
 - **It does false-alarm.** In the unchanged control (12 held-out photos per room, 48 fixes) it
-  reported 3 false events (one hanging lamp twice, one stool) and held 12 more back.
+  reported 3 false events (one hanging lamp twice, one stool) and held 12 more back; with the
+  watched-spot check, 2.
 - **`confidence_pct` means roughly what it says for objects** (by my count: 42 % right among those
   marked 40 to 59, 77 % among 60 to 74, 93 % among 75 to 89, 83 % among 90 and up). For events it
   does not hold up: 3 of the 5 events reported in all were the false ones, at 70 to 87 %.
@@ -217,18 +218,21 @@ place looks as in the baseline (`eval/objects_watch.py`; 12 baseline + 3 new pho
 each new photo asked on its own). A miss by the detector then counts a quarter when the place
 looks the same and 1.3 times when it looks different, and a "changed" place counts as a look
 without the object even when the object is too small for the detector. These weights were set by
-reasoning, not tuned. Over the three scenes it answered "same" 447 times, "changed" 142 times and
-"not seen" 776 times.
+reasoning, not tuned. Over the four scenes it answered "same" 671 times, "changed" 192 times and
+"not seen" 1324 times.
 
 | Scene | Reported, changed room | on a labelled change | Right kind by eye | Held back | on a labelled change | Reported in the unchanged control |
 | --- | --- | --- | --- | --- | --- | --- |
 | Cantina | 1 ("the paper roll is gone", 84 %) | 1 | 1 | 3 | 3 | 0 |
 | Meeting_room | 3 (the two above and "the pen was moved", 75 %) | 3 | 3 | 3 | 3 | 2 (the same lamp) |
 | Printing_area | 0 | | | 7 | 6 | 0 |
-| **Three report scenes** | **4** | **4** | **4** | **13** | **12** | **2** |
+| Lunch_room | 0 | | | 4 | 2 | 0 (the stool is held back) |
+| **Four report scenes** | **4** | **4** | **4** | **17** | **14** | **2** |
 
-Two more right events and no new false one. On Lounge it changed nothing that was reported.
-Lunch_room's run had not finished when this was written. It is still a small sample.
+Two more right events and one false event fewer. The stool that "appeared" in the Lunch_room
+control is now held back because other stools had just been missed at their places, which makes
+the map wait; that is a side effect, not a cure. On Lounge nothing that was reported changed. It
+is still a small sample.
 
 ### Next to the whole-room change detector
 
@@ -241,7 +245,7 @@ every photo that sees it.
 | | Small regions (50 to 199 px) | Medium (200 to 799) | Large (800 and more) | False events or clusters in the unchanged control |
 | --- | --- | --- | --- | --- |
 | Object diary, events reported at 70 %, four scenes | 0/151 | 6/103 (6 %) | 8/81 (10 %) | 3 in 4 rooms |
-| The same with the watched-spot check, three scenes | 12/117 (10 %) | 11/88 (13 %) | 13/72 (18 %) | 2 in 3 rooms |
+| The same with the watched-spot check, four scenes | 12/151 (8 %) | 11/103 (11 %) | 13/81 (16 %) | 2 in 4 rooms |
 | Object diary, every event told, held-back ones too, four scenes | 36/151 (24 %) | 45/103 (44 %) | 37/81 (46 %) | 17 in 4 rooms |
 | Whole-room detector, all five indoor scenes (`eval/RESULTS.md`) | 4/168 (2 %) | 27/136 (20 %) | 58/94 (62 %) | 0 in 5 rooms |
 
@@ -335,7 +339,7 @@ The watched-spot check was not timed here.
 - **Whether an "80 %" event is right 80 % of the time.** Five events were reported in all; three
   were false. The event numbers are not calibrated, and this data cannot calibrate them.
 - **What the inventory misses.** There is no list of what is in these rooms.
-- **The watched-spot check on Lunch_room**, and its time per fix.
+- **The time the watched-spot check adds to a fix.**
 
 ## What this means for the demo
 
@@ -346,7 +350,7 @@ The watched-spot check was not timed here.
 - **Show the labels in the 3D view** (`objects.marks`): pink where a thing is, orange where a
   moved thing is now, red where a missing one was.
 - **Expect the diary to be quiet, and stage the move.** In four changed rooms it reported two
-  events (both right) and held fourteen back; with the watched-spot check, four in three rooms. For a move to be reported, the thing must be one the
+  events (both right) and held fourteen back; with the watched-spot check, four. For a move to be reported, the thing must be one the
   detector knows well (a baseline score of 0.55 or more: a stool, a mug, a keyboard, a kettle, a
   bin), stand at least half a metre from where it was, and both its old place and its new place
   must be looked at clearly two or three times from different standpoints (a step or a turn of
@@ -416,4 +420,5 @@ for event in told:   # newly reported: a diary line
    valid. Not measured.
 3. With `watch.py` on the branch: `objects.observe(..., watcher=watch)` adds the watched-spot
    verdict for every inventory object (it needs `Recon.feat`, which `rc.reconstruct` returns).
-   On three scenes that doubled the right events (2 to 4) with no new false one (section 2b).
+   On the four report scenes that doubled the right events (2 to 4) and the false ones went from
+   3 to 2 (section 2b).
