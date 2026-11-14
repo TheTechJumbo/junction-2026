@@ -1,7 +1,8 @@
 package com.junction.glasses.meta
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import java.nio.ByteBuffer
 import androidx.activity.ComponentActivity
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
@@ -54,7 +55,8 @@ data class MotionReading(val timestampNs: Long, val x: Float, val y: Float, val 
  */
 class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: CoroutineScope) {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
-    private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.Main.immediate)
+    private val observerErrors = CoroutineExceptionHandler { _, _ -> fail("Glasses connection interrupted. Reconnect to continue.") }
+    private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.Main.immediate + observerErrors)
     private val mutableState = MutableStateFlow(MetaState())
     val state: StateFlow<MetaState> = mutableState.asStateFlow()
     private val mutableTranscripts = MutableSharedFlow<String>(extraBufferCapacity = 4)
@@ -80,6 +82,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     private var listenGeneration = 0L
     private var listeningRequested = false
     private var cameraGeneration = 0L
+    private var motionRequested = false
     private val permissionLauncher = activity.registerForActivityResult(Wearables.RequestPermissionContract()) {
         permissionResult?.complete(it.getOrDefault(PermissionStatus.Denied))
         permissionResult = null
@@ -193,7 +196,9 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         return withContext(Dispatchers.Default) {
             val bitmap = when (photo) {
                 is PhotoData.Bitmap -> photo.bitmap
-                is PhotoData.HEIC -> BitmapFactory.decodeByteArray(photo.data, 0, photo.data.size)
+                is PhotoData.HEIC -> ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(photo.data))) { decoder, _, _ ->
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                }
             } ?: return@withContext null
             ByteArrayOutputStream().use { out ->
                 if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)) return@withContext null
@@ -239,6 +244,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     }
 
     fun startMotion() {
+        motionRequested = true
         if (motionHandle != null) { motionHandle?.start(); return }
         val connected = session?.takeIf { state.value.connection == "STARTED" }
             ?: run { fail("Connect glasses before enabling motion."); return }
@@ -247,14 +253,14 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
             sessionScope?.launch { added.state.collect { status -> mutableState.update { it.copy(motion = status.name) } } }
             sessionScope?.launch { added.errors.collect { error -> if (error != null) fail("Glasses motion unavailable: ${error.description}") } }
             sessionScope?.launch { added.samples.collect { sample ->
-                if (sample.source == MotionSource.GLASSES) sample.accelerometer?.let {
+                if (motionRequested && sample.source == MotionSource.GLASSES) sample.accelerometer?.let {
                     mutableMotion.value = MotionReading(sample.timestampNs, it.x, it.y, it.z)
                 }
             } }
             added.start()
         }.onFailure { _, _ -> mutableState.update { it.copy(motion = "UNAVAILABLE", error = "Motion is unavailable on these glasses.") } }
     }
-    fun stopMotion() { motionHandle?.stop(); mutableMotion.value = null }
+    fun stopMotion() { motionRequested = false; motionHandle?.stop(); mutableMotion.value = null }
 
     suspend fun showAnswer(text: String): Boolean {
         val panel = display ?: return false
@@ -268,7 +274,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     }
 
     fun disconnect() {
-        listeningRequested = false; listenGeneration++; cameraGeneration++
+        listeningRequested = false; motionRequested = false; listenGeneration++; cameraGeneration++
         permissionResult?.cancel(); permissionResult = null
         sessionJob?.cancel(); sessionJob = null; sessionScope = null
         speech?.stop(); motionHandle?.stop(); camera?.stop()
