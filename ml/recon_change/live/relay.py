@@ -13,6 +13,15 @@ It prints the link to open. The link carries an access key, and every request ne
                                   (either body may instead be a zip of frames 000.jpg, 001.jpg, ...
                                   that a phone app already picked: up to 24 for a baseline, 12 for a check)
     GET  /status                  is the vision worker running, which zones have a baseline
+    POST /locate?zone=kitchen     body = a photo, a short video or a zip of frames of what the wearer
+                                  sees now -> where they are and the way to each named place
+                                  (add &view=1 to also get the room as a 3D file with them marked)
+    GET  /where?zone=kitchen      the latest position fix for that zone (what the glasses display polls)
+    GET  /waypoints?zone=kitchen  the zone's named places
+    POST /waypoint?zone=kitchen&name=pill+box&frame=3&u=0.4&v=0.6   name a spot in baseline picture 3
+    POST /waypoint?zone=kitchen&name=pill+box&delete=1
+    GET  /hud                     the glasses display page: arrow and distance to a place
+    GET  /places                  name places by clicking in a baseline picture, and test a fix
 
 /check answers with a plain-language headline, events in the team's schema, and links to a
 "before" and a "now" picture. If EVENT_API_URL is set, the events are also POSTed there. The
@@ -45,12 +54,13 @@ from urllib.parse import parse_qs, urlparse
 HERE = Path(__file__).resolve().parent
 REMOTE = "cd /scratch/$USER/junction-recon && exec .venv-recon/bin/python -u live/gateway.py"
 MAX_BODY = 200 * 1024 * 1024
-FRAMES = {"baseline": 24, "check": 12}  # keep in step with worker.py
+FRAMES = {"baseline": 24, "check": 12, "locate": 3}  # keep in step with worker.py
 LONG_SIDE = 518  # the model's input size: no point sending more pixels
 
 try:
     sys.path.insert(0, str(HERE.parent))
     import cv2
+    import numpy as np
     import recon_change as rc
 except ImportError:  # no OpenCV here: videos are forwarded whole
     cv2 = rc = None
@@ -112,7 +122,49 @@ def pick_frames(video, n):
             if scale < 1:
                 frame = cv2.resize(frame, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
             z.writestr(f"{i:03d}.jpg", cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes())
+    if not frames:
+        raise ValueError("no frames in that file")
     return bundle.getvalue(), len(frames)
+
+
+def is_photo(data):
+    """JPEG, PNG or WebP, by the first bytes."""
+    return data[:2] == b"\xff\xd8" or data[:8] == b"\x89PNG\r\n\x1a\n" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")
+
+
+def one_photo(photo):
+    """A single photo as a one-frame bundle, shrunk to the model's input size when OpenCV is here."""
+    if cv2 is None and photo[:2] != b"\xff\xd8":
+        raise ValueError("only JPEG photos without OpenCV")
+    if cv2 is not None:
+        frame = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError("not a picture")
+        scale = LONG_SIDE / max(frame.shape[:2])
+        if scale < 1:
+            frame = cv2.resize(frame, (round(frame.shape[1] * scale), round(frame.shape[0] * scale)), interpolation=cv2.INTER_AREA)
+        photo = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+    bundle = io.BytesIO()
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as z:
+        z.writestr("000.jpg", photo)
+    return bundle.getvalue()
+
+
+def where_in_plain_words(fix):
+    """One line about a position fix, for a screen or for speech."""
+    if fix["state"] == "lost":
+        return "Not sure where you are", "Look around slowly so more of the room is in view."
+    places = sorted(fix["waypoints"], key=lambda w: w["distance_m"])
+    if not places:
+        return "Found you in the room", "No places are named in this room yet."
+
+    def side(w):
+        b = w["bearing_deg"]
+        return "ahead" if abs(b) <= 20 else "behind you" if abs(b) >= 150 else "to your right" if b > 0 else "to your left"
+
+    nearest = places[0]
+    headline = f"The {nearest['name']} is about {max(1, round(nearest['distance_m']))} m {side(nearest)}"
+    return headline, ("This fix is shaky, so treat it as a rough guide." if fix["state"] == "unsure" else "")
 
 
 def in_plain_words(report):
@@ -161,6 +213,27 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
     except (OSError, ValueError):
         history = []
     work = {"at": 0.0, "pull_requests": []}
+    where_file = evidence_dir / "where.json"
+    try:
+        where = json.loads(where_file.read_text())  # latest position fix per zone
+    except (OSError, ValueError):
+        where = {}
+
+    def keep_evidence(job, blob):
+        """Unpack the pictures and the 3D file a job produced. Returns ({name: url}, splat url)."""
+        images, splat_url = {}, None
+        if blob:
+            folder = evidence_dir / job
+            folder.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(io.BytesIO(blob)) as bundle:
+                for name in bundle.namelist():
+                    if re.fullmatch(r"\w+\.(jpg|splat)", name):
+                        (folder / name).write_bytes(bundle.read(name))
+                        if name.endswith(".jpg"):
+                            images[name[:-4]] = f"/evidence/{job}/{name}"
+                        else:
+                            splat_url = f"/evidence/{job}/{name}"
+        return images, splat_url
 
     def pull_requests():
         """The repo's pull requests, for the dashboard's work panel. Asked from `gh` at most once a minute."""
@@ -197,13 +270,29 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             url = urlparse(self.path)
             if not self.allowed(parse_qs(url.query)):
                 return
-            pages = {"/": "phone.html", "/dashboard": "dashboard.html", "/viewer": "viewer.html"}
+            pages = {"/": "phone.html", "/dashboard": "dashboard.html", "/viewer": "viewer.html",
+                     "/hud": "hud.html", "/places": "places.html"}
             if url.path in pages:
                 return self.send_bytes(200, (HERE / pages[url.path]).read_bytes(), "text/html; charset=utf-8")
             if url.path == "/history":
                 return self.send_json(200, {"ok": True, "checks": history[-40:][::-1]})
             if url.path == "/work":
                 return self.send_json(200, {"ok": True, "repo": REPO, "pull_requests": pull_requests()})
+            zone = parse_qs(url.query).get("zone", [""])[0]
+            if url.path == "/where":
+                fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
+                if not fix:
+                    return self.send_json(404, {"ok": False, "error": "No position fix yet. POST a photo to /locate first."})
+                return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1)})
+            if url.path == "/waypoints":
+                header, _ = link.call({"op": "waypoints", "zone": zone})
+                return self.send_json(200 if header.get("ok") else 404, header)
+            match = re.fullmatch(r"/baseline/([a-z0-9_-]{1,32})/(\d{1,2})\.jpg", url.path)
+            if match:
+                header, picture = link.call({"op": "baseline_image", "zone": match[1], "frame": int(match[2])})
+                if header.get("ok"):
+                    return self.send_bytes(200, picture, "image/jpeg")
+                return self.send_json(404, header)
             if url.path == "/status":
                 header, _ = link.call({"op": "status"})
                 return self.send_json(200 if header.get("ok") else 503, header)
@@ -220,37 +309,51 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return
             op, zone = url.path.strip("/"), query.get("zone", [""])[0]
             size = int(self.headers.get("Content-Length", 0))
+            if op == "waypoint":  # name or remove a place; everything is in the query, the body is ignored
+                self.rfile.read(min(size, 65536))
+                req = {"op": "waypoint", "zone": zone, "name": query.get("name", [""])[0]}
+                try:
+                    if query.get("delete", [""])[0]:
+                        req["delete"] = True
+                    else:
+                        req.update(frame=int(query["frame"][0]), u=float(query["u"][0]), v=float(query["v"][0]))
+                except (KeyError, ValueError):
+                    return self.send_json(400, {"ok": False, "error": "POST /waypoint?zone=NAME&name=PLACE&frame=N&u=0..1&v=0..1"})
+                header, _ = link.call(req)
+                return self.send_json(200 if header.get("ok") else 400, header)
             if op not in FRAMES or not zone or not 0 < size <= MAX_BODY:
-                return self.send_json(400, {"ok": False, "error": "POST /baseline?zone=NAME or /check?zone=NAME with a video as the body."})
+                return self.send_json(400, {"ok": False, "error": "POST /baseline, /check or /locate with ?zone=NAME and a video (or, for /locate, a photo) as the body."})
             t0 = time.time()
             clip = self.rfile.read(size)
             seconds = {}
-            if pick and clip[:2] != b"PK":  # a zip is a frame bundle the phone app already picked: pass it on
-                try:
+            try:
+                if op == "locate" and is_photo(clip):
+                    clip = one_photo(clip)
+                elif pick and clip[:2] != b"PK":  # a zip is a frame bundle the phone app already picked: pass it on
                     clip, n = pick(clip, FRAMES[op])
-                except ValueError:
-                    return self.send_json(400, {"ok": False, "error": "Could not read that file as a video."})
-                seconds["pick_frames"] = round(time.time() - t0, 2)
+            except ValueError:
+                return self.send_json(400, {"ok": False, "error": "Could not read that file as a video or a photo."})
+            seconds["pick_frames"] = round(time.time() - t0, 2)
             device = "cpu" if query.get("device", [""])[0] == "cpu" else "gpu"
-            header, blob = link.call({"op": op, "zone": zone, "device": device}, clip)
+            header, blob = link.call({"op": op, "zone": zone, "device": device, "view": bool(query.get("view", [""])[0])}, clip)
             seconds["total"] = round(time.time() - t0, 2)
             if not header.get("ok"):
                 return self.send_json(502, {**header, "seconds": seconds})
             result = header["result"]
             if op == "baseline":
                 return self.send_json(200, {"ok": True, "zone": zone, "frames": result["frames"], "seconds": seconds})
-            images, splat_url = {}, None
-            if blob:
-                folder = evidence_dir / header["job"]
-                folder.mkdir(parents=True, exist_ok=True)
-                with zipfile.ZipFile(io.BytesIO(blob)) as bundle:
-                    for name in bundle.namelist():
-                        if re.fullmatch(r"\w+\.(jpg|splat)", name):
-                            (folder / name).write_bytes(bundle.read(name))
-                            if name.endswith(".jpg"):
-                                images[name[:-4]] = f"/evidence/{header['job']}/{name}"
-                            else:
-                                splat_url = f"/evidence/{header['job']}/{name}"
+            images, splat_url = keep_evidence(header["job"], blob)
+            if op == "locate":
+                headline, detail = where_in_plain_words(result)
+                fix = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail, **result,
+                       "images": images, "splat": splat_url, "seconds": {**seconds, **result.get("seconds", {})},
+                       "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "at": time.time()}
+                where[zone] = fix
+                try:
+                    where_file.write_text(json.dumps(where))
+                except OSError:
+                    pass
+                return self.send_json(200, {**fix, "age_s": 0.0})
             headline, detail = in_plain_words(result)
             events = to_events(result, zone, images)
             body = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail,

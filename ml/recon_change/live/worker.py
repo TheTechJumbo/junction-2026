@@ -8,6 +8,9 @@ to RUNNING, does the work, writes result.json, and renames the marker to DONE or
   baseline  keep up to 24 sharp frames of a clip as the zone's "how it should look"
   check     reconstruct the zone's baseline frames together with 12 frames of a new clip,
             and report what appeared and what is gone
+  locate    reconstruct the zone's baseline frames together with up to 3 frames of what the
+            wearer sees now, and report where they stand, which way they face, and the
+            distance and direction to each named place (see locate.py)
 
 A clip is either a video file or a zip of frames (000.jpg, 001.jpg, ...) that the relay
 already picked, which is far smaller to send than a phone video.
@@ -29,6 +32,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import locate  # noqa: E402
 import recon_change as rc  # noqa: E402
 import splat  # noqa: E402
 
@@ -36,6 +40,7 @@ import splat  # noqa: E402
 DEVICE = os.environ.get("RECON_DEVICE") or None  # "cuda", "cpu", or unset to use a GPU when there is one
 N_BASELINE, N_AFTER = (int(n) for n in os.environ.get("RECON_FRAMES", "24,12").split(","))
 LONG_SIDE = int(os.environ.get("RECON_LONG_SIDE", "518"))  # model input size: smaller is faster and coarser
+N_LOCATE = int(os.environ.get("RECON_LOCATE_FRAMES", "3"))  # frames of the wearer's view used for one position fix
 LANE = "-cpu" if DEVICE == "cpu" else ""  # the CPU worker has its own queue and heartbeat
 QUEUE, BASELINES = ROOT / f"queue{LANE}", ROOT / "baselines"
 INFO = {}  # what this worker is, filled in at start and attached to every result
@@ -44,15 +49,18 @@ INFO = {}  # what this worker is, filled in at start and attached to every resul
 def clip_frames(job, req, n):
     """Up to n frames from the job's clip: a video file, or a zip of frames picked by the relay."""
     clip = job / req["file"]
-    if clip.suffix != ".zip":
-        return rc.sample_frames(clip, n)
-    folder = job / "frames"
-    folder.mkdir(exist_ok=True)
-    with zipfile.ZipFile(clip) as bundle:
-        for name in bundle.namelist():
-            if re.fullmatch(r"\d{1,4}\.jpg", name):  # nothing else is ever written to disk
-                (folder / name).write_bytes(bundle.read(name))
-    return rc.sample_frames(folder, n)
+    try:
+        if clip.suffix != ".zip":
+            return rc.sample_frames(clip, n)
+        folder = job / "frames"
+        folder.mkdir(exist_ok=True)
+        with zipfile.ZipFile(clip) as bundle:
+            for name in bundle.namelist():
+                if re.fullmatch(r"\d{1,4}\.jpg", name):  # nothing else is ever written to disk
+                    (folder / name).write_bytes(bundle.read(name))
+        return [f for f in rc.sample_frames(folder, n) if f is not None]
+    except SystemExit:  # sample_frames is also a command-line helper and exits on unreadable input
+        raise RuntimeError("Could not read any picture from that clip.") from None
 
 
 def set_baseline(job, req):
@@ -63,9 +71,22 @@ def set_baseline(job, req):
     zone.mkdir(parents=True, exist_ok=True)
     for old in zone.glob("*.jpg"):
         old.unlink()
+    (zone / "waypoints.json").unlink(missing_ok=True)  # places were picked in the old pictures
     for i, frame in enumerate(frames):
         cv2.imwrite(str(zone / f"{i:02d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
     return {"frames": len(frames)}
+
+
+def crop_like(frame, like):
+    """Centre-crop a frame to another frame's shape. The model resizes every frame to the first
+    one's size, so a portrait photo next to a landscape baseline would come out squashed."""
+    h, w = frame.shape[:2]
+    shape = like.shape[1] / like.shape[0]
+    if w / h > shape:
+        keep = max(1, round(h * shape))
+        return frame[:, (w - keep) // 2:(w - keep) // 2 + keep]
+    keep = max(1, round(w / shape))
+    return frame[(h - keep) // 2:(h - keep) // 2 + keep]
 
 
 def camera_position(E):
@@ -104,7 +125,7 @@ def check(model, job, req):
     t0 = time.time()
     files = [files[i] for i in sorted(set(np.linspace(0, len(files) - 1, min(N_BASELINE, len(files))).round().astype(int)))]
     base = [cv2.imread(str(f)) for f in files]
-    after = clip_frames(job, req, N_AFTER)
+    after = [crop_like(f, base[0]) for f in clip_frames(job, req, N_AFTER)]
     if len(after) < 3:
         raise RuntimeError(f"The clip gave only {len(after)} frames. Record a longer one.")
     seconds["frames"] = round(time.time() - t0, 2)
@@ -127,6 +148,50 @@ def check(model, job, req):
     report["median_depth"] = round(float(np.median(recon.depth)), 4)
     report.update(INFO)
     return report
+
+
+def where(model, job, req):
+    """Where the wearer is in the zone's map, and the way to each named place."""
+    zone = BASELINES / req["zone"]
+    files = sorted(zone.glob("*.jpg"))
+    if not files:
+        raise RuntimeError(f"No baseline for '{req['zone']}' yet. Record the baseline clip first.")
+    try:
+        places = [p for p in json.loads((zone / "waypoints.json").read_text()) if p["frame"] < len(files)]
+    except (OSError, ValueError):
+        places = []
+    seconds = {}
+    t0 = time.time()
+    spread = np.linspace(0, len(files) - 1, min(N_BASELINE, len(files))).round().astype(int)
+    pick = sorted({int(i) for i in spread} | {p["frame"] for p in places})  # a place needs the picture it was picked in
+    base = [cv2.imread(str(files[i])) for i in pick]
+    new = [crop_like(f, base[0]) for f in clip_frames(job, req, N_LOCATE)]
+    if not new:
+        raise RuntimeError("No picture of what the wearer sees.")
+    seconds["frames"] = round(time.time() - t0, 2)
+    t0 = time.time()
+    recon = rc.reconstruct(model, base + new, long_side=LONG_SIDE)
+    seconds["reconstruct"] = round(time.time() - t0, 2)
+    t0 = time.time()
+    slot = {f: i for i, f in enumerate(pick)}
+    result, marks, valid = locate.locate(
+        recon, list(range(len(base))), list(range(len(base), len(base) + len(new))),
+        [{**p, "frame": slot[p["frame"]]} for p in places])
+    out = job / "out"
+    out.mkdir(exist_ok=True)
+    cv2.imwrite(str(out / "view.jpg"), new[-1], [cv2.IMWRITE_JPEG_QUALITY, 88])
+    seconds["locate"] = round(time.time() - t0, 2)
+    if req.get("view"):  # the room as a splat, with the wearer (blue) and the places (yellow) marked
+        t0 = time.time()
+        nothing = {"points": np.zeros((0, 3)), "frames": np.zeros(0, int), "pixels": np.zeros(0, int), "member": np.zeros(0, int)}
+        detail = {"after": list(range(len(base))), "valid": valid, "appeared": nothing, "gone": nothing}
+        result["gaussians"] = splat.write_splat(recon, detail, out / "map.splat", marks=marks)
+        seconds["splat"] = round(time.time() - t0, 2)
+    result["seconds"] = seconds
+    result["frames"] = {"baseline": len(base), "new": len(new)}
+    result["median_depth"] = round(float(np.median(recon.depth)), 4)
+    result.update(INFO)
+    return result
 
 
 def main():
@@ -154,11 +219,12 @@ def main():
             t0 = time.time()
             try:
                 req = json.loads((job / "request.json").read_text())
-                result = set_baseline(job, req) if req["op"] == "baseline" else check(model, job, req)
+                run = {"baseline": lambda: set_baseline(job, req), "locate": lambda: where(model, job, req)}
+                result = run.get(req["op"], lambda: check(model, job, req))()
                 (job / "result.json").write_text(json.dumps(result))
                 (job / "RUNNING").rename(job / "DONE")
                 print(f"{job.name} {req['op']} {req['zone']} done in {time.time() - t0:.1f} s", flush=True)
-            except Exception:
+            except (Exception, SystemExit):  # one bad request must never stop the worker
                 (job / "error.txt").write_text(traceback.format_exc())
                 (job / "RUNNING").rename(job / "FAILED")
                 print(f"{job.name} FAILED\n{traceback.format_exc()}", flush=True)

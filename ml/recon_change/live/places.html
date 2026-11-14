@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon places</title>
+<!--
+  Name the places the glasses can point to, and test a position fix.
+
+  1. Pick a room, flip through its baseline pictures, click a spot, give it a name.
+  2. Upload a photo (or a short clip) of what the wearer sees: the page shows where the relay
+     thinks they are, on a floor plan and in 3D.
+-->
+<style>
+  :root { color-scheme: dark; --line: #333941; --dim: #9aa1ab; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: #15171a; color: #d6d9de; font: 15px/1.45 system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 12px; } h2 { font-size: 16px; margin: 0 0 8px; }
+  a { color: #7fb8ff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  section { border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
+  button, select, label.file { font: inherit; color: inherit; background: #262a30; border: 1px solid #3a4048; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  label.file input { display: none; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  #stage { position: relative; line-height: 0; cursor: crosshair; }
+  #stage img { width: 100%; border-radius: 8px; }
+  .pin { position: absolute; transform: translate(-50%, -50%); width: 16px; height: 16px; border-radius: 50%; background: #ffd23f; border: 2px solid #000; }
+  .pin span { position: absolute; left: 18px; top: -6px; background: #000c; color: #ffd23f; padding: 1px 6px; border-radius: 6px; white-space: nowrap; line-height: 1.4; font-size: 13px; }
+  ul { list-style: none; padding: 0; margin: 8px 0 0; } li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); }
+  canvas { width: 100%; max-width: 360px; aspect-ratio: 1; background: #000; border-radius: 8px; display: block; }
+  iframe { width: 100%; aspect-ratio: 4 / 3; border: 0; border-radius: 8px; background: #000; margin-top: 8px; }
+  .dim { color: var(--dim); } #headline { font-size: 18px; font-weight: 600; margin: 6px 0 2px; }
+  input[type=range] { flex: 1; min-width: 120px; }
+</style>
+</head>
+<body>
+<h1>BEACON <span style="font-weight:400" class="dim">places and position</span></h1>
+<div class="row">
+  <label>Room <select id="zone"></select></label>
+  <a id="hud" href="#">Open the glasses display</a>
+  <a id="dash" href="#">Dashboard</a>
+</div>
+<div class="grid">
+  <section>
+    <h2>1. Name a place</h2>
+    <div class="dim">Flip to a picture that shows the place, then click on it.</div>
+    <div class="row"><input id="frame" type="range" min="0" max="0" value="0"><span id="count" class="dim"></span></div>
+    <div id="stage"><img id="picture" alt="Baseline picture of the room"></div>
+    <ul id="list"></ul>
+  </section>
+  <section>
+    <h2>2. Where is the wearer?</h2>
+    <div class="row">
+      <label class="file">Upload what they see<input id="shot" type="file" accept="image/*,video/*"></label>
+      <span id="busy" class="dim"></span>
+    </div>
+    <div id="headline"></div>
+    <div id="detail" class="dim"></div>
+    <canvas id="plan" width="720" height="720"></canvas>
+    <div id="numbers" class="dim"></div>
+    <div id="view"></div>
+  </section>
+</div>
+
+<script>
+const key = new URLSearchParams(location.search).get('k') || '';
+const $ = id => document.getElementById(id);
+const withKey = path => path + (path.includes('?') ? '&' : '?') + 'k=' + encodeURIComponent(key);
+let zone = '', places = [], frames = 0;
+
+async function ask(path, options) {
+  const reply = await fetch(withKey(path), options);
+  return { ok: reply.ok, body: await reply.json() };
+}
+
+function showPicture() {
+  const n = +$('frame').value;
+  $('picture').src = withKey(`/baseline/${zone}/${n}.jpg`);
+  $('count').textContent = frames ? `picture ${n + 1} of ${frames}` : 'no baseline yet';
+  document.querySelectorAll('.pin').forEach(p => p.remove());
+  for (const p of places.filter(p => p.frame === n)) {
+    const pin = document.createElement('div');
+    pin.className = 'pin'; pin.style.left = p.u * 100 + '%'; pin.style.top = p.v * 100 + '%';
+    const label = document.createElement('span'); label.textContent = p.name; pin.append(label);
+    $('stage').append(pin);
+  }
+}
+
+function showList() {
+  $('list').innerHTML = '';
+  for (const p of places) {
+    const row = document.createElement('li');
+    const name = document.createElement('a'); name.href = '#'; name.textContent = `${p.name} (picture ${p.frame + 1})`;
+    name.onclick = e => { e.preventDefault(); $('frame').value = p.frame; showPicture(); };
+    const remove = document.createElement('button'); remove.textContent = 'Remove';
+    remove.onclick = async () => { await ask(`/waypoint?zone=${zone}&name=${encodeURIComponent(p.name)}&delete=1`, { method: 'POST' }); loadPlaces(); };
+    row.append(name, remove); $('list').append(row);
+  }
+  if (!places.length) $('list').innerHTML = '<li class="dim">No places named in this room yet.</li>';
+}
+
+async function loadPlaces() {
+  const { ok, body } = await ask(`/waypoints?zone=${zone}`);
+  places = ok ? body.waypoints : []; frames = ok ? body.frames : 0;
+  $('frame').max = Math.max(0, frames - 1);
+  if (+$('frame').value >= frames) $('frame').value = 0;
+  showPicture(); showList();
+}
+
+$('stage').onclick = async e => {
+  if (!frames || e.target.closest('.pin')) return;
+  const box = $('picture').getBoundingClientRect();
+  const u = (e.clientX - box.left) / box.width, v = (e.clientY - box.top) / box.height;
+  const name = (prompt('Name of this place (for example: pill box, bathroom door)') || '').trim();
+  if (!name) return;
+  const { ok, body } = await ask(`/waypoint?zone=${zone}&name=${encodeURIComponent(name)}&frame=${$('frame').value}&u=${u.toFixed(4)}&v=${v.toFixed(4)}`, { method: 'POST' });
+  if (!ok) alert(body.error || 'That did not work.');
+  loadPlaces();
+};
+$('frame').oninput = showPicture;
+$('zone').onchange = e => { zone = e.target.value; links(); loadPlaces(); latest(); };
+
+function links() {
+  $('hud').href = withKey(`/hud?zone=${zone}`);
+  $('dash').href = withKey('/dashboard');
+}
+
+// ---------------------------------------------------------------- position
+function plan(fix) {
+  const c = $('plan').getContext('2d'), size = 720;
+  c.clearRect(0, 0, size, size);
+  const all = [...fix.map.points, ...fix.waypoints.map(w => w.position), fix.position];
+  const xs = all.map(p => p[0]), ys = all.map(p => p[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const scale = (size - 80) / Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1);
+  const at = p => [size / 2 + (p[0] - cx) * scale, size / 2 - (p[1] - cy) * scale];  // north up
+  c.fillStyle = '#2f7d55';
+  for (const p of fix.map.points) { const [x, y] = at(p); c.fillRect(x, y, 3, 3); }
+  c.fillStyle = '#39424d';
+  for (const p of fix.map.cameras) { const [x, y] = at(p); c.fillRect(x - 2, y - 2, 4, 4); }
+  c.font = '22px system-ui'; c.textBaseline = 'middle';
+  for (const w of fix.waypoints) {
+    const [x, y] = at(w.position);
+    c.fillStyle = '#ffd23f'; c.beginPath(); c.arc(x, y, 9, 0, 7); c.fill();
+    c.fillText(`${w.name}  ${w.distance_m} m`, x + 14, y);
+  }
+  const [x, y] = at(fix.position), a = fix.heading_deg * Math.PI / 180;
+  c.strokeStyle = c.fillStyle = fix.state === 'lost' ? '#f0b429' : '#4aa3ff'; c.lineWidth = 5;
+  c.beginPath(); c.moveTo(x, y); c.lineTo(x + Math.sin(a) * 60, y - Math.cos(a) * 60); c.stroke();
+  c.beginPath(); c.arc(x, y, 12, 0, 7); c.fill();
+  c.strokeStyle = '#55606c'; c.lineWidth = 2; c.beginPath(); c.moveTo(30, size - 30); c.lineTo(30 + scale, size - 30); c.stroke();
+  c.fillStyle = '#9aa1ab'; c.fillText('1 m', 30, size - 50);
+}
+
+function show(fix) {
+  $('headline').textContent = fix.headline;
+  $('detail').textContent = fix.detail;
+  plan(fix);
+  const s = fix.seconds || {};
+  $('numbers').textContent = `match with the map ${Math.round(fix.confidence * 100)}% (${fix.state}) · facing ${fix.heading_deg}° · ` +
+    `${s.total ?? '?'} s in total, ${s.reconstruct ?? '?'} s in the model · ${fix.device || ''}`;
+  $('view').innerHTML = '';
+  if (fix.images && fix.images.view) { const img = new Image(); img.src = withKey(fix.images.view); img.style.cssText = 'width:100%;border-radius:8px;margin-top:8px'; $('view').append(img); }
+  if (fix.splat) {
+    const frame = document.createElement('iframe');
+    frame.src = withKey(`/viewer?src=${encodeURIComponent(withKey(fix.splat))}&d=${fix.median_depth || 1}`);
+    frame.title = 'The room in 3D: the wearer is blue, places are yellow';
+    $('view').append(frame);
+  }
+}
+
+async function latest() {
+  const { ok, body } = await ask(`/where?zone=${zone}`);
+  if (ok) show(body); else { $('headline').textContent = ''; $('detail').textContent = 'No position fix for this room yet.'; }
+}
+
+$('shot').onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  e.target.value = '';
+  $('busy').textContent = 'Working…';
+  try {
+    const { ok, body } = await ask(`/locate?zone=${zone}&view=1`, { method: 'POST', body: file });
+    $('busy').textContent = '';
+    if (ok) show(body); else { $('headline').textContent = 'That did not work'; $('detail').textContent = body.error || ''; }
+  } catch { $('busy').textContent = 'Cannot reach the relay.'; }
+};
+
+(async () => {
+  try {
+    const { body } = await ask('/status');
+    const names = body.zones || [];
+    zone = new URLSearchParams(location.search).get('zone') || names[0] || '';
+    $('zone').innerHTML = names.map(n => `<option${n === zone ? ' selected' : ''}>${n}</option>`).join('');
+    links();
+    if (zone) { loadPlaces(); latest(); }
+  } catch { $('detail').textContent = 'Cannot reach the relay.'; }
+})();
+</script>
+</body>
+</html>
