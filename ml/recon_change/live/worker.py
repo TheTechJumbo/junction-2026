@@ -244,7 +244,7 @@ def where(model, job, req):
     out.mkdir(exist_ok=True)
     cv2.imwrite(str(out / "view.jpg"), new[-1], [cv2.IMWRITE_JPEG_QUALITY, 88])
     seconds["locate"] = round(time.time() - t0, 2)
-    result.update({"items": [], "items_looked_for": ITEMS, "items_checked": []})
+    result.update({"items": [], "items_looked_for": ITEMS, "items_checked": [], "items_candidates": []})
     if ITEMS:  # lost items: found in the newest picture, placed with this fix's depth (items.py)
         t0 = time.time()
         try:
@@ -256,7 +256,7 @@ def where(model, job, req):
             result.update(found)
             marks += item_marks
         except Exception as error:  # the position fix must still go out; nothing was looked for, so the list is empty
-            result.update({"items": [], "items_checked": [], "items_looked_for": [],
+            result.update({"items": [], "items_checked": [], "items_candidates": [], "items_looked_for": [],
                            "items_note": f"Items were not looked for: {type(error).__name__}: {error}"[:300]})
             print(f"{job.name} items FAILED: {traceback.format_exc()}", flush=True)
         seconds["items"] = round(time.time() - t0, 2)

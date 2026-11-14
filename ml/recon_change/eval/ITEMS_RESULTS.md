@@ -275,3 +275,308 @@ cd items && sbatch code/eval/items_eval.slurm                       # boxes for 
 python code/eval/items_eval.py score --set data/lvis/set.json --img data/lvis/img --out out/eval --tiles 1 --limit 0.5
 sbatch code/eval/items_fullpath_gpu.slurm ; sbatch code/eval/items_fullpath_cpu.slurm
 ```
+
+# Finding more (second round, Sat 14 Nov, branch `jun-26-items-recall`, PR 25)
+
+The first round's finder says nothing rather than guess, and misses most things: 97 of 303
+labelled objects found, keys 7 of 56. But the detector does see most of them and scores them
+low. This round tries to accept those weak boxes safely. Code: `items.py` (everything new is off
+unless set), `eval/items_recall.py` (every rule scored from saved boxes, no GPU),
+`eval/items_second_look.py`, `eval/items_enrol.py`, `eval/items_enrol_real.py`.
+
+## In short
+
+| | found, over 64 px | keys over 64 px | found, all sizes | right answers | wrong answers | false on item-free photos |
+|---|---|---|---|---|---|---|
+| words only, limit 0.5 (deployed) | 68 of 148 (46 %) | 4 of 25 (16 %) | 97 of 303 | 77 | 1 | 0 of 162 |
+| best single-frame rule: a limit per item, and a second opinion (CLIP) on weak boxes | 107 of 148 (72 %) | 14 of 25 (56 %) | 201 of 303 | 137 | 3 | 0 of 162 |
+| show it once (enrolled picture as the question) | measured on other pictures (pasted things, see "Show it once"): the own thing found in 3 of 80 pictures, against 14 of 80 for the words at limit 0.3. **No gain** | | | | | |
+| evidence over several looks | not measurable from single photos: see "Adding up looks" for what the saved boxes say | | | | | |
+
+Held-out half of the test photos, and the half of the 324 item-free photos that no setting was
+chosen on. The target was 70 % of all items over 64 px, 60 % of keys over 64 px, and at most 1
+false answer per 100 item-free photos. **All items: met (72 %). False answers: met (0 of 162).
+Keys: not met, 56 %, one object short of 60 % on 25 keys.** A stricter variant that also asks the
+zoomed detector reaches 64 % for keys and 74 % overall with 2 false answers in 162 photos, which
+is over the limit. With 25 keys neither difference means much.
+
+## What was tried, one step at a time
+
+Every setting was chosen on the tuning half (test photos with an even id, plus every second
+item-free photo) and is reported on the other half. A setting may make at most one error per item
+on the tuning half, and a margin of 0.025 is added to every limit found. "Wrong" is an answer on
+a test photo that is not on the item; "false" is an answer on an item-free photo.
+
+| rule | found under 32 px | found 32 to 64 px | found over 64 px | keys over 64 px | right answers | wrong answers | false on item-free photos |
+|---|---|---|---|---|---|---|---|
+| today: limit 0.5 for all | 5 of 65 (8 %) | 24 of 90 (27 %) | 68 of 148 (46 %) | 4 of 25 (16 %) | 77 | 1 | 0 of 162 |
+| 1. a limit per item | 32 of 65 (49 %) | 57 of 90 (63 %) | 95 of 148 (64 %) | 9 of 25 (36 %) | 128 | 3 | 0 of 162 |
+| 2. + second look with the same detector on a zoomed crop | 34 of 65 (52 %) | 61 of 90 (68 %) | 105 of 148 (71 %) | 16 of 25 (64 %) | 134 | 5 | 3 of 162 |
+| 3. + second opinion from CLIP instead **(recommended)** | 33 of 65 (51 %) | 61 of 90 (68 %) | 107 of 148 (72 %) | 14 of 25 (56 %) | 137 | 3 | 0 of 162 |
+| 4. + both must agree | 34 of 65 (52 %) | 62 of 90 (69 %) | 110 of 148 (74 %) | 16 of 25 (64 %) | 141 | 4 | 2 of 162 |
+| second look that asks in more words | 35 of 65 (54 %) | 61 of 90 (68 %) | 104 of 148 (70 %) | 15 of 25 (60 %) | 134 | 5 | 4 of 162 |
+
+1. **A limit per item** is most of the gain and costs nothing: keys 0.425, glasses 0.225, wallet
+   0.275, phone 0.4, remote control 0.5. The single limit of 0.5 was set by the remote, which is
+   the item that gets confused with other things; glasses and phones are almost never wrong.
+2. **A second look with the same detector**: a box from 0.25 up to its item's limit is cropped
+   (4 box sides wide), blown up to the detector's input and asked again. It finds more keys but
+   lets false answers in (3 in 162 photos): the detector agrees with itself too easily.
+3. **A second opinion from another model**: CLIP (`openai/clip-vit-large-patch14`, MIT) looks at
+   two crops around the weak box and says how much of its belief goes to the item rather than to
+   37 look-alikes and bits of scenery ("a tube", "a whiteboard eraser", "a computer keyboard"
+   ...). The box is accepted when that share is at least keys 0.7, glasses 0.1, wallet 0.1, phone
+   0.35, remote control 0.5. This is the recommended rule: more finds than rule 2 and no false
+   answer on the held-out item-free photos.
+4. **Both** finds a little more and lets 2 false answers in.
+
+With no error at all allowed on the tuning half the same steps give 60 % (limits alone) and 65 %
+(with second looks) of objects over 64 px, 2 wrong answers and 0 or 1 false.
+
+Per item, held-out half, recommended rule:
+
+| item | found, under 32 px | found, 32 to 64 px | found, over 64 px | right answers | wrong: item not there | wrong: on something else | false on item-free photos |
+|---|---|---|---|---|---|---|---|
+| keys | 2 of 14 (14 %) | 9 of 17 (53 %) | 14 of 25 (56 %) | 12 | 0 of 33 | 1 | 0 of 162 |
+| glasses | 18 of 22 (82 %) | 22 of 25 (88 %) | 20 of 24 (83 %) | 39 | 1 of 28 | 0 | 0 of 162 |
+| wallet | 0 of 0 | 1 of 1 | 11 of 19 (58 %) | 11 | 0 of 28 | 1 | 0 of 162 |
+| phone | 12 of 16 (75 %) | 14 of 18 (78 %) | 28 of 33 (85 %) | 42 | 0 of 20 | 0 | 0 of 162 |
+| remote control | 1 of 13 (8 %) | 15 of 29 (52 %) | 34 of 47 (72 %) | 33 | 0 of 31 | 0 | 0 of 162 |
+| **all** | 33 of 65 (51 %) | 61 of 90 (68 %) | 107 of 148 (72 %) | 137 | 1 of 140 | 2 | 0 of 162 |
+
+**More ways to say it did not help.** Asking for keys as "keys, a key, a bunch of keys, a key
+ring, car keys, a house key, a keychain" (and likewise for the others) over whole pictures needs
+higher limits to stay clean and ends no better: 91 of 148 over 64 px and 5 of 25 keys with limits
+per item, against 95 and 9 for the shipped phrases.
+
+**Not run: a bigger detector.** `google/owlv2-large-patch14-ensemble` and Grounding DINO are
+downloaded (`items/hf`) and `eval/items_second_look.py detect --model ...` saves their boxes in
+the same form, but the GPU was shared with the live worker and three other jobs and there was no
+slot for the 15 to 20 minutes it needs. It is the next thing to try for keys.
+
+## Is the test fair for our case?
+
+Partly, and not in the direction hoped. In the demo an item lies on a table 1 to 2 m from a 1280
+pixel camera.
+
+- **Lying, not held.** The COCO labels box every person, so the labelled objects can be split
+  into those inside a person's box (held, worn, in a pocket) and the rest. Objects over 64 px
+  that nobody holds, both halves: 181 objects in 84 photos (keys 45 in 18 photos, glasses 5 in 5,
+  wallet 23 in 18, phone 42 in 24, remote 66 in 35). Found: 79 of 181 (44 %) today, 129 of 181
+  (71 %) with the recommended rule (keys 28 of 45, wallet 15 of 23, phone 32 of 42, remote 53 of
+  66, glasses 1 of 5). In photos with nobody in them at all: 59 photos, 145 objects, 59 found
+  today (41 %), 98 (68 %) with the rule. So lying items are **not** easier than held ones on
+  these photos. These counts mix the tuning half in, because the held-out half alone is too small.
+- **What these photos look like.** I looked at half of them (42). Most are ordinary desks,
+  tables, sofas and TV stands with a phone, a remote or a wallet lying on them, which is close to
+  our case, and things are missed there as often as elsewhere. About one in five is cluttered on
+  purpose: everything from a bag laid out, or a pile of phones or remotes. "Uncluttered" cannot
+  be picked out from the labels, so there is no number for a tidy table alone.
+- **Size is the real gap.** Keys are about 8 cm. At 1 to 2 m from a 1280 px camera with a 70
+  degree view they are 27 to 55 px long in the detector's whole-picture pass. "Over 64 px" is
+  keys closer than 0.9 m. For the demo distance the columns to read are the two smaller ones:
+  keys 2 of 14 under 32 px and 9 of 17 at 32 to 64 px with the recommended rule. A phone at 2 m
+  is about 50 px, a remote about 60.
+- The detector was partly trained on LVIS training photos (other photos, same label names),
+  which flatters all of these numbers.
+
+## Show it once (enrolment)
+
+**Result first: in the one test that could be built, showing the thing once did not help.** The
+route is wired in and switchable, and a real clip may tell a different story, but nothing
+measured here supports turning it on.
+
+**What is built.** A folder `<project root>/enrolled/<item name>/NN.jpg` (or `RECON_ITEMS_ENROLLED`)
+is read at the next fix whenever a file in it changes. Each picture becomes one more question to
+the detector, next to the words: the detector finds the item's box in the picture (with the
+words; if they find nothing, the box that fills the picture) and remembers what that box looks
+like. In every fix each proposed box is compared with it (cosine similarity of the detector's own
+description of the two boxes: OWLv2's image-guided detection, but scored by similarity, because
+on the words' scale every box scores 1). A box at `RECON_ITEMS_ENROLLED_SCORE` (0.75) or more is
+accepted. Results carry `"matched"`: `"enrolled"` when an enrolled picture matched the box (with
+or without the words), `"text"` otherwise. A box only the picture found ranks below any box the
+words accepted and states a confidence of 10 %. An enrolled name that is not in `RECON_ITEMS` is
+looked for as well. It costs one pass per enrolled picture when the folder changes and no extra
+pass per fix. No folder: nothing changes.
+
+**The test** (`eval/items_enrol.py`) is synthetic: 40 "own things" (8 per kind) are labelled items
+cut out along their LVIS outline (at least 64 px long in their photo). Each is enrolled from a
+crop of the photo it comes from and pasted, 40 to 120 px long, turned any way, brighter or
+darker, a little blurred, into 4 indoor item-free photos, each time next to two other things of
+its kind (somebody else's keys). The same photos with only the two others are the "not there"
+pictures; the 162 item-free photos (every second one) are searched for every thing as well. It
+is kind in one way (the very pixels it was enrolled from, never another side of the thing) and
+harsh in another: a small, turned, pasted cut-out is hard for every method, the words included.
+
+Held-out half of the own things (20 things): 80 pictures with the thing, 80 without, 3240
+thing-and-photo pairs on item-free photos. Limits chosen on the other 20 things, to keep false
+answers on item-free photos and answers on nothing at 1 in 100.
+
+| method | own thing found | of which keys | answer on somebody else's | answer elsewhere | answers when it is not there | false on item-free photos |
+|---|---|---|---|---|---|---|
+| words only, limit 0.5 (deployed) | 3 of 80 (4 %) | 0 of 16 | 10 | 0 | 10 of 80 | (round one: 0 of 324) |
+| words only, limit 0.3 | 14 of 80 (18 %) | 4 of 16 | 12 | 1 | 18 of 80 | |
+| shown once (1 picture), similarity 0.675 | 2 of 80 (2 %) | 1 of 16 | 1 | 2 | 3 of 80 | 20 of 3240 |
+| shown once, plus the picture turned 3 ways, 0.7 | 3 of 80 (4 %) | 1 of 16 | 1 | 2 | 3 of 80 | 26 of 3240 |
+| shown, and the words give that box 0.1, similarity 0.625 | 7 of 80 (9 %) | 3 of 16 | 3 | 2 | 5 of 80 | 56 of 3240 |
+| text candidate from 0.2 that CLIP finds like the enrolled crop (0.75) | 3 of 80 (4 %) | 3 of 16 | 1 | 2 | 4 of 80 | not run |
+| text candidate from 0.2 that DINOv2 finds like the enrolled crop (0.225) | 11 of 80 (14 %) | 5 of 16 | 8 | 2 | 12 of 80 | not run |
+
+The enrolled picture at other limits (held-out things): at similarity 0.5 it finds 19 of 80 and
+answers on 1576 of 3240 item-free pairs; at 0.6, 11 of 80 and 404; at 0.7, 3 of 80 and 26; at
+0.8 nothing at all.
+
+What this says:
+
+- **The detector's own description of a box does not single out one thing.** Most boxes look
+  somewhat like any picture, so the similarity has to be 0.7 or more to keep item-free photos
+  quiet, and at that level the own thing is almost never matched.
+- **Nothing here tells my keys from somebody else's.** The words answer on the other person's
+  thing as often as on the own one, and so does matching with DINOv2 (11 found, 8 on the other
+  one). CLIP as an instance matcher finds next to nothing.
+- **The words at a lower limit beat every enrolment variant** on these pictures (14 of 80).
+- The test's own weakness: even the words find only 4 % of the pasted things at 0.5, against 46 %
+  of real objects over 64 px. Pasted, turned, resized cut-outs are not how a thing looks on a
+  table, so a low number here is not proof that enrolment fails at home. It is only no evidence
+  that it works.
+
+Not tried: the large detector's description of a box (it may be more particular), DINOv2 on
+boxes the words did not propose, several real views of one thing instead of one crop.
+
+**A real check needs a real clip.** `eval/items_enrol_real.py --clip keys.mp4 --item keys --out
+<folder>` enrols from the first sighting (or `--enrol pictures`, or `--box`) and counts answers
+in the later frames three ways (words today, words with the settings in force, the enrolled
+picture), with a sheet of every answer for a person to check and `--absent` for a clip without
+the thing. It was tried on four test pictures, not on a real clip. No multi-view object set
+(CO3D or similar) was fetched: there was no time to look for a slice small enough to fetch in
+minutes.
+
+## Adding up looks (`items_candidates`)
+
+With `RECON_ITEMS_CANDIDATES=0.25` a fix also lists every box from 0.25 up that could be placed,
+accepted or not: name, score, `confidence_pct`, position, box, `matched`. From the saved boxes,
+what adding up such weak sightings over several looks could buy, and what it cannot fix:
+
+How strongly a present item scores (best box on each labelled object, both halves):
+
+| item | size | objects | 0.5 and up (accepted today) | 0.25 to 0.5 (a candidate) | below 0.25 (not seen) |
+|---|---|---|---|---|---|
+| keys | under 32 px | 25 | 1 (4 %) | 9 (36 %) | 15 (60 %) |
+| keys | 32 to 64 px | 29 | 5 (17 %) | 15 (52 %) | 9 (31 %) |
+| keys | over 64 px | 50 | 13 (26 %) | 27 (54 %) | 10 (20 %) |
+| glasses | under 32 px | 39 | 1 (3 %) | 19 (49 %) | 19 (49 %) |
+| glasses | 32 to 64 px | 49 | 5 (10 %) | 33 (67 %) | 11 (22 %) |
+| glasses | over 64 px | 55 | 21 (38 %) | 29 (53 %) | 5 (9 %) |
+| wallet | 32 to 64 px | 3 | 0 | 1 | 2 |
+| wallet | over 64 px | 26 | 10 (38 %) | 8 (31 %) | 8 (31 %) |
+| phone | under 32 px | 27 | 3 (11 %) | 17 (63 %) | 7 (26 %) |
+| phone | 32 to 64 px | 30 | 8 (27 %) | 18 (60 %) | 4 (13 %) |
+| phone | over 64 px | 78 | 30 (38 %) | 42 (54 %) | 6 (8 %) |
+| remote control | under 32 px | 26 | 5 (19 %) | 15 (58 %) | 6 (23 %) |
+| remote control | 32 to 64 px | 60 | 33 (55 %) | 19 (32 %) | 8 (13 %) |
+| remote control | over 64 px | 85 | 59 (69 %) | 18 (21 %) | 8 (9 %) |
+
+So about half of the present items are candidates that a vote could confirm: that is the room
+there is. But a look-alike is as steady as the real thing. In the item-free rooms, photos (of 30
+per room, 24 for the kitchen) with a false candidate from 0.25 up:
+
+| photos of | photos | 'keys' | 'glasses' | 'wallet' | 'phone' | 'remote control' | any |
+|---|---|---|---|---|---|---|---|
+| Cantina | 30 | 1 | 0 | 0 | 0 | 0 | 1 |
+| Lounge | 30 | 0 | 1 | 0 | 0 | 11 | 11 |
+| Lunch room | 30 | 0 | 0 | 0 | 0 | 11 | 11 |
+| Meeting room | 30 | 4 | 0 | 3 | 4 | 9 | 15 |
+| Printing area | 30 | 3 | 0 | 0 | 1 | 1 | 5 |
+| kitchen baseline | 24 | 0 | 0 | 0 | 0 | 1 | 1 |
+| five outdoor scenes | 150 | 0 | 0 | 0 | 0 | 1 | 1 |
+
+In three of the five indoor rooms a false "remote control" comes back in about a third of the
+views. On the contact sheet of the detections from 0.3 up these are a few things seen again and
+again (a white tube on the lunch-room table, an eraser on the lounge floor, the edge of the
+meeting-room TV). I did not tie the boxes together in 3D, so "same spot" is by eye, not by
+measurement. **Voting over looks will
+confirm these, not remove them.** What separates them from real items is the second opinion
+(above) or a picture of the wearer's own thing, not more looks. A vote should therefore count
+only candidates that the second opinion did not reject, or weigh by `confidence_pct`.
+
+## Confidence that means what it says (`confidence_pct`)
+
+Every entry of `items` and `items_candidates` carries `confidence_pct`: of the answers with the
+same kind of evidence on the tuning half, the share that were right. The evidence is the item,
+the band its score is in (0.25, 0.35, 0.5, 0.6 and up) and, for a weak box the judge was asked
+about, whether the judge agreed. An item with few answers in a band is pulled towards the share
+of all items in that band (as if 4 more answers at that rate had been seen). `score` is unchanged.
+
+Stated against measured, held-out half (answers = best box per item and photo from 0.25 up, on
+test photos where the truth is known and on item-free photos):
+
+| stated confidence | answers | right | measured |
+|---|---|---|---|
+| 0 to 20 % | 13 | 3 | 23 % |
+| 20 to 40 % | 18 | 3 | 17 % |
+| 40 to 60 % | 7 | 6 | 86 % |
+| 60 to 80 % | 4 | 4 | 100 % |
+| 80 to 100 % | 127 | 125 | 98 % |
+
+The top and the bottom hold. The middle is thin (11 answers) and came out better than stated.
+Where the table behind it is thin: keys have 5 to 10 answers per band on the tuning half, wallets
+0 or 1 (their numbers are mostly the all-items rate), and nothing above 0.6 for keys. The full
+table is printed by `python eval/items_recall.py ... --confidence`. Two cautions: the share is
+measured on test photos where the item is present in about half of the photos that count, so at
+home, where it mostly is not in view, a weak box will be right less often than stated; and a box
+that only an enrolled picture matched states a flat 10 % (3 of 35 such answers were right in the
+synthetic test below), while a box the words found keeps the words' confidence.
+
+## Settings to switch it on
+
+Nothing changes until these are set (all are read at worker start):
+
+```
+RECON_ITEMS_LIMITS="keys=0.425,glasses=0.225,wallet=0.275,phone=0.4"     # a limit per item (remote control keeps 0.5)
+RECON_ITEMS_LOOK_FROM=0.25                                               # weak boxes from here get a second opinion
+RECON_ITEMS_JUDGE=openai/clip-vit-large-patch14                          # who gives it (weights: items/hf, 1.6 GB)
+RECON_ITEMS_JUDGE_LIMITS="keys=0.7,glasses=0.1,wallet=0.1,phone=0.35,remote control=0.5"
+RECON_ITEMS_CANDIDATES=0.25                                              # list weak boxes too, as items_candidates
+```
+
+Others: `RECON_ITEMS_LOOK_LIMITS` (the zoomed second look, rule 2: `keys=0.225,glasses=0.225,
+wallet=0.225,phone=0.525,remote control=0.6`), `RECON_ITEMS_LOOK_MAX` (6 second looks per
+picture), `RECON_ITEMS_ENROLLED` (folder, default `<project root>/enrolled`),
+`RECON_ITEMS_ENROLLED_SCORE`. No new package: CLIP is in the `transformers` already in
+`items/pkgs`. Weights are in `items/hf` (`iridis/setup_items_more.sh` fetches them elsewhere).
+
+Seconds added per fix:
+
+| | L4 GPU | 32 CPU cores |
+|---|---|---|
+| a limit per item | nothing | nothing |
+| one second opinion (CLIP, two crops of one weak box) | 0.041 s | not measured on its own |
+| one zoomed second look (rules 2 and 4) | 0.246 s | about 1.4 s (one detector pass, from round one) |
+| loading CLIP at worker start | 4 s | 4 s |
+| a whole fix, recommended settings, one weak box in view | 3.18 s (items 0.84 s) | 37.7 s (items 7.3 s) |
+| the same fix without items | 2.33 s | 30.2 s |
+
+Per-candidate times are from the second-look job (1031 candidates). The whole fix is
+`worker.where()` on the kitchen baseline with a pasted remote that the words score 0.28: the
+second opinion accepted it and it was placed 3 cm (GPU) and 1 cm (CPU) from the named place at
+the same spot. Against round one that is 0.04 s more on the GPU. On the CPU node the item step
+took 7.3 s where round one measured 5.0 s; that node was also slower on the position fix itself
+(30 s against 26 s), so how much of the 2.3 s is the second opinion is not known.
+
+How many second opinions a picture needs under the recommended limits: 0.55 on average on the
+test photos (none in 69 % of them, 2 at the 90th percentile, at most 6) and 0.19 on item-free
+photos (none in 86 %).
+
+## Not tested in this round
+
+- **A worker started through the queue with these settings**, and the relay with the new result
+  fields. The whole fix ran through `worker.where()` from a test script on both node types.
+- **Anything real**: a real room, real items, the glasses, a real clip of an enrolled thing.
+- **A bigger detector** and Grounding DINO.
+- **Whether the repeated false candidates are at the same spot in 3D.**
+- **The second opinion's own cost on the CPU worker.**
+- The last change to how a picture match and a word match of one thing are merged into one
+  entry ran in the offline checks only, after the whole-fix runs.
+- The selection rule is looser than round one's (one error per item allowed on the tuning half).
+  And the held-out item-free photos are other views of the same eleven places the limits were
+  chosen on, not new rooms: "0 of 162" is weaker evidence than it looks.
