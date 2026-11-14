@@ -240,6 +240,18 @@ def tables(rows, meta):
     for n in sizes:
         s, w = [r["match"] for r in pick(rows, "same", n)], [r["match"] for r in pick(rows, "wrong", n)]
         L.append(f"| {n} | {num(s, 'min')} | {num(s, 'p10')} | {num(s, 'median')} | {num(w, 'median')} | {num(w, 'p90')} | {num(w, 'max')} |")
+    if any(r.get("looks_alike") is not None for r in rows):
+        L += ["", "### 6. Appearance check", "",
+              "Match by depth is the score without the appearance check. Looks alike is, of the query's pixels that match by depth, "
+              "the share that also look alike.", "",
+              "| Baseline photos | Queries | Number | Match by depth min | median | max | Looks alike min | median | max | Match min | median | max |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+        for n in sizes:
+            for kind, label in (("same", "Same room"), ("same_other_light", "Same room, other lighting"), ("wrong", "Wrong room")):
+                got = pick(rows, kind, n)
+                if got:
+                    cells = [num([r.get(key) for r in got], how) for key in ("match_by_depth", "looks_alike", "match") for how in ("min", "median", "max")]
+                    L.append(f"| {n} | {label} | {len(got)} | " + " | ".join(cells) + " |")
     return "\n".join(L) + "\n"
 
 
@@ -417,8 +429,7 @@ def main():
                 row["locate_s"] = round(time.time() - t0, 2)
                 row.update(state=result["state"], match=result["confidence"], position=result["position"],
                            heading_deg=result["heading_deg"], metres_per_unit=result["metres_per_unit"],
-                           looks_alike=result.get("looks_alike"), match_by_depth=result.get("match_by_depth"),
-                           look_limit=result.get("look_limit"))
+                           looks_alike=result.get("looks_alike"), match_by_depth=result.get("match_by_depth"))
                 if kind != "wrong":
                     row["pose"] = pose_check(locate.camera, recon.E, [p.name for p in base + [query]], s["truth"], s["size"],
                                              result["metres_per_unit"])

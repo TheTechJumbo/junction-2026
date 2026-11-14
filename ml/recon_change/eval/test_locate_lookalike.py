@@ -79,8 +79,7 @@ def main():
     plain = locate.locate(recon(None), base, new)[0]
     off = locate.locate(recon(elsewhere), base, new, look=False)[0]
     for name, r in (("same room", same), ("wrong room", wrong), ("no features", plain), ("check switched off", off)):
-        print(f"{name:>18}: {r['state']:6} match {r['confidence']:.2f} | by depth {r['match_by_depth']:.2f} | "
-              f"looks alike {r['looks_alike']} | limit {r['look_limit']}")
+        print(f"{name:>18}: {r['state']:6} match {r['confidence']:.2f} | by depth {r['match_by_depth']:.2f} | looks alike {r['looks_alike']}")
 
     failed = []
 
@@ -92,7 +91,7 @@ def main():
     check(same["state"] == "found" and same["confidence"] >= 0.9 and same["looks_alike"] >= 0.9, "same room is found and looks alike")
     check(wrong["match_by_depth"] >= 0.9, "wrong room: depth alone would accept it")
     check(wrong["state"] == "lost" and wrong["confidence"] < 0.1 and wrong["looks_alike"] < 0.1, "wrong room is lost once appearance counts")
-    check(plain["looks_alike"] is None and plain["look_limit"] is None and plain["confidence"] == plain["match_by_depth"],
+    check(plain["looks_alike"] is None and plain["confidence"] == plain["match_by_depth"],
           "without features the score is the depth-only one")
     check(plain["confidence"] == wrong["match_by_depth"] == off["confidence"], "and equals what the appearance check reports as match_by_depth")
     check(all(r["position"] == same["position"] and r["heading_deg"] == same["heading_deg"] and r["map"] == same["map"]
