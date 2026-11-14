@@ -1,0 +1,735 @@
+{
+  "reports": {
+    "jun31-baseline-original-20261114-1": {
+      "load_seconds": 14.330393066999989,
+      "inference": "completed",
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 258.239555787,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "peak_rss_kib": 2422032,
+      "cgroup_peak_bytes": 479191040
+    },
+    "jun31-screen-1": {
+      "load_seconds": 13.91545713000005,
+      "inference": "completed",
+      "threads": 1,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 535.103444223,
+      "preprocess_seconds": 0.06309510400001273,
+      "forward_seconds": 534.8686300039999,
+      "postprocess_seconds": 0.00830578099999002,
+      "write_seconds": 0.16284234399995512,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2424856,
+      "cgroup_peak_bytes": 468447232,
+      "supervisor_wall_seconds": 559.580195985
+    },
+    "jun31-screen-2": {
+      "load_seconds": 14.847327285999995,
+      "inference": "completed",
+      "threads": 2,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 262.085043754,
+      "preprocess_seconds": 0.06572948000007273,
+      "forward_seconds": 261.848135264,
+      "postprocess_seconds": 0.007822708999924544,
+      "write_seconds": 0.16276635400004125,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2421260,
+      "cgroup_peak_bytes": 466141184,
+      "supervisor_wall_seconds": 287.6018666089999
+    },
+    "jun31-screen-4": {
+      "load_seconds": 14.721365515000116,
+      "inference": "completed",
+      "threads": 4,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 133.2182974499999,
+      "preprocess_seconds": 0.06548317700003281,
+      "forward_seconds": 132.98226567799998,
+      "postprocess_seconds": 0.008286197999950673,
+      "write_seconds": 0.1617191670000011,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2418296,
+      "cgroup_peak_bytes": 468312064,
+      "supervisor_wall_seconds": 158.55159254299997
+    },
+    "jun31-confirm-b1": {
+      "load_seconds": 14.76067832800004,
+      "inference": "completed",
+      "threads": 2,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 265.85029672099995,
+      "preprocess_seconds": 0.06621927100013636,
+      "forward_seconds": 265.61200484699975,
+      "postprocess_seconds": 0.008177812000212725,
+      "write_seconds": 0.1633901559998776,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2421696,
+      "cgroup_peak_bytes": 469557248,
+      "supervisor_wall_seconds": 291.2628285349999
+    },
+    "jun31-confirm-c1": {
+      "load_seconds": 12.81028119299981,
+      "inference": "completed",
+      "threads": 4,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 134.08028604300034,
+      "preprocess_seconds": 0.05772776100002375,
+      "forward_seconds": 133.85160375099986,
+      "postprocess_seconds": 0.008388333000311832,
+      "write_seconds": 0.16212812499998108,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2418368,
+      "cgroup_peak_bytes": 467222528,
+      "supervisor_wall_seconds": 156.9980671799999
+    },
+    "jun31-confirm-b2": {
+      "load_seconds": 14.804578379000304,
+      "inference": "completed",
+      "threads": 2,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 264.1078863059997,
+      "preprocess_seconds": 0.06359338499987643,
+      "forward_seconds": 263.87350422200007,
+      "postprocess_seconds": 0.007748855000045296,
+      "write_seconds": 0.16232525999976133,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2421668,
+      "cgroup_peak_bytes": 469045248,
+      "supervisor_wall_seconds": 289.6136917640001
+    },
+    "jun31-confirm-c2": {
+      "load_seconds": 14.132029265000256,
+      "inference": "completed",
+      "threads": 4,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 136.4078368749997,
+      "preprocess_seconds": 0.0670334900000853,
+      "forward_seconds": 136.16949692699973,
+      "postprocess_seconds": 0.008141042000261223,
+      "write_seconds": 0.16263796799967167,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2417948,
+      "cgroup_peak_bytes": 460812288,
+      "supervisor_wall_seconds": 161.1732806150003
+    },
+    "jun31-confirm-b3": {
+      "load_seconds": 14.151584213000206,
+      "inference": "completed",
+      "threads": 2,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 260.4594178699999,
+      "preprocess_seconds": 0.06481177099976776,
+      "forward_seconds": 260.2235879730001,
+      "postprocess_seconds": 0.008104270999865548,
+      "write_seconds": 0.1623864590001176,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2422824,
+      "cgroup_peak_bytes": 470122496,
+      "supervisor_wall_seconds": 285.2476690579997
+    },
+    "jun31-confirm-c3": {
+      "load_seconds": 14.210619682000015,
+      "inference": "completed",
+      "threads": 4,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 2,
+      "size": 224,
+      "inference_seconds": 137.08654520900018,
+      "preprocess_seconds": 0.05787802099985129,
+      "forward_seconds": 136.85684671800027,
+      "postprocess_seconds": 0.00833140699978685,
+      "write_seconds": 0.1630669270002727,
+      "shapes": {
+        "depth": [
+          1,
+          2,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          2,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          2,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde"
+      ],
+      "peak_rss_kib": 2417008,
+      "cgroup_peak_bytes": 468099072,
+      "supervisor_wall_seconds": 161.93824973000028
+    },
+    "jun31-three-frame-4": {
+      "load_seconds": 14.60799317100009,
+      "inference": "completed",
+      "threads": 4,
+      "interop_threads": 1,
+      "finite": true,
+      "frames": 3,
+      "size": 224,
+      "inference_seconds": 200.45637929900022,
+      "preprocess_seconds": 0.09185677100003886,
+      "forward_seconds": 200.16715106999982,
+      "postprocess_seconds": 0.00791010400007508,
+      "write_seconds": 0.18894947900025727,
+      "shapes": {
+        "depth": [
+          1,
+          3,
+          224,
+          224,
+          1
+        ],
+        "depth_conf": [
+          1,
+          3,
+          224,
+          224
+        ],
+        "pose_enc": [
+          1,
+          3,
+          9
+        ]
+      },
+      "versions": {
+        "python": "3.13.5",
+        "torch": "2.15.0+cpu",
+        "numpy": "2.5.4"
+      },
+      "checkpoint_manifest_sha256": "c1170b8c45599ea88f0b38e730e8f0804cfe64a594cf8b8434f119f1ca969831",
+      "frame_sha256": [
+        "91b3ce43aa6e0e6d44edb0fc08cf3a4d086bc94c30bfee63f3be4f64d314fafe",
+        "fafce0904caf10d1ad24ce1e5b65b1ff1f63d88a08da44c30a8edddb33c42bde",
+        "63ca03514d4b4307b65a0fbd7344ae7229239752a0b5feb131e5ef20a6d80e01"
+      ],
+      "peak_rss_kib": 2494296,
+      "cgroup_peak_bytes": 543993856,
+      "supervisor_wall_seconds": 224.95929725800033
+    }
+  },
+  "comparisons": {
+    "screen2_vs_original": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": [
+        "checkpoint_manifest_sha256",
+        "frame_sha256"
+      ]
+    },
+    "screen1_vs_screen2": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 1.9073486328125e-06,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 1.0728836059570312e-06,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": []
+    },
+    "screen4_vs_screen2": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": []
+    },
+    "b1_vs_original": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": [
+        "checkpoint_manifest_sha256",
+        "frame_sha256"
+      ]
+    },
+    "c1_vs_screen2": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": []
+    },
+    "c1_vs_b1": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": []
+    },
+    "b2_vs_original": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": [
+        "checkpoint_manifest_sha256",
+        "frame_sha256"
+      ]
+    },
+    "c2_vs_screen2": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 1.0728836059570312e-06,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 5.960464477539062e-07,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 1.1920928955078125e-07,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": []
+    },
+    "c2_vs_b2": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 1.0728836059570312e-06,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 5.960464477539062e-07,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 1.1920928955078125e-07,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": []
+    },
+    "b3_vs_original": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 0.0,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": [
+        "checkpoint_manifest_sha256",
+        "frame_sha256"
+      ]
+    },
+    "c3_vs_screen2": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 1.0728836059570312e-06,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 3.5762786865234375e-07,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 2.327142283320427e-07,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": []
+    },
+    "c3_vs_b3": {
+      "passed": true,
+      "arrays": {
+        "depth": {
+          "max_abs_diff": 1.0728836059570312e-06,
+          "failure_count": 0
+        },
+        "depth_conf": {
+          "max_abs_diff": 3.5762786865234375e-07,
+          "failure_count": 0
+        },
+        "pose_enc": {
+          "max_abs_diff": 2.327142283320427e-07,
+          "failure_count": 0
+        }
+      },
+      "provenance_missing": []
+    }
+  }
+}

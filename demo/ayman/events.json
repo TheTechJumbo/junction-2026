@@ -1,0 +1,32 @@
+[
+  {
+    "id": "synthetic-demo-pills",
+    "type": "pillbox_open",
+    "source": "sensor",
+    "ts": "2026-11-14T08:00:00Z",
+    "zone": "kitchen",
+    "object": "pillbox",
+    "confidence": 1,
+    "evidence_url": null
+  },
+  {
+    "id": "synthetic-demo-repeat",
+    "type": "pillbox_open",
+    "source": "sensor",
+    "ts": "2026-11-14T08:40:00Z",
+    "zone": "kitchen",
+    "object": "pillbox",
+    "confidence": 1,
+    "evidence_url": null
+  },
+  {
+    "id": "synthetic-demo-door",
+    "type": "door_open",
+    "source": "sensor",
+    "ts": "2026-11-14T03:10:00Z",
+    "zone": "entrance",
+    "object": "front_door",
+    "confidence": 1,
+    "evidence_url": null
+  }
+]

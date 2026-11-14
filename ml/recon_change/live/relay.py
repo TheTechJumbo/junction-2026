@@ -76,6 +76,7 @@ and sends those (about 1 MB) to Iridis. Without OpenCV it sends the video as it 
 The SSH connection is opened on first use and reopened if it drops.
 """
 import argparse
+import shlex
 import hmac
 import io
 import json
@@ -98,7 +99,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 HERE = Path(__file__).resolve().parent
-REMOTE = "cd /scratch/$USER/junction-recon && exec .venv-recon/bin/python -u live/gateway.py"
+def remote_command(root):
+    if root is None:
+        return "cd /scratch/$USER/junction-recon && exec .venv-recon/bin/python -u live/gateway.py"
+    # SSH passes this as shell text. Require an absolute path and quote it as one argument.
+    if not root.startswith("/") or "\n" in root or "\x00" in root:
+        raise ValueError("remote root must be an absolute path")
+    return f"cd -- {shlex.quote(root)} && exec .venv-recon/bin/python -u live/gateway.py"
 MAX_BODY = 200 * 1024 * 1024
 FRAMES = {"baseline": 24, "check": 12, "locate": 3}  # keep in step with worker.py
 LONG_SIDE = 518  # the model's input size: no point sending more pixels
@@ -1400,7 +1407,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             body = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail,
                     "verdict": result["verdict"], "events": events, "images": images, "splat": splat_url,
                     "device": result.get("device"), "on_gpu": result.get("on_gpu"), "host": result.get("host"),
-                    "settings": result.get("settings"), "gaussians": result.get("gaussians"),
+                    "settings": result.get("settings"), "rust_enabled": result.get("rust_enabled"),
+                    "rust_threads": result.get("rust_threads"), "rust_disabled_functions": result.get("rust_disabled_functions"), "revision": result.get("revision"), "source_dirty": result.get("source_dirty"), "gaussians": result.get("gaussians"),
                     "median_depth": result.get("median_depth"), "watch": result.get("watch") or [],
                     "gpu_peak_gb": result.get("gpu_peak_gb"),
                     "seconds": {**seconds, **result.get("seconds", {})}}
@@ -1428,6 +1436,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ssh-host", default="iridis", help="SSH host alias for the cluster")
+    ap.add_argument("--remote-root", help="absolute path of the persistent remote checkout")
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets a phone on the same network reach the relay")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--token", default=secrets.token_urlsafe(9), help="access key; a random one is made if not given")
@@ -1444,7 +1453,7 @@ def main():
         link = Link([sys.executable, "-u", str(HERE / "gateway.py")], name="the local gateway")
     else:
         link = Link(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-                     "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, REMOTE])
+                     "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, remote_command(args.remote_root)])
     evidence_dir = Path(tempfile.gettempdir()) / "beacon-evidence"
     evidence_dir.mkdir(exist_ok=True)
     event_api, api_token = os.environ.get("EVENT_API_URL"), os.environ.get("EVENT_API_TOKEN")

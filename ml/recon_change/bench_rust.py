@@ -62,9 +62,14 @@ def peak_rss():
         return c.PeakWorkingSetSize, c.WorkingSetSize
     import resource
 
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # KiB on Linux
-    with open("/proc/self/statm") as f:
-        now = int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        # ps reports current RSS in KiB; Darwin ru_maxrss is already bytes.
+        now = int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(os.getpid())], text=True)) * 1024
+    else:
+        peak *= 1024  # Linux ru_maxrss is KiB
+        with open("/proc/self/statm") as f:
+            now = int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
     return peak, now
 
 
@@ -73,6 +78,8 @@ def child(path, repeat, lookalike):
     import recon_change as rc
     import recon_rust
 
+    if os.environ.get("RECON_FAST") != "0" and not recon_rust.enabled():
+        raise RuntimeError("Rust benchmark requested but recon_fast is unavailable")
     d = np.load(path)
     r = rc.Recon(d["depth"], d["conf"], d["K"], d["E"], d["rgb"], d["feat"] if "feat" in d else None)
     _, before = peak_rss()

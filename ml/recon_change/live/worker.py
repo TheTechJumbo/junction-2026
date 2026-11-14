@@ -25,6 +25,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import time
 import traceback
@@ -535,9 +536,18 @@ def main():
     on_gpu = next(model.parameters()).is_cuda
     if on_gpu:
         GPU.update(torch=torch, small=torch.cuda.get_device_properties(0).total_memory < 10e9)
+    try:
+        revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+        dirty = bool(subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no", "--", "."], text=True))
+    except (OSError, subprocess.CalledProcessError):
+        revision, dirty = None, None
     INFO.update({
+        "revision": revision, "source_dirty": dirty,
         "device": torch.cuda.get_device_name(0) if on_gpu else f"CPU, {torch.get_num_threads()} threads",
         "on_gpu": on_gpu, "host": socket.gethostname().split(".")[0],
+        "rust_enabled": rc.recon_rust.enabled(),
+        "rust_threads": rc.recon_rust._rs.threads() if rc.recon_rust.enabled() else None,
+        "rust_disabled_functions": sorted(getattr(rc.recon_rust, "OFF", ())),
         "settings": {"baseline_frames": N_BASELINE, "new_frames": N_AFTER, "long_side": LONG_SIDE,
                      "locate_baseline_frames": N_LOCATE_BASE, "typical_m": TYPICAL_M, "locate_retry_frames": N_LOCATE_RETRY},
     })
