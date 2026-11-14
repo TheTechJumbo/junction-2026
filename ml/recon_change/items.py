@@ -111,9 +111,9 @@ CONFIDENCE = {"bands": [0.25, 0.35, 0.5, 0.6], "of": {
     "phone": {"any": [51, 85, 99, 99], "agreed": [92, 92, 99, 98], "disagreed": [36, 56, 96, 93]},
     "remote control": {"any": [14, 48, 99, 100], "agreed": [90, 93, 97, 99], "disagreed": [10, 38, 96, 98]},
     "other": {"any": [40, 77, 97, 97], "agreed": [90, 91, 96, 96], "disagreed": [22, 48, 92, 93]}}}
-# A box matched to an enrolled picture has no such measurement behind it yet (the synthetic test in
-# eval/ITEMS_RESULTS.md is too kind to count): it states this.
-CONFIDENCE_ENROLLED = 50
+# A box that only an enrolled picture matched (the words did not find it): in the synthetic test in
+# eval/ITEMS_RESULTS.md 3 of 35 such answers were right at similarity 0.7. Nothing real has measured it.
+CONFIDENCE_ENROLLED = 10
 # Rows of square tiles across the picture's short side, looked at besides the whole picture.
 # 0 = whole picture only (1 pass), 1 = tiles as high as the picture (16:9 and 4:3: 3 passes), 2 = 2 rows.
 TILES = int(os.environ.get("RECON_ITEMS_TILES", "1"))
@@ -258,7 +258,7 @@ def crop_around(shape, box, zoom, least=24):
 
 def confidence_pct(d, judge_limits=None):
     """How often an answer with this kind of evidence was right in the measurements, 0 to 100 (see CONFIDENCE)."""
-    if d.get("matched") == "enrolled":
+    if d.get("only_enrolled"):
         return CONFIDENCE_ENROLLED
     table = CONFIDENCE["of"].get(d["name"], CONFIDENCE["of"]["other"])
     band = max([i for i, edge in enumerate(CONFIDENCE["bands"]) if d["score"] >= edge], default=0)
@@ -271,7 +271,7 @@ def confidence_pct(d, judge_limits=None):
 def best_per_name(detections):
     """At most one detection per name: the best one."""
     seen, best = set(), []
-    for d in sorted(detections, key=lambda d: (d.get("matched") != "enrolled", -d["score"])):  # the thing that was shown comes first
+    for d in sorted(detections, key=lambda d: (bool(d.get("only_enrolled")), -d["score"])):  # a box the words did not find comes last
         if d["name"] not in seen:
             seen.add(d["name"])
             best.append(d)
@@ -545,7 +545,7 @@ class Detector:
         for name in names:
             if self.enrolled.get(name):  # this very thing, as it was shown
                 for d in merge(raw, [name], max(ENROLLED_FLOOR, self.enrolled_score - 0.1), phrases=lambda n: self.enrolled[n]):
-                    d["matched"], d["accepted"] = "enrolled", d["score"] >= self.enrolled_score
+                    d["matched"], d["accepted"], d["only_enrolled"] = "enrolled", d["score"] >= self.enrolled_score, True
                     got.append(d)
             limit = self.limit(name)
             start = self.look_from if looking and (name in self.look_limits or (self.judge and name in self.judge_limits)) else limit
@@ -585,13 +585,20 @@ class Detector:
             self.last = first
         for d in got:
             d["confidence_pct"] = confidence_pct(d, self.judge_limits)
-        got.sort(key=lambda d: (-d["accepted"], d["matched"] != "enrolled", -d["score"]))
+        got.sort(key=lambda d: (-d["accepted"], "only_enrolled" in d, -d["score"]))  # boxes the words found come first
         kept = []
         for d in got:  # one thing gets one name and one entry; a box that is not accepted never pushes an accepted one out
             if any(k["name"] != d["name"] and iou(np.array(d["box"]), np.array(k["box"]))[0][0] >= 0.6 for k in kept):
                 continue
-            if any(k["name"] == d["name"] and k["matched"] != d["matched"] and same_thing(d["box"], k["box"]) for k in kept):
-                continue  # found by its picture and by the words: one entry, the better-placed one
+            twin = next((i for i, k in enumerate(kept) if k["name"] == d["name"] and ("only_enrolled" in k) != ("only_enrolled" in d)
+                         and same_thing(d["box"], k["box"])), None)
+            if twin is not None:  # found by the words and by its picture: one entry, with the words' box, score and confidence
+                worded, shown = (d, kept[twin]) if "only_enrolled" in kept[twin] else (kept[twin], d)
+                worded["accepted"] = worded["accepted"] or shown["accepted"]
+                if shown["score"] >= self.enrolled_score:
+                    worded["matched"] = "enrolled"
+                kept[twin] = worded
+                continue
             kept.append(d)
         return kept
 
@@ -847,7 +854,7 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
     fields["items_frame"] = {"source": saw, "width": picture.shape[1], "height": picture.shape[0], **detector.last}
     if CANDIDATES > 0 and state != "lost":  # every box that could be placed, weak ones too, for the relay to add up over looks
         try:
-            listed, _ = place([d for d in every if d["accepted"] or d["matched"] == "enrolled" or d["score"] >= CANDIDATES],
+            listed, _ = place([d for d in every if d["accepted"] or d.get("only_enrolled") or d["score"] >= CANDIDATES],
                               r, base, q, valid, window, state, room=room)
             fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "confidence_pct", "position", "box", "matched", "distance_m", "bearing_deg")}
                                           for c in listed if c["position"] is not None]
@@ -856,7 +863,7 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
     if remembered and state != "lost":  # without a fix a remembered spot cannot be found in this frame
         try:
             floor = min(detector.score, CONFIRM)  # a weaker box than that is no sign the item is still there
-            rest, _ = place([d for d in every if d not in found and (d["accepted"] or d["score"] >= floor)],
+            rest, _ = place([d for d in every if d not in found and (d["accepted"] or (d["score"] >= floor and not d.get("only_enrolled")))],
                             r, base, q, valid, window, state, room=room)
             fields["items_checked"], left_out = check(remembered, names, items + rest, r, q, valid, window, room, picture.shape,
                                                       detector.side)

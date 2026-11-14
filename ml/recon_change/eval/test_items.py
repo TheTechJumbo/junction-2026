@@ -227,7 +227,18 @@ def main():
     by_name = {d["name"]: d for d in got}
     assert by_name["keys"]["confidence_pct"] == 80 and by_name["glasses"]["confidence_pct"] == 65 and by_name["phone"]["confidence_pct"] == 99, got
     assert items.confidence_pct({"name": "keys", "score": 0.3}) == 55 and items.confidence_pct({"name": "umbrella", "score": 0.7}) == 97
-    assert items.confidence_pct({"name": "keys", "score": 0.9, "matched": "enrolled"}) == items.CONFIDENCE_ENROLLED
+    assert items.confidence_pct({"name": "keys", "score": 0.9, "matched": "enrolled", "only_enrolled": True}) == items.CONFIDENCE_ENROLLED
+    shown = StandIn(0.9)  # show-it-once: a picture question that matches the keys box, and one that matches nothing the words found
+    shown.enrolled, shown.enrolled_score = {"keys": ["@keys#0"], "wallet": ["@wallet#0"]}, 0.75
+    whole["@keys#0"] = (keys_box + 0.002, np.array([0.8]))
+    whole["@wallet#0"] = (np.array([[0.80, 0.20, 0.86, 0.26]]), np.array([0.78]))
+    got = shown.candidates(picture, names + ["wallet"], floor=0.3)
+    by_name = {d["name"]: d for d in got}
+    assert by_name["keys"]["matched"] == "enrolled" and by_name["keys"]["score"] == 0.4 and by_name["keys"]["accepted"], by_name["keys"]
+    assert by_name["keys"]["confidence_pct"] == 72 and by_name["phone"]["matched"] == "text", got  # the words' score and confidence stay
+    assert by_name["wallet"]["matched"] == "enrolled" and by_name["wallet"]["accepted"] and by_name["wallet"]["confidence_pct"] == items.CONFIDENCE_ENROLLED
+    assert [d["name"] for d in items.best_per_name([d for d in got if d["accepted"]])] == ["phone", "keys", "wallet"]
+    del whole["@keys#0"], whole["@wallet#0"]
     placed, _ = items.place([{"name": "keys", "score": 0.4, "box": box}], r, base, q, valid, window, "found")
     assert placed[0]["confidence_pct"] == 72 and placed[0]["matched"] == "text", placed
     print("6 ok: limits per item, second looks, a second opinion, stated confidence, and the same answers as before when none is set")

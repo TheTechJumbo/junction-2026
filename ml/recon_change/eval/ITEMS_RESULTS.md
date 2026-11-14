@@ -290,7 +290,7 @@ unless set), `eval/items_recall.py` (every rule scored from saved boxes, no GPU)
 |---|---|---|---|---|---|---|
 | words only, limit 0.5 (deployed) | 68 of 148 (46 %) | 4 of 25 (16 %) | 97 of 303 | 77 | 1 | 0 of 162 |
 | best single-frame rule: a limit per item, and a second opinion (CLIP) on weak boxes | 107 of 148 (72 %) | 14 of 25 (56 %) | 201 of 303 | 137 | 3 | 0 of 162 |
-| show it once (enrolled picture as the question) | not measured in full: the test is built, its GPU run was still queued behind other jobs when this was written | | | | | |
+| show it once (enrolled picture as the question) | measured on other pictures (pasted things, see "Show it once"): the own thing found in 3 of 80 pictures, against 14 of 80 for the words at limit 0.3. **No gain** | | | | | |
 | evidence over several looks | not measurable from single photos: see "Adding up looks" for what the saved boxes say | | | | | |
 
 Held-out half of the test photos, and the half of the 324 item-free photos that no setting was
@@ -382,51 +382,74 @@ pixel camera.
 
 ## Show it once (enrolment)
 
+**Result first: in the one test that could be built, showing the thing once did not help.** The
+route is wired in and switchable, and a real clip may tell a different story, but nothing
+measured here supports turning it on.
+
 **What is built.** A folder `<project root>/enrolled/<item name>/NN.jpg` (or `RECON_ITEMS_ENROLLED`)
 is read at the next fix whenever a file in it changes. Each picture becomes one more question to
 the detector, next to the words: the detector finds the item's box in the picture (with the
 words; if they find nothing, the box that fills the picture) and remembers what that box looks
 like. In every fix each proposed box is compared with it (cosine similarity of the detector's own
 description of the two boxes: OWLv2's image-guided detection, but scored by similarity, because
-on the words' scale every box scores 1). A box at `RECON_ITEMS_ENROLLED_SCORE` or more is
-accepted and carries `"matched": "enrolled"`; every other result carries `"matched": "text"`. An
-enrolled name that is not in `RECON_ITEMS` is looked for as well. It costs one pass per enrolled
-picture when the folder changes and no extra pass per fix. No folder: nothing changes.
+on the words' scale every box scores 1). A box at `RECON_ITEMS_ENROLLED_SCORE` (0.75) or more is
+accepted. Results carry `"matched"`: `"enrolled"` when an enrolled picture matched the box (with
+or without the words), `"text"` otherwise. A box only the picture found ranks below any box the
+words accepted and states a confidence of 10 %. An enrolled name that is not in `RECON_ITEMS` is
+looked for as well. It costs one pass per enrolled picture when the folder changes and no extra
+pass per fix. No folder: nothing changes.
 
-**The test** (`eval/items_enrol.py`) is synthetic and kinder than real life: 40 "own things" (8 per
-kind) are labelled items cut out along their LVIS outline. Each is enrolled from a crop of the
-photo it comes from and pasted, 40 to 120 px long, turned any way, brighter or darker, a little
-blurred, into 4 indoor item-free photos, each time next to two other things of its kind
-(somebody else's keys). The same photos with only the two others are the "not there" pictures.
-It is the very pixels it was enrolled from, never another side of the thing. Saved per picture:
-the boxes for the words and for the enrolled picture (alone, and turned three ways), and for every
-text candidate how alike CLIP and DINOv2 find it to the enrolled crop (instance matching).
+**The test** (`eval/items_enrol.py`) is synthetic: 40 "own things" (8 per kind) are labelled items
+cut out along their LVIS outline (at least 64 px long in their photo). Each is enrolled from a
+crop of the photo it comes from and pasted, 40 to 120 px long, turned any way, brighter or
+darker, a little blurred, into 4 indoor item-free photos, each time next to two other things of
+its kind (somebody else's keys). The same photos with only the two others are the "not there"
+pictures; the 162 item-free photos (every second one) are searched for every thing as well. It
+is kind in one way (the very pixels it was enrolled from, never another side of the thing) and
+harsh in another: a small, turned, pasted cut-out is hard for every method, the words included.
 
-**What was measured: only a small pre-run.** The full run (320 pictures, 160 item-free photos)
-needs about 10 minutes of GPU and was still queued (job `jun-items-enrol`) when this was written:
-the user's two GPU slots were held by the live worker and other agents' jobs. `python
-eval/items_enrol.py score --out out/enrol` prints the tables once it has run. The pre-run covers
-16 pictures of 2 key things and 16 kitchen photos searched for all 40 things:
+Held-out half of the own things (20 things): 80 pictures with the thing, 80 without, 3240
+thing-and-photo pairs on item-free photos. Limits chosen on the other 20 things, to keep false
+answers on item-free photos and answers on nothing at 1 in 100.
 
-- Item-free kitchen photos: how alike a box must be before the enrolled questions stay quiet.
-  Of 320 thing-and-photo pairs (held-out half of the things): 74 false answers at similarity
-  0.6, 1 at 0.7, 0 at 0.8. Most boxes look somewhat like anything, so the limit has to be high.
-  The default is 0.75 until the full run says otherwise.
-- The two key things: at 0.7 the own keys were found in 0 of 4 held-out pictures (1 of 4 on the
-  tuning half at 0.625); the words at limit 0.3 found 2 of 4. Their similarity to the enrolled
-  picture was 0.52 to 0.66, other people's keys 0.41 to 0.61, the best background box 0.40 to
-  0.70. On this little evidence the detector's own description of a box does **not** tell small
-  keys apart from other keys or from background, and showing the keys once did not help.
-  Phones, wallets and remotes, which are larger and more distinct, were not in the pre-run.
-- Instance matching with CLIP or DINOv2 on text candidates: saved by the full run only.
+| method | own thing found | of which keys | answer on somebody else's | answer elsewhere | answers when it is not there | false on item-free photos |
+|---|---|---|---|---|---|---|
+| words only, limit 0.5 (deployed) | 3 of 80 (4 %) | 0 of 16 | 10 | 0 | 10 of 80 | (round one: 0 of 324) |
+| words only, limit 0.3 | 14 of 80 (18 %) | 4 of 16 | 12 | 1 | 18 of 80 | |
+| shown once (1 picture), similarity 0.675 | 2 of 80 (2 %) | 1 of 16 | 1 | 2 | 3 of 80 | 20 of 3240 |
+| shown once, plus the picture turned 3 ways, 0.7 | 3 of 80 (4 %) | 1 of 16 | 1 | 2 | 3 of 80 | 26 of 3240 |
+| shown, and the words give that box 0.1, similarity 0.625 | 7 of 80 (9 %) | 3 of 16 | 3 | 2 | 5 of 80 | 56 of 3240 |
+| text candidate from 0.2 that CLIP finds like the enrolled crop (0.75) | 3 of 80 (4 %) | 3 of 16 | 1 | 2 | 4 of 80 | not run |
+| text candidate from 0.2 that DINOv2 finds like the enrolled crop (0.225) | 11 of 80 (14 %) | 5 of 16 | 8 | 2 | 12 of 80 | not run |
 
-So this route is wired in and switchable, but its value is **not shown**. A real check needs a
-real clip: `eval/items_enrol_real.py --clip keys.mp4 --item keys --out <folder>` enrols from the
-first sighting (or `--enrol pictures`, or `--box`) and counts answers in the later frames three
-ways (words today, words with the settings in force, the enrolled picture), with a sheet of
-every answer for a person to check and `--absent` for a clip without the thing. It was tried on
-four test pictures, not on a real clip. No multi-view object set (CO3D or similar) was fetched:
-there was no time to look for a slice small enough to fetch in minutes.
+The enrolled picture at other limits (held-out things): at similarity 0.5 it finds 19 of 80 and
+answers on 1576 of 3240 item-free pairs; at 0.6, 11 of 80 and 404; at 0.7, 3 of 80 and 26; at
+0.8 nothing at all.
+
+What this says:
+
+- **The detector's own description of a box does not single out one thing.** Most boxes look
+  somewhat like any picture, so the similarity has to be 0.7 or more to keep item-free photos
+  quiet, and at that level the own thing is almost never matched.
+- **Nothing here tells my keys from somebody else's.** The words answer on the other person's
+  thing as often as on the own one, and so does matching with DINOv2 (11 found, 8 on the other
+  one). CLIP as an instance matcher finds next to nothing.
+- **The words at a lower limit beat every enrolment variant** on these pictures (14 of 80).
+- The test's own weakness: even the words find only 4 % of the pasted things at 0.5, against 46 %
+  of real objects over 64 px. Pasted, turned, resized cut-outs are not how a thing looks on a
+  table, so a low number here is not proof that enrolment fails at home. It is only no evidence
+  that it works.
+
+Not tried: the large detector's description of a box (it may be more particular), DINOv2 on
+boxes the words did not propose, several real views of one thing instead of one crop.
+
+**A real check needs a real clip.** `eval/items_enrol_real.py --clip keys.mp4 --item keys --out
+<folder>` enrols from the first sighting (or `--enrol pictures`, or `--box`) and counts answers
+in the later frames three ways (words today, words with the settings in force, the enrolled
+picture), with a sheet of every answer for a person to check and `--absent` for a clip without
+the thing. It was tried on four test pictures, not on a real clip. No multi-view object set
+(CO3D or similar) was fetched: there was no time to look for a slice small enough to fetch in
+minutes.
 
 ## Adding up looks (`items_candidates`)
 
@@ -501,7 +524,8 @@ Where the table behind it is thin: keys have 5 to 10 answers per band on the tun
 table is printed by `python eval/items_recall.py ... --confidence`. Two cautions: the share is
 measured on test photos where the item is present in about half of the photos that count, so at
 home, where it mostly is not in view, a weak box will be right less often than stated; and a box
-matched to an enrolled picture states a flat 50 %, because nothing real has measured it yet.
+that only an enrolled picture matched states a flat 10 % (3 of 35 such answers were right in the
+synthetic test below), while a box the words found keeps the words' confidence.
 
 ## Settings to switch it on
 
@@ -526,28 +550,33 @@ Seconds added per fix:
 | | L4 GPU | 32 CPU cores |
 |---|---|---|
 | a limit per item | nothing | nothing |
-| one second opinion (CLIP, two crops of one weak box) | 0.041 s | not measured |
+| one second opinion (CLIP, two crops of one weak box) | 0.041 s | not measured on its own |
 | one zoomed second look (rules 2 and 4) | 0.246 s | about 1.4 s (one detector pass, from round one) |
-| loading CLIP at worker start | not measured | 23 s on a throttled login node |
+| loading CLIP at worker start | 4 s | 4 s |
+| a whole fix, recommended settings, one weak box in view | 3.18 s (items 0.84 s) | 37.7 s (items 7.3 s) |
+| the same fix without items | 2.33 s | 30.2 s |
 
-Measured over 1031 candidates in the second-look job. How many second opinions a picture needs
-under the recommended limits: 0.55 on average on the test photos (none in 69 % of them, 2 at the
-90th percentile, at most 6) and 0.19 on item-free photos (none in 86 %). So the recommended rule
-adds about 0.02 s to an average fix on the GPU and at most 0.25 s. A whole fix through
-`worker.where()` with these settings was queued on both the GPU and the CPU node and had not run
-when this was written (jobs `jun-items-full`, `jun-items-full-cpu`).
+Per-candidate times are from the second-look job (1031 candidates). The whole fix is
+`worker.where()` on the kitchen baseline with a pasted remote that the words score 0.28: the
+second opinion accepted it and it was placed 3 cm (GPU) and 1 cm (CPU) from the named place at
+the same spot. Against round one that is 0.04 s more on the GPU. On the CPU node the item step
+took 7.3 s where round one measured 5.0 s; that node was also slower on the position fix itself
+(30 s against 26 s), so how much of the 2.3 s is the second opinion is not known.
+
+How many second opinions a picture needs under the recommended limits: 0.55 on average on the
+test photos (none in 69 % of them, 2 at the 90th percentile, at most 6) and 0.19 on item-free
+photos (none in 86 %).
 
 ## Not tested in this round
 
-- **A whole fix with the new settings.** The rules were scored from saved boxes and saved second
-  opinions; `items.py` applies the same rule and the offline checks cover its logic with
-  stand-ins, but the judge has not yet run inside `worker.where()` on a worker node. On a login
-  node it loaded, and the enrolled folder was picked up.
-- **Show it once, in full**, and anything real for it (see above).
+- **A worker started through the queue with these settings**, and the relay with the new result
+  fields. The whole fix ran through `worker.where()` from a test script on both node types.
+- **Anything real**: a real room, real items, the glasses, a real clip of an enrolled thing.
 - **A bigger detector** and Grounding DINO.
 - **Whether the repeated false candidates are at the same spot in 3D.**
-- **The judge on the CPU worker** (seconds).
-- A real room, real items, the glasses. Still nothing.
+- **The second opinion's own cost on the CPU worker.**
+- The last change to how a picture match and a word match of one thing are merged into one
+  entry ran in the offline checks only, after the whole-fix runs.
 - The selection rule is looser than round one's (one error per item allowed on the tuning half).
   And the held-out item-free photos are other views of the same eleven places the limits were
   chosen on, not new rooms: "0 of 162" is weaker evidence than it looks.
