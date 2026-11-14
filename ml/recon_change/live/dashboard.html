@@ -167,6 +167,16 @@ function select(job) {
       pair,
       c.images.changes ? el('a', { href: withKey(c.images.changes), target: '_blank', rel: 'noopener', textContent: 'See all views' }) : ''),
   ];
+  if (c.watch && c.watch.length) {  // the spots a carer marked: each one same, changed or not seen
+    const words = { same: 'same', changed: 'CHANGED', not_seen: 'not seen' };
+    const rows = c.watch.map(w => el('div', { style: 'display:flex;gap:10px;align-items:center;margin:6px 0' },
+      ...['before', 'now'].map(k => c.images['spot' + c.watch.indexOf(w) + '_' + k]
+        ? el('img', { src: withKey(c.images['spot' + c.watch.indexOf(w) + '_' + k]), alt: k, style: 'height:72px;border-radius:6px' }) : ''),
+      el('div', {}, el('strong', { textContent: w.name }), ' ',
+        el('span', { style: `color:${w.state === 'changed' ? 'var(--amber)' : 'inherit'}`, textContent: words[w.state] || w.state }),
+        el('div', { textContent: `${w.why || ''}${w.score == null ? '' : ` · score ${(+w.score).toFixed(2)} (limit 1)`}`, style: 'opacity:.7;font-size:13px' }))));
+    cards.push(el('div', { className: 'card' }, el('h2', { textContent: 'Watched spots (before, now)' }), ...rows));
+  }
   if (c.splat) {
     cards.push(el('div', { className: 'card' },
       el('h2', { textContent: `3D view · ${(c.gaussians || 0).toLocaleString('en-US')} Gaussians, built on a CPU in ${(s.splat || 0).toFixed(2)} s` }),
