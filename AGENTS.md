@@ -14,8 +14,9 @@ Ayman owns unoq/ and demo/ayman/. Do not edit those owners' directories.
 - An explicit implementation prompt authorizes that task; do not repeatedly ask to start.
 - One isolated worktree per worker. Never switch another worker's branch.
 - Follow docs/FOUNDATION.md ownership. Shared changes go through the integrator.
-- The user authorized isolated implementation workers after the foundation. Do not merge
-  main, push, deploy, create paid resources, or send teammate messages.
+- The user authorized isolated implementation workers and root integration. Root may
+  commit, push the reviewed Bartek branch and open a PR after verification. Do not merge
+  main, deploy, overwrite teammate branches, create paid resources or send teammate messages.
 - Never commit credentials, real household imagery, database files or recordings.
 - Sensor observations are authoritative about what was observed, not inferred ingestion
   or locking. Vision adds evidence only and never creates alerts.
