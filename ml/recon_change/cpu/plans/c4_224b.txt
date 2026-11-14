@@ -1,0 +1,2 @@
+--clips cpu/clips/after.mp4 cpu/clips/after_box.mp4 --frames 12+6 --long-side 224
+--clips cpu/clips/after.mp4 cpu/clips/after_box.mp4 --frames 8+4 --long-side 224

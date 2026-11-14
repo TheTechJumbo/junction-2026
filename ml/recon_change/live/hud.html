@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon directions</title>
+<!--
+  The glasses display. It does four things for the wearer:
+
+  1. Directions: an arrow and a distance to a named place ("pill box", "front door").
+  2. Answers: "Did I take my pills?" is asked through the relay (POST /ask), shown and spoken.
+     When no pill box opening is recorded, the arrow then points to the pill box.
+  3. Reminders: when one is due (GET /reminders) it is shown and spoken, with the way to its place.
+     A pill box reminder ends when the sensor reports the box was opened.
+  4. Lost items: "Where are my keys?" answers with where a position fix last saw them, and the
+     arrow points there.
+
+  It draws one position fix: where the wearer stands, which way they face, where the places are
+  and which items were seen. Fixes come from the relay (GET /where?zone=..., polled), made by
+  POST /locate with a photo of what the wearer sees. The display is the black 600 x 600 square;
+  everything under it is for the demo only (on the glasses, the question comes from the
+  microphone). Black is "off" on a see-through display, so the square stays mostly black.
+
+  Route finding: a fix carries, under "route", the way around furniture to each place (route.py
+  on the relay). The arrow then points at the next corner of that way and the distance is the
+  walk, not the straight line; the small map shows the way as a dotted line. Without a route for
+  a place (too few map points, no way through) the arrow points straight at it, as before.
+  /hud?k=KEY&route=0 switches route finding off: the straight arrow everywhere.
+
+  /hud?k=KEY            live, from the relay
+  /hud?k=KEY&demo=1     sample room, no relay needed: arrow keys or the buttons turn and walk,
+                        and the answers, the reminder and the pill box are stand-ins
+
+  The arrow, the distance and the mini map are drawn from the STEADY position when the relay sends
+  one ("stable" in the /where reply, made by track.py from the stream of fixes), with its confidence
+  percentage in small type. The arrow is drawn whenever the steady position is "steady" (two photos
+  in a row agree): chosen for the demo on 14 Nov, because at one photo every 4 s the stricter rule
+  kept a still wearer waiting about 16 s for an arrow and showed none while walking.
+  &limit=sure uses the relay's stricter rule instead (track.py "show": the confidence expected at the
+  next photo must reach 40%, and the arrow goes below 20%); it is right more often and shows an arrow
+  far less (eval/TRACK_RESULTS.md). &limit=30 tries a limit of your own. When there is no arrow the
+  display says "Look around slowly". &stable=0 draws from the newest fix alone, as before.
+  In the sample room, "Noisy photos" feeds made-up photos (jittery, sometimes lost, sometimes far
+  off) through the same steadying, so it can be seen without a relay.
+-->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; background: #15171a; color: #d6d9de; font: 15px/1.4 system-ui, sans-serif;
+         display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  #display { width: min(600px, calc(100vw - 24px)); aspect-ratio: 1; background: #000; border-radius: 20px; display: block; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; max-width: 600px; }
+  button, select, input, label.file { font: inherit; color: inherit; background: #262a30; border: 1px solid #3a4048; border-radius: 10px;
+                                      padding: 8px 12px; }
+  button, select, label.file { cursor: pointer; }
+  #question { flex: 1; min-width: 180px; }
+  button.on { background: #1f6f43; border-color: #2c9a5e; color: #fff; }
+  button.item { border-style: dashed; }
+  #finish { background: #6b5310; border-color: #ffd23f; color: #fff; }
+  label.file input { display: none; }
+  #note { color: #9aa1ab; text-align: center; max-width: 600px; min-height: 1.4em; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<svg id="display" viewBox="0 0 600 600" role="img" aria-label="Directions">
+  <defs><clipPath id="disc"><circle cx="0" cy="0" r="92"/></clipPath></defs>
+  <text id="going" x="300" y="58" text-anchor="middle" fill="#7fd6a4" font-size="22" letter-spacing="3">GOING TO</text>
+  <text id="place" x="300" y="108" text-anchor="middle" fill="#fff" font-size="46" font-weight="600"></text>
+
+  <g id="compass" transform="translate(300 290)">
+    <circle r="118" fill="none" stroke="#1d4d33" stroke-width="3"/>
+    <g id="arrow"><path d="M0 -100 L62 30 L22 14 L22 96 L-22 96 L-22 14 L-62 30 Z" fill="#3ddc84"/></g>
+    <g id="there" hidden><circle r="70" fill="none" stroke="#3ddc84" stroke-width="10"/><path d="M-34 2 L-8 30 L38 -26" fill="none" stroke="#3ddc84" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g id="lost" hidden><circle r="70" fill="none" stroke="#f0b429" stroke-width="8" stroke-dasharray="14 12"/><text y="22" text-anchor="middle" fill="#f0b429" font-size="64" font-weight="700">?</text></g>
+  </g>
+
+  <text id="turn" x="400" y="468" text-anchor="middle" fill="#fff" font-size="40" font-weight="600"></text>
+  <text id="far" x="400" y="512" text-anchor="middle" fill="#7fd6a4" font-size="30"></text>
+  <text id="age" x="400" y="572" text-anchor="middle" fill="#55606c" font-size="18"></text>
+
+  <g transform="translate(104 496)">
+    <circle r="94" fill="#000" stroke="#1d4d33" stroke-width="2"/>
+    <g clip-path="url(#disc)"><g id="map"></g></g>
+    <path d="M0 -13 L9 10 L0 5 L-9 10 Z" fill="#4aa3ff"/>
+  </g>
+
+  <!-- An answer or a reminder covers the display for a few seconds, then the arrow is back. -->
+  <g id="card" hidden>
+    <rect width="600" height="600" fill="#000"/>
+    <text id="asked" x="300" y="64" text-anchor="middle" fill="#7fd6a4" font-size="24"></text>
+    <text id="answer" x="300" y="300" text-anchor="middle" fill="#fff" font-size="36" font-weight="600"></text>
+    <text id="next" x="300" y="556" text-anchor="middle" fill="#3ddc84" font-size="26"></text>
+  </g>
+</svg>
+
+<div class="row" id="targets"></div>
+<div class="row">
+  <input id="question" placeholder="Ask a question" maxlength="200" autocomplete="off">
+  <button id="askgo">Ask</button>
+  <button id="mic" hidden>Speak</button>
+  <button id="finish" hidden>Done</button>
+</div>
+<div class="row" id="quick"></div>
+<div class="row">
+  <select id="zone" title="Room"></select>
+  <label class="file">Take a photo to update<input id="photo" type="file" accept="image/*,video/*" capture="environment"></label>
+  <button id="camera" hidden>Use this camera</button>
+  <button id="demo">Sample room</button>
+</div>
+<div class="row" id="pad" hidden>
+  <button data-turn="-15">Turn left</button><button data-walk="0.4">Walk</button><button data-turn="15">Turn right</button>
+  <button data-sample="remind">Remind me</button><button data-sample="open">Open the pill box</button>
+  <button id="noisy">Noisy photos</button>
+</div>
+<div id="note"></div>
+<video id="video" playsinline muted hidden></video>
+
+<script>
+const query = new URLSearchParams(location.search);
+const key = query.get('k') || '';
+const $ = id => document.getElementById(id);
+const api = (path, more = '') => `${path}?k=${encodeURIComponent(key)}${more}`;
+const wrap = deg => ((deg + 180) % 360 + 360) % 360 - 180;
+const show = (id, on) => $(id).toggleAttribute('hidden', !on);  // the attribute, so it also works on the SVG parts
+const esc = s => String(s).replace(/[<&"]/g, c => ({ '<': '&lt;', '&': '&amp;', '"': '&quot;' }[c]));
+const words = s => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+const clock = () => new Date().toTimeString().slice(0, 5);
+const sideOf = b => Math.abs(b) <= 20 ? 'ahead' : Math.abs(b) >= 150 ? 'behind you' : b > 0 ? 'to your right' : 'to your left';
+const drawn = {};
+function setHTML(id, html) {  // only touch the page when something changed, so a click is never lost to a redraw
+  if (drawn[id] !== html) { drawn[id] = html; $(id).innerHTML = html; }
+}
+
+let demo = query.has('demo');
+let zone = query.get('zone') || '';
+let target = query.get('to') || '';
+let fix = null;                       // the latest fix from the relay (or the sample room)
+let stable = null;                    // the steady position made from the stream of fixes (relay: fix.stable; sample room: the tracker below)
+const useStable = query.get('stable') !== '0';
+// The limit for drawing an arrow: 0 = whenever the answer is steady (the default), a number = the confidence
+// expected at the next photo must reach it, null (&limit=sure) = the relay's own stricter rule.
+const ownLimit = query.get('limit') === 'sure' ? null : query.has('limit') && isFinite(+query.get('limit')) ? +query.get('limit') : 0;
+let poseSeen = '', headingAtFix = 0;  // the pose the display last stood on; its heading, for the compass
+let me = { x: 0, y: 0, heading: 0 };  // where the wearer is now: the fix, moved by the compass or the demo keys
+let fixSeen = '', compass = null, compassAtFix = null, gotAt = 0;
+let due = null, guidedFor = '';       // the reminder that is due now; the one the arrow was last pointed for
+const told = {};                      // when each reminder was last shown
+const sample = { pills: '', keys: { name: 'keys', position: [-1.5, 1.9, 0], time: '09:12', near: 'bathroom door' } };
+
+// Everything the arrow can point to: the named places, then the items a position fix has seen.
+// Not an item in doubt: the glasses have since looked at that spot and did not find it there.
+const spots = () => fix ? [...(stable && stable.waypoints.length ? stable.waypoints : fix.waypoints),
+                           ...(fix.seen || []).filter(s => !s.doubt).map(s => ({ ...s, item: true }))] : [];
+// Is there an arrow to draw? With a steady position, it decides (track.py: "show"). Without one, the newest fix does.
+const noArrow = () => !fix || (stable ? !(ownLimit == null ? stable.show : stable.state === 'steady' && stable.next_pct >= ownLimit)
+                                      : fix.state === 'lost');
+
+function fromMe(position) {  // metres, and degrees from straight ahead (+ to the right)
+  const east = position[0] - me.x, north = position[1] - me.y;
+  return [Math.hypot(east, north), wrap(Math.atan2(east, north) * 180 / Math.PI - me.heading)];
+}
+
+// ---------------------------------------------------------------- route finding (route.py on the relay)
+// Where the route to a place leads next from where the wearer is now: the bearing of the next
+// corner, the metres still to walk along the route ("left", the last reach to the place included)
+// and the metres up to the spot where the wearer will stand ("walk"). null when the fix has no
+// route for the place or the wearer has left it: then the arrow points straight at the place.
+function nextLeg(to) {
+  const way = query.get('route') !== '0' && fix && fix.route && fix.route.to && fix.route.to[to.name];
+  if (!way || way.way !== 'route' || !way.points || way.points.length < 2) return null;
+  const P = way.points, last = P.length - 1;
+  let on = 0, off = Infinity;  // the stretch of the route the wearer is on: the nearest one
+  for (let i = 0; i < last; i++) {
+    const ax = P[i][0], ay = P[i][1], bx = P[i + 1][0] - ax, by = P[i + 1][1] - ay;
+    const t = Math.max(0, Math.min(1, ((me.x - ax) * bx + (me.y - ay) * by) / (bx * bx + by * by || 1)));
+    const d = Math.hypot(me.x - ax - t * bx, me.y - ay - t * by);
+    if (d < off - 1e-6) { off = d; on = i; }
+  }
+  if (off > 1) return null;
+  let k = on + 1;
+  while (k < last && Math.hypot(P[k][0] - me.x, P[k][1] - me.y) < 0.4) k++;  // a corner that is reached: on to the next
+  const [toCorner, bearing] = fromMe(P[k]);
+  let left = toCorner;
+  for (let i = k; i < last; i++) left += Math.hypot(P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1]);
+  const line = [[me.x, me.y], ...P.slice(k)].map(q => `${(q[0] * 26).toFixed(1)},${(-q[1] * 26).toFixed(1)}`).join(' ');
+  return { bearing, left, walk: Math.max(0, left - (way.reach_m || 0)), turns: last - k - (way.reach_m ? 1 : 0), line };
+}
+
+// The sample room has no relay fixes, so the relay is asked for the route from where the wearer
+// now stands (POST /route, no cluster needed). Without a relay the sample room keeps its straight arrow.
+let routeFrom = '', routeBusy = false;
+async function sampleRoute() {
+  const stamp = `${me.x.toFixed(2)} ${me.y.toFixed(2)}`;
+  if (!demo || !fix || routeBusy || stamp === routeFrom) return;
+  routeBusy = true; routeFrom = stamp;
+  try {
+    const ask = { position: [me.x, me.y], heading_deg: me.heading, map: fix.map, waypoints: spots().map(q => ({ name: q.name, position: q.position })) };
+    const reply = await fetch(api('/route'), { method: 'POST', body: JSON.stringify(ask) });
+    if (reply.ok && demo && fix) fix.route = (await reply.json()).route;
+  } catch { /* no relay: the straight arrow */ }
+  routeBusy = false;
+  draw();
+}
+
+function furnished(room) {  // the sample room gets a table between the wearer and the pill box, and a walked line
+  for (let x = 0; x <= 1.2; x += 0.1) for (let y = 1.4; y <= 2.2; y += 0.1) room.map.points.push([x, y]);
+  room.map.cameras = [[-1, -0.4], [-1.2, 1], [-1.2, 2.6], [-0.4, 3.2], [1, 3], [1.6, 1.8], [1.4, 0.2], [0.4, -0.5]];
+  return room;
+}
+
+// ---------------------------------------------------------------- drawing
+function draw() {
+  sampleRoute();  // route finding: only does something in the sample room
+  const places = spots();
+  // A due reminder points the arrow at its place once, as soon as the display knows that place.
+  if (due && due.place && guidedFor !== due.id + due.due_at && places.some(p => p.name === due.place)) {
+    target = due.place; guidedFor = due.id + due.due_at;
+  }
+  const lost = noArrow();
+  const to = places.find(p => p.name === target) || places[0];
+  $('place').textContent = to ? to.name : (fix ? 'No places named yet' : 'Waiting for a position');
+  $('going').textContent = due ? due.text.toUpperCase().slice(0, 34) : to && to.item ? `LAST SEEN ${to.time || ''}` : 'GOING TO';
+  $('going').setAttribute('fill', due ? '#ffd23f' : '#7fd6a4');
+  $('going').setAttribute('visibility', to || due ? 'visible' : 'hidden');
+  const [direct, straightOn] = to ? fromMe(to.position) : [0, 0];
+  // route finding: with a route, the arrow points at its next corner and the distance is the walk
+  const leg = to && !lost ? nextLeg(to) : null;
+  const far = leg ? leg.left : direct, bearing = leg ? leg.bearing : straightOn;
+  const there = !!to && !lost && (leg ? leg.walk < 0.4 || leg.left < 0.8 : direct < 0.8);
+  show('arrow', !lost && !!to && !there);
+  show('there', there);
+  show('lost', lost && !!fix);
+  $('arrow').setAttribute('transform', `rotate(${bearing.toFixed(1)})`);
+  const side = bearing > 0 ? 'right' : 'left', off = Math.abs(bearing);
+  $('turn').textContent = !fix ? '' : lost ? 'Look around slowly' : !to ? '' : there ? 'You are there'
+    : off <= 15 ? 'Straight ahead' : off <= 60 ? `Slightly ${side}` : off <= 135 ? `Turn ${side}` : 'Turn around';
+  $('far').textContent = lost || !to || there ? '' : `about ${far < 3 ? (Math.round(far * 2) / 2 || 0.5) : Math.round(far)} m`;
+  const sure = !stable ? '' : stable.state === 'lost' ? 'not sure where you are'
+    : `${stable.confidence_pct}% sure · ${stable.agree} of ${stable.of} photos agree · ${Math.round(stable.age_s)} s ago`;
+  $('age').textContent = !fix ? '' : stable ? sure : demo ? 'sample room'
+    : `${fix.state === 'unsure' ? 'rough fix, ' : ''}updated ${Math.round((Date.now() - gotAt) / 1000 + (fix.age_s || 0))} s ago`;
+  // route finding: the distance line also says how many turns the way has, or that the arrow is the
+  // straight line because the map gave no way (the reason is in fix.route.to[place].why)
+  const way = to && !lost && query.get('route') !== '0' && fix && fix.route && fix.route.to ? fix.route.to[to.name] : null;
+  if (to && !lost && !there) $('far').textContent += leg ? (leg.turns > 0 ? ` · ${leg.turns} turn${leg.turns > 1 ? 's' : ''}` : '')
+    : way && way.why ? ' · straight line' : '';
+
+  // Mini map, heading up: 1 m = 26 px, the wearer at the centre. Places are yellow, items are blue.
+  const dots = fix ? fix.map.points.map(p => `<rect x="${(p[0] * 26).toFixed(1)}" y="${(-p[1] * 26).toFixed(1)}" width="2.4" height="2.4" fill="#2f7d55"/>`).join('') : '';
+  const pins = places.map(p => `<circle cx="${p.position[0] * 26}" cy="${-p.position[1] * 26}" r="${p === to ? 8 : 5}" fill="${p.item ? (p === to ? '#7fb8ff' : '#3d6fa8') : (p === to ? '#ffd23f' : '#8a7a2a')}"/>`).join('');
+  const path = leg && !there ? `<polyline points="${leg.line}" fill="none" stroke="#3ddc84" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 7"/>` : '';  // route finding
+  // Sample room with noisy photos: what the newest photo alone says (red ring) and where the wearer really is (white dot).
+  const marks = !noisy ? '' : (noisy.raw && noisy.raw.position ? `<circle cx="${noisy.raw.position[0] * 26}" cy="${-noisy.raw.position[1] * 26}" r="6" fill="none" stroke="#ff6b6b" stroke-width="2"/>` : '')
+    + `<circle cx="${noisy.real.x * 26}" cy="${-noisy.real.y * 26}" r="3" fill="#fff"/>`;
+  setHTML('map', dots + path + pins + marks);
+  $('map').setAttribute('transform', `rotate(${(-me.heading).toFixed(1)}) translate(${(-me.x * 26).toFixed(1)} ${(me.y * 26).toFixed(1)})`);
+
+  setHTML('targets', places.map(p => `<button class="${p === to ? 'on' : ''}${p.item ? ' item' : ''}" data-to="${encodeURIComponent(p.name)}">${esc(p.name)}${p.item ? ` · seen ${esc(p.time || '')}` : ''}</button>`).join(''));
+  const questions = ['Did I take my pills?', 'Where are my keys?', ...places.filter(p => !p.item).map(p => `Where is the ${p.name}?`)];
+  setHTML('quick', questions.slice(0, 6).map(q => `<button data-q="${esc(q)}">${esc(q)}</button>`).join(''));
+}
+
+function take(next) {
+  fix = next; gotAt = Date.now();
+  stable = useStable && next.stable || null;
+  // Stand on the steady pose when there is one, else on the newest fix. Only when that pose is a new
+  // one: a pose that is being held (a lost photo in between) keeps the compass turning from where it was.
+  const pose = stable && stable.position ? stable : next;
+  const stamp = stable && stable.position ? JSON.stringify([stable.position, stable.heading_deg]) : next.ts + next.job;
+  if (stamp !== poseSeen && pose.position) {
+    poseSeen = stamp; fixSeen = next.ts + next.job;
+    me = { x: pose.position[0], y: pose.position[1], heading: pose.heading_deg };
+    headingAtFix = pose.heading_deg; compassAtFix = compass;
+  }
+  draw();
+}
+
+// An answer or a reminder, large, over the whole display. `way` is the line under it ("Showing the way to ...").
+let cardTimer = null;
+function card(title, text, way) {
+  const lines = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line && (line + ' ' + word).length > 26) { lines.push(line); line = word; } else line = line ? line + ' ' + word : word;
+  }
+  if (line) lines.push(line);
+  lines.length = Math.min(lines.length, 8);
+  $('asked').textContent = title.length > 40 ? title.slice(0, 39) + '…' : title;
+  $('answer').innerHTML = lines.map((l, i) => `<tspan x="300" dy="${i ? 46 : 0}">${esc(l)}</tspan>`).join('');
+  $('answer').setAttribute('y', 300 - (lines.length - 1) * 23);
+  $('next').textContent = way;
+  show('card', true);
+  clearTimeout(cardTimer);
+  cardTimer = setTimeout(() => show('card', false), 4000 + text.length * 70);
+}
+
+// Spoken through the relay (the team's voice service) when it is set up, else by the browser's own voice.
+let voice = null, voiceService = true;
+async function say(text) {
+  if (!text) return;
+  try { if (voice) voice.pause(); speechSynthesis.cancel(); } catch { /* nothing was speaking */ }
+  if (!demo && voiceService) {
+    try {
+      const reply = await fetch(api('/speak'), { method: 'POST', body: JSON.stringify({ text }) });
+      if (reply.ok) { voice = new Audio(URL.createObjectURL(await reply.blob())); await voice.play(); return; }
+      voiceService = false;  // no voice is set up there: stop asking, the browser speaks from now on
+    } catch { /* no voice service: the browser speaks */ }
+  }
+  try { speechSynthesis.speak(new SpeechSynthesisUtterance(text)); } catch { /* this browser cannot speak */ }
+}
+
+// Point the arrow at a place or an item the display knows. Returns the line to show under an answer.
+function guide(name) {
+  if (!name || !spots().some(p => p.name === name)) return '';
+  target = name;
+  return noArrow() ? 'Look around slowly so I can find you' : `Showing the way to the ${name}`;
+}
+
+// ---------------------------------------------------------------- questions
+const ALIASES = { pills: 'pill box', pill: 'pill box', pillbox: 'pill box', medication: 'pill box', medicine: 'pill box',
+                  tablets: 'pill box', door: 'front door', toilet: 'bathroom', key: 'keys', spectacles: 'glasses',
+                  purse: 'wallet', mobile: 'phone', remote: 'remote control' };
+
+function placeFor(question) {  // the place or item a question is about, if the display knows one by that name
+  const q = words(question), names = spots().map(p => p.name);
+  const named = names.filter(n => q.includes(words(n))).sort((a, b) => b.length - a.length)[0];
+  if (named) return named;
+  const alias = Object.keys(ALIASES).find(a => q.includes(` ${a} `) && names.includes(ALIASES[a]));
+  return alias ? ALIASES[alias] : '';
+}
+
+async function ask(question) {
+  question = question.trim();
+  if (!question) return;
+  $('question').value = '';
+  $('note').textContent = 'Asking…';
+  let body;
+  if (demo) body = sampleAnswer(question);
+  else {
+    try {
+      const reply = await fetch(api('/ask', zone ? `&zone=${zone}` : ''), { method: 'POST', body: JSON.stringify({ question }) });
+      body = await reply.json();
+      if (!reply.ok) { $('note').textContent = body.error || 'That did not work.'; return; }
+      await poll();  // an item the answer points to arrives with the position
+    } catch { $('note').textContent = 'Cannot reach the relay.'; return; }
+  }
+  // Show the way when they asked where something is, or asked about the pills and no opening is recorded.
+  const asksWay = /\b(where|find|way|directions?|take me|show me|get to)\b/i.test(question);
+  const name = body.point ? body.point.name : placeFor(question);
+  const way = asksWay || body.point || !(body.evidence || []).length ? guide(name) : '';
+  draw();
+  card(question, body.answer, way);
+  say(body.answer);
+  $('note').textContent = demo ? 'Sample answer: the sample room has no sensors and no answer service.' : '';
+}
+
+// ---------------------------------------------------------------- reminders
+async function reminders() {
+  if (demo) return;
+  try {
+    const reply = await fetch(api('/reminders'));
+    if (!reply.ok) return;
+    const list = (await reply.json()).reminders;
+    const ended = due && list.find(r => r.id === due.id && r.due_at === due.due_at && r.state === 'done');
+    setDue(list.find(r => r.state === 'due') || null, ended);
+  } catch { /* the relay is down: nothing to remind */ }
+}
+
+function setDue(next, ended) {
+  if (ended) { const text = ended.done_note || 'Done.'; card('Reminder', text, ''); say(text); }
+  due = next;
+  show('finish', !!due);
+  const stamp = due && due.id + due.due_at;
+  if (due && Date.now() - (told[stamp] || 0) > 5 * 60e3) {  // show it, and again every five minutes until it is done
+    told[stamp] = Date.now();
+    const way = guide(due.place);
+    card('Reminder', due.text, way);
+    say(due.text + (way.startsWith('Showing') ? ` I will show you the way to the ${due.place}.` : ''));
+  }
+  draw();
+}
+
+// ---------------------------------------------------------------- sample room
+function sampleRoom() {
+  const points = [];
+  for (let t = -2; t <= 2; t += 0.12) points.push([t, 4.2], [t, -1.2]);
+  for (let t = -1.2; t <= 4.2; t += 0.12) points.push([-2, t], [2, t]);
+  for (let t = 0; t <= 1; t += 0.12) points.push([0.6 + t, 3.4], [0.6 + t, 4.0], [-1.9, 0.2 + t]);
+  return furnished({ state: 'found', confidence: 1, position: [0, 0, 0], heading_deg: 0, ts: 'sample', job: '', map: { points },
+           waypoints: [{ name: 'pill box', position: [1.2, 3.6, 0] }, { name: 'bathroom door', position: [-1.9, 2.4, 0] },
+                       { name: 'front door', position: [0.4, -1.1, 0] }],
+           seen: [sample.keys] });  // route finding: furnished() adds a table to walk around
+}
+
+function sampleAnswer(question) {  // stand-ins with the wording of the real answers
+  const q = words(question), name = placeFor(question);
+  if (/ keys? /.test(q)) {
+    const [far, bearing] = fromMe(sample.keys.position);
+    return { answer: `Your keys were last seen at ${sample.keys.time} near the ${sample.keys.near}, about ${far.toFixed(1)} metres ${sideOf(bearing)}.`,
+             point: sample.keys, evidence: [] };
+  }
+  if (/ (where|find|way) /.test(q) && name) {
+    const [far, bearing] = fromMe(spots().find(p => p.name === name).position);
+    return { answer: `The ${name} is estimated to be about ${far.toFixed(1)} metres ${sideOf(bearing)}.`, evidence: [] };
+  }
+  if (/ (pills?|pillbox|medication|medicine|tablets) /.test(q))
+    return sample.pills ? { answer: `The pill box was opened at ${sample.pills}. I cannot confirm that the pills were taken.`, evidence: [sample.pills] }
+                        : { answer: 'I have no recent pill box opening recorded today. I cannot confirm whether the pills were taken.', evidence: [] };
+  return { answer: 'I do not have enough information to answer that question.', evidence: [] };
+}
+
+function move(turn, walk) {
+  const who = noisy ? noisy.real : me;  // with noisy photos on, the buttons move the wearer, and the display has to find out
+  who.heading = wrap(who.heading + turn);
+  who.x += Math.sin(who.heading * Math.PI / 180) * walk;
+  who.y += Math.cos(who.heading * Math.PI / 180) * walk;
+  draw();
+}
+
+// <tracker>
+// A port of track.py for the sample room, so the steadying can be seen without a relay. Live, the
+// relay runs track.py itself and this is not used. Keep the two in step: eval/test_track.py feeds
+// both the same fixes and compares the answers (when Node.js is installed).
+const T = { WALK: 1.2, TURN: 120, NOISE_M: 0.35, NOISE_DEG: 20, JITTER_M: 0.15, JITTER_DEG: 8, LOST_AFTER: 3, SILENCE: 30,
+            STEADY_AFTER: 2, KEEP: 5, SHOW: 40, HIDE: 20, CYCLE: 6, MAX_CYCLE: 10,
+            CAL: { bias: 0.617, score: 0.441, agree: 2.654, settling: -1.290, age_s: -0.322, moved_m: -0.553, turned_deg: -0.349 } };
+function makeTracker() {
+  const s = { state: 'lost', position: null, heading_deg: null, at: null, score: 0, run: 0, misses: 0, waiting: null, recent: [],
+              speed: 0, turn: 0, places: {}, showing: false };
+  const turnTo = (a, b) => ((b - a + 180) % 360 + 360) % 360 - 180;
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const good = r => r.kind === 'agree' || r.kind === 'start' || r.kind === 'jump';
+  const percent = f => Math.round(100 / (1 + Math.exp(-Object.keys(T.CAL).reduce((sum, k) => sum + T.CAL[k] * f[k], 0))));
+  const round = (v, n) => Math.round(v * 10 ** n) / 10 ** n;
+  function features(now) {
+    const age = s.at == null ? 0 : Math.max(0, now - s.at);
+    return { bias: 1, score: s.score, agree: s.recent.filter(good).length / T.KEEP, settling: s.state === 'settling' ? 1 : 0,
+             age_s: Math.min(age, 60), moved_m: Math.min(s.speed * age, 5), turned_deg: Math.min(s.turn * age, 180) };
+  }
+  function cycle() {
+    const gaps = s.recent.slice(1).map((r, i) => r.at - s.recent[i].at).filter(g => g > 0).sort((a, b) => a - b);
+    return gaps.length ? Math.max(0.5, Math.min(T.MAX_CYCLE, gaps[Math.floor(gaps.length / 2)])) : T.CYCLE;
+  }
+  function current(now) {
+    const age = s.at == null ? null : round(Math.max(0, now - s.at), 1);
+    const agree = s.recent.filter(good).length;
+    if (s.position == null || now - s.at > T.SILENCE)
+      return { state: 'lost', position: null, heading_deg: null, confidence_pct: 0, next_pct: 0, show: false, agree, of: s.recent.length,
+               age_s: age, waiting: !!s.waiting,
+               waypoints: Object.entries(s.places).map(([name, p]) => ({ name, distance_m: null, bearing_deg: null, position: p.map(v => round(v, 2)) })) };
+    const pct = percent(features(now)), hold = percent(features(Math.max(now, s.at + cycle())));
+    const waypoints = Object.entries(s.places).map(([name, p]) => {
+      const east = p[0] - s.position[0], north = p[1] - s.position[1];
+      return { name, distance_m: round(Math.hypot(east, north), 1), bearing_deg: Math.round(turnTo(s.heading_deg, Math.atan2(east, north) * 180 / Math.PI)),
+               position: p.map(v => round(v, 2)) };
+    });
+    return { state: s.state, position: s.position.map(v => round(v, 2)), heading_deg: Math.round(s.heading_deg), confidence_pct: pct, next_pct: hold,
+             show: s.state === 'steady' && hold >= (s.showing ? T.HIDE : T.SHOW), agree, of: s.recent.length, age_s: age, waiting: !!s.waiting, waypoints };
+  }
+  function stand(pos, head, now, score, run) {
+    Object.assign(s, { position: pos.map(v => round(v, 3)), heading_deg: round(turnTo(0, head), 2), at: now, score, run, misses: 0, waiting: null,
+                       state: run >= T.STEADY_AFTER ? 'steady' : 'settling' });
+  }
+  const note = (now, kind) => { s.recent = [...s.recent, { at: now, kind }].slice(-T.KEEP); };
+  function miss(now, why, keepWaiting) {
+    s.misses += 1;
+    if (!keepWaiting && s.waiting && now - s.waiting.at > T.SILENCE) s.waiting = null;
+    if (s.position != null && s.misses >= T.LOST_AFTER) Object.assign(s, { state: 'lost', position: null, heading_deg: null, at: null, run: 0, speed: 0, turn: 0 });
+    note(now, why);
+  }
+  function places(fix) {
+    if (!Array.isArray(fix.waypoints)) return;
+    const names = new Set();
+    for (const w of fix.waypoints) {
+      if (!w.name || w.position == null) continue;
+      names.add(w.name);
+      const old = s.places[w.name];
+      if (!old) s.places[w.name] = w.position.map(Number);
+      else if (fix.state === 'found') s.places[w.name] = old.map((o, i) => round(o + 0.3 * (w.position[i] - o), 3));
+    }
+    for (const name of Object.keys(s.places)) if (!names.has(name)) delete s.places[name];
+  }
+  function takeIn(fix, now) {
+    places(fix);
+    const score = +fix.confidence || 0;
+    const usable = (fix.state === 'found' || fix.state === 'unsure') && fix.position != null && fix.heading_deg != null;
+    const strong = usable && fix.state === 'found';
+    if (!usable) return miss(now, 'lost');
+    const pos = fix.position.map(Number), head = +fix.heading_deg;
+    if (s.position == null) {
+      if (!strong) return miss(now, 'unsure');
+      stand(pos, head, now, score, 1);
+      return note(now, 'start');
+    }
+    const dt = Math.max(0, now - s.at), d = dist(pos, s.position), dh = Math.abs(turnTo(s.heading_deg, head));
+    const same = d <= T.NOISE_M && dh <= T.NOISE_DEG;
+    const reachable = d <= T.NOISE_M + T.WALK * dt && dh <= T.NOISE_DEG + T.TURN * dt;
+    if (strong && reachable) {
+      if (dt > 0.3) { s.speed = 0.5 * s.speed + 0.5 * d / dt; s.turn = 0.5 * s.turn + 0.5 * dh / dt; }
+      const a = Math.max(0.5, Math.min(1, d / T.JITTER_M)), b = Math.max(0.5, Math.min(1, dh / T.JITTER_DEG));
+      stand(s.position.map((p, i) => p + a * (pos[i] - p)), s.heading_deg + b * turnTo(s.heading_deg, head), now, score, s.run + 1);
+      return note(now, 'agree');
+    }
+    if (!strong && same) {
+      stand(s.position.map((p, i) => p + 0.3 * (pos[i] - p)), s.heading_deg + 0.3 * turnTo(s.heading_deg, head), now, Math.max(score, 0), s.run + 1);
+      return note(now, 'agree');
+    }
+    if (!strong) return miss(now, 'unsure');
+    const w = s.waiting;
+    if (w && dist(pos, w.position) <= T.NOISE_M + T.WALK * Math.max(0, now - w.at)
+          && Math.abs(turnTo(w.heading_deg, head)) <= T.NOISE_DEG + T.TURN * Math.max(0, now - w.at)) {
+      s.speed = s.turn = 0;
+      stand(pos, head, now, score, 2);
+      return note(now, 'jump');
+    }
+    s.waiting = { position: pos, heading_deg: head, at: now };
+    miss(now, 'elsewhere', true);
+  }
+  function update(fix, now) {
+    s.showing = current(now).show;
+    takeIn(fix, now);
+    const out = current(now);
+    s.showing = out.show;
+    return out;
+  }
+  return { update, current };
+}
+// </tracker>
+
+// Sample room with noisy photos: a made-up photo every 2 seconds (live it is about every 6). Most are
+// right give or take a little, some come back lost or unsure, and now and then one is found far away.
+let noisy = null;
+function noisyPhoto() {
+  const real = noisy.real, r = Math.random(), bell = () => Math.random() + Math.random() + Math.random() - 1.5;
+  const now = Date.now() / 1000;
+  let photo, said;
+  if (r < 0.15) {
+    photo = { state: 'lost', confidence: 0.03, position: [3.6 * Math.random() - 1.8, 5 * Math.random() - 1, 0], heading_deg: 360 * Math.random() - 180 };
+    said = 'lost';
+  } else if (r < 0.22) {  // found, but in the far corner of the room: nobody walks there in two seconds
+    photo = { state: 'found', confidence: 0.6, position: [real.x > 0 ? -1.8 : 1.8, real.y > 1.5 ? -1 : 4, 0], heading_deg: wrap(real.heading + 150) };
+    said = 'found, far off';
+  } else {
+    photo = { state: r < 0.30 ? 'unsure' : 'found', confidence: r < 0.30 ? 0.4 : 0.95,
+              position: [real.x + 0.08 * bell(), real.y + 0.08 * bell(), 0], heading_deg: wrap(real.heading + 5 * bell()) };
+    said = photo.state;
+  }
+  photo.waypoints = sampleRoom().waypoints;
+  noisy.raw = photo; noisy.n += 1;
+  stable = noisy.tracker.update(photo, now);
+  if (stable.position) me = { x: stable.position[0], y: stable.position[1], heading: stable.heading_deg };
+  $('note').textContent = `Photo ${noisy.n}: ${said}. Steady answer: ${stable.state}${stable.position ? `, ${stable.confidence_pct}% sure` : ''}`
+    + `${stable.waiting ? ', one odd photo is waiting for a second' : ''}. Red ring: that photo alone. White dot: where you really are.`;
+  draw();
+}
+function setNoisy(on) {
+  if (noisy) { clearInterval(noisy.photos); clearInterval(noisy.clock); }
+  noisy = null; stable = null;
+  $('noisy').classList.toggle('on', on);
+  if (!on) return;
+  noisy = { tracker: makeTracker(), real: { ...me }, raw: null, n: 0 };
+  noisy.photos = setInterval(noisyPhoto, 2000);
+  noisy.clock = setInterval(() => { stable = noisy.tracker.current(Date.now() / 1000); draw(); }, 500);  // the answer gets older between photos
+  noisyPhoto();
+}
+
+// ---------------------------------------------------------------- relay
+async function poll() {
+  if (demo) return;
+  try {
+    const reply = await fetch(api('/where', zone ? `&zone=${zone}` : ''));
+    if (reply.ok) take(await reply.json());
+    else if (!fix) $('note').textContent = 'No position yet. Take a photo of what you see.';
+  } catch { $('note').textContent = 'Cannot reach the relay.'; }
+}
+
+async function send(blob) {
+  if (!zone) { $('note').textContent = 'Record a baseline of the room first (phone page).'; return; }
+  $('note').textContent = 'Working out where you are…';
+  const t0 = Date.now();
+  try {
+    const reply = await fetch(api('/locate', `&zone=${zone}`), { method: 'POST', body: blob });
+    const body = await reply.json();
+    if (!reply.ok) { $('note').textContent = body.error || 'That did not work.'; return; }
+    setNoisy(false); demo = false; show('pad', false); $('demo').classList.remove('on');
+    take(body);
+    const items = (body.items || []).map(i => i.name).join(', ');
+    $('note').textContent = `${body.headline}. ${body.detail} ${items ? `I can see: ${items}. ` : ''}(${((Date.now() - t0) / 1000).toFixed(0)} s)`;
+  } catch { $('note').textContent = 'Cannot reach the relay.'; }
+}
+
+async function zones() {
+  try {
+    const status = await (await fetch(api('/status'))).json();
+    const names = status.zones || [];
+    if (!names.includes(zone)) zone = names[0] || '';
+    $('zone').innerHTML = names.map(n => `<option${n === zone ? ' selected' : ''}>${n}</option>`).join('');
+  } catch { /* the relay is down: the sample room still works */ }
+}
+
+// ---------------------------------------------------------------- controls
+$('targets').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.to) { target = decodeURIComponent(b.dataset.to); draw(); } };
+$('quick').onclick = e => { if (e.target.dataset.q) ask(e.target.dataset.q); };
+$('askgo').onclick = () => ask($('question').value);
+$('question').onkeydown = e => { if (e.key === 'Enter') ask($('question').value); };
+$('display').onclick = () => show('card', false);
+$('finish').onclick = async () => {
+  if (!due) return;
+  if (demo) return setDue(null, { done_note: '' });
+  try { await fetch(api('/reminder', `&id=${due.id}&done=1`), { method: 'POST' }); } catch { /* the next poll shows the truth */ }
+  reminders();
+};
+$('zone').onchange = e => { zone = e.target.value; fixSeen = poseSeen = ''; poll(); };
+$('photo').onchange = e => { if (e.target.files[0]) send(e.target.files[0]); e.target.value = ''; };
+$('noisy').onclick = () => { setNoisy(!noisy); if (!noisy) { $('note').textContent = ''; draw(); } };
+$('demo').onclick = () => {
+  setNoisy(false);
+  demo = !demo; $('demo').classList.toggle('on', demo); show('pad', demo); fixSeen = poseSeen = ''; due = null; show('finish', false);
+  if (demo) take(sampleRoom()); else { fix = null; draw(); poll(); reminders(); }
+};
+$('pad').onclick = e => {
+  const d = e.target.dataset;
+  if (d.turn || d.walk) move(+d.turn || 0, +d.walk || 0);
+  if (d.sample === 'remind') setDue({ id: 'sample', due_at: Date.now(), text: 'Time to take your pills', place: 'pill box' });
+  if (d.sample === 'open') {  // stands in for the sensor on the pill box
+    sample.pills = clock();
+    if (due) setDue(null, { done_note: `The pill box was opened at ${sample.pills}.` });
+    else $('note').textContent = `Sample sensor: the pill box was opened at ${sample.pills}.`;
+  }
+};
+addEventListener('keydown', e => {
+  if (!demo || e.target.tagName === 'INPUT') return;
+  const step = { ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, 0.25], ArrowDown: [0, -0.25] }[e.key];
+  if (step) { e.preventDefault(); move(...step); }
+});
+
+// A stand-in for the glasses' microphone. The browser may send the audio to its maker to turn it into words.
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (Recognition) {
+  show('mic', true);
+  $('mic').onclick = () => {
+    const listen = new Recognition();
+    listen.lang = 'en-GB';
+    listen.onresult = e => ask(e.results[0][0].transcript);
+    listen.onerror = () => { $('note').textContent = 'I did not catch that.'; };
+    listen.onend = () => $('mic').classList.remove('on');
+    $('mic').classList.add('on');
+    try { listen.start(); } catch { $('mic').classList.remove('on'); }
+  };
+}
+
+// Between fixes, a phone's compass keeps the arrow turning with the wearer (needs HTTPS on most phones).
+addEventListener('deviceorientationabsolute', e => {
+  if (e.alpha == null || demo || !fix) return;
+  compass = 360 - e.alpha;  // clockwise from north
+  if (compassAtFix == null) compassAtFix = compass;
+  me.heading = wrap(headingAtFix + compass - compassAtFix);
+  draw();
+});
+
+// A laptop or phone camera (HTTPS or localhost only): send a frame every few seconds.
+if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  show('camera', true);
+  let timer = null;
+  $('camera').onclick = async () => {
+    if (timer) { clearInterval(timer); timer = null; $('video').srcObject.getTracks().forEach(t => t.stop()); $('camera').classList.remove('on'); return; }
+    try {
+      $('video').srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: 1280 } });
+      await $('video').play();
+    } catch { $('note').textContent = 'The camera is not available here.'; return; }
+    $('camera').classList.add('on');
+    let busy = false;
+    const shot = async () => {
+      if (busy) return;
+      busy = true;
+      const canvas = document.createElement('canvas');
+      canvas.width = $('video').videoWidth; canvas.height = $('video').videoHeight;
+      canvas.getContext('2d').drawImage($('video'), 0, 0);
+      await send(await new Promise(done => canvas.toBlob(done, 'image/jpeg', 0.85)));
+      busy = false;
+    };
+    shot(); timer = setInterval(shot, 6000);
+  };
+}
+
+if (demo) { $('demo').classList.add('on'); show('pad', true); take(sampleRoom()); if (query.has('noisy')) setNoisy(true); }
+draw();
+zones().then(poll).then(reminders);  // the position first, so a due reminder can show the way at once
+setInterval(poll, 1500);
+setInterval(reminders, 10000);
+setInterval(() => { if (fix && !demo) draw(); }, 5000);  // keeps "updated N s ago" honest
+</script>
+</body>
+</html>
