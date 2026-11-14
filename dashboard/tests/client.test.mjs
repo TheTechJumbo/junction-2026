@@ -44,3 +44,13 @@ test('fetch transport receives the global receiver required by browser native fe
  }
  const client=new ApiClient({origin,fetchImpl:receiverSensitiveFetch});client.setToken('test-only-token');await client.day('2026-11-14');assert.equal(calls,2);
 });
+
+test('evidence bounds declared and streamed size before creating an image',async()=>{
+ for (const declared of [true,false]) {
+  let cancelled=false;
+  const stream=new ReadableStream({start(controller){controller.enqueue(new Uint8Array(5*1024*1024+1));},cancel(){cancelled=true;}});
+  const headers={'content-type':'image/png'};if(declared)headers['content-length']=String(5*1024*1024+1);
+  const client=new ApiClient({origin,fetchImpl:async()=>new Response(stream,{headers})});client.setToken('test');
+  await assert.rejects(client.evidence('/evidence/test'),/too large/);assert(cancelled);
+ }
+});

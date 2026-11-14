@@ -13,7 +13,10 @@ opening supports only an opening statement. A door opening/closing supports only
 observation, never ingestion or locking. Only configured sensor objects with confidence
 at or above the configured threshold support an answer. Defaults: confidence 1, pillbox
 objects `pillbox`/`pill_box`/`pill box`, door objects `front_door`/`front door`/`door`.
-Wrong objects, vision, voice, null objects, future events and previous local days cannot
+Configured zones default to kitchen for pills and entrance for the front door; customize
+`pillbox_zones` / `door_zones` in RulesConfig for a different installation. Questions
+about other people or explicit historical dates return uncertainty.
+Wrong zones/objects, vision, voice, null objects, future events and previous local days cannot
 support these answers. Freshness is bounded to 24 hours for pills and 12 for doors,
 configurable through `RulesConfig`. Named other doors and unsupported historical questions
 return uncertainty. The latest observation wins, except simultaneous contradictory door

@@ -17,7 +17,7 @@ TZ = "Europe/Helsinki"
 
 def event(id="pills", type="pillbox_open", ts="2026-11-14T08:00:00+02:00", **kwargs):
     return Event(id=id, type=type, ts=ts, source=kwargs.pop("source", "sensor"),
-                 object=kwargs.pop("object", "pillbox"), zone=kwargs.pop("zone", "kitchen"),
+                 object=kwargs.pop("object", "pillbox"), zone=kwargs.pop("zone", "entrance" if type.startswith("door_") else "kitchen"),
                  evidence_url=kwargs.pop("evidence_url", None),
                  confidence=kwargs.pop("confidence", 1), **kwargs)
 

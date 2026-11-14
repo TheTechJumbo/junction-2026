@@ -29,6 +29,8 @@ class OptionalAnswer(Protocol):
 class RulesConfig:
     pillbox_objects: frozenset[str] = frozenset({"pillbox", "pill_box", "pill box"})
     door_objects: frozenset[str] = frozenset({"front_door", "front door", "door"})
+    pillbox_zones: frozenset[str] = frozenset({"kitchen"})
+    door_zones: frozenset[str] = frozenset({"entrance"})
     min_sensor_confidence: float = 1.0
     pills_max_age: timedelta = timedelta(hours=24)
     door_max_age: timedelta = timedelta(hours=12)
@@ -86,8 +88,10 @@ class RulesAnswerEngine:
         )
 
     def _sensor(self, event, types, objects):
+        zones = self.config.pillbox_zones if "pillbox_open" in types else self.config.door_zones
         return (event.source == "sensor" and event.type in types
                 and event.object is not None and _words(event.object) in {_words(o) for o in objects}
+                and _words(event.zone) in {_words(zone) for zone in zones}
                 and event.confidence >= self.config.min_sensor_confidence)
 
     def answer(
@@ -97,9 +101,18 @@ class RulesAnswerEngine:
         tz = ZoneInfo(timezone)
         intent = self.classify(question)
         if intent in {"pills", "door"}:
-            if re.search(r"\b(yesterday|tomorrow|last night|last week)\b", _words(question)):
+            if re.search(
+                r"\b(yesterday|tomorrow|tonight|last|previous|next|ago|monday|tuesday|"
+                r"wednesday|thursday|friday|saturday|sunday|january|february|march|april|"
+                r"may|june|july|august|september|october|november|december)\b"
+                r"|\b\d{1,4}[/.-]\d{1,2}(?:[/.-]\d{1,4})?\b", question, re.I
+            ):
                 return Answer(answer="I can only check today's observations for this question.",
                               evidence=[])
+            if re.search(r"\b(wife|husband|mother|father|dad|mom|mum|partner|son|daughter|"
+                         r"their|his|her|someone|another|other|he|she)\b", _words(question)):
+                return Answer(answer="I cannot identify whose medication or door that question "
+                              "refers to from these observations.", evidence=[])
             selected = self._events(events, now.astimezone(tz).date(), timezone, now)
             if intent == "pills":
                 relevant = [e for e in selected if self._sensor(

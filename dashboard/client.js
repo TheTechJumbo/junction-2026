@@ -40,7 +40,24 @@ export class ApiClient {
     }
     if (image) {
       if (!/^image\/(jpeg|png)(;|$)/i.test(response.headers.get('content-type') || '')) throw new ApiError('The evidence image is unavailable.');
-      return response.blob();
+      const limit = 5 * 1024 * 1024;
+      if (Number(response.headers.get('content-length')) > limit) {
+        await response.body?.cancel();
+        throw new ApiError('The evidence image is too large.');
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new ApiError('The evidence image is unavailable.');
+      const chunks = []; let size = 0;
+      try {
+        for (;;) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > limit) { await reader.cancel(); throw new ApiError('The evidence image is too large.'); }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+      return new Blob(chunks, {type: response.headers.get('content-type').split(';')[0]});
     }
     return response.json();
   }
