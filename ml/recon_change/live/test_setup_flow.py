@@ -53,7 +53,7 @@ def main():
     kitchen = dev_setup.make_room(root, "kitchen", 6)
     link = dev_setup.LocalGateway(canned_fix=True)
     handler = relay.make_handler(link, outer / "evidence-not-used", KEY, None, pick=None)
-    (outer / "evidence-not-used").mkdir()
+    (outer / "evidence-not-used").mkdir(exist_ok=True)  # the relay's day log has made it already
     handler.log_message = lambda *args: None
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()

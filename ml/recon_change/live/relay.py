@@ -967,7 +967,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 remember_items(zone, result, images)
                 # t0: when the photo reached the relay. The steady position ages from the photo, not from the answer.
                 stable = steady(zone, result, t0)
-                log_fix(zone, {**fix, "stable": stable} if stable else fix, result)  # day log (JUN-26): it uses the steady answer
+                # The day log gets the fix itself, not the steady answer. A found fix is right at the moment of its
+                # photo, which is what a diary needs; the steady answer is cautious about the seconds after it and is
+                # rarely "steady" at one photo every 6 s, so visits would go missing. The two were measured apart.
+                log_fix(zone, fix, result)
                 log_sensor_events()
                 return self.send_json(200, {**fix, "age_s": 0.0, "seen": seen_list(zone, fix), "stable": stable})
             headline, detail = in_plain_words(result)
