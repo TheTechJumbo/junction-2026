@@ -72,3 +72,10 @@ $('evidence-image').addEventListener('error',()=>{cleanupEvidence();$('evidence-
 window.addEventListener('offline',()=>{if(!demo){controller?.abort();generation++;$('refresh').disabled=false;$('content').hidden=true;status('You are offline. Reconnect, then refresh to load this day.',true);}});
 window.addEventListener('online',()=>{if(!demo)status('Connection restored. Refresh to load current observations.');});
 load();
+// Installed app: register the service worker (static files only) and offer an Install button
+// where the browser supports it. Opening from the home screen starts in standalone mode.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+let installPrompt;
+window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;$('install').hidden=false;});
+$('install').addEventListener('click',async()=>{ if(!installPrompt)return; installPrompt.prompt(); await installPrompt.userChoice.catch(()=>{}); installPrompt=null; $('install').hidden=true; });
+window.addEventListener('appinstalled',()=>{installPrompt=null;$('install').hidden=true;});

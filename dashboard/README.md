@@ -27,6 +27,21 @@ Authorization only from the same origin; redirects, query parameters, URL creden
 unsupported media, and external URLs are rejected. Browser blob URLs are revoked when
 the evidence dialog closes, the day changes or the session ends.
 
+## Install as an app
+
+The dashboard installs as a phone or desktop app with its own icon that opens full-screen
+(`manifest.json`, `icons/`). Browsers only allow this over HTTPS, or on `127.0.0.1`/`localhost`
+for testing on the same machine.
+
+- Android (Chrome): open `/dashboard/`, then **Install app** in the toolbar or *Add to home screen*.
+- iPhone (Safari): Share, then *Add to Home Screen*.
+- Desktop (Chrome/Edge): the install icon in the address bar, or **Install app**.
+
+`sw.js` caches only the app's own files, so the installed app opens offline and shows its
+offline message. It never caches API responses, evidence images, fixtures, or any request
+that carries the token. The token is still kept in memory only, so the app asks for it each
+time it is opened.
+
 ## Browser checks
 
 Check wide and 390px layouts, keyboard focus, native date picker, Connect dialog submit /
