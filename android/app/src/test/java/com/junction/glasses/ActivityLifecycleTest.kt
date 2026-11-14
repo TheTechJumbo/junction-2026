@@ -111,12 +111,17 @@ class ActivityLifecycleTest {
         assertEquals(listOf("active question"), questions)
     }
 
-    @Test fun pendingPermissionIntentIsClearedByStopAndBackground() {
+    @Test fun pendingPermissionIntentIsClearedByStop() {
         shadowOf(RuntimeEnvironment.getApplication()).denyPermissions(Manifest.permission.RECORD_AUDIO)
         button("Use phone microphone").performClick()
         assertTrue(field("pendingPhoneListen").getBoolean(activity))
         button("Stop").performClick()
         assertFalse(field("pendingPhoneListen").getBoolean(activity))
+        assertTrue(questions.isEmpty())
+    }
+
+    @Test fun pendingPermissionIntentIsClearedByBackground() {
+        shadowOf(RuntimeEnvironment.getApplication()).denyPermissions(Manifest.permission.RECORD_AUDIO)
         button("Use phone microphone").performClick()
         assertTrue(field("pendingPhoneListen").getBoolean(activity))
         background()
