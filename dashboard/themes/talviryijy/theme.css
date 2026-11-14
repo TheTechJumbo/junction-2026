@@ -1,0 +1,785 @@
+/* Talviryijy: a winter rug. The whole page is one ryijy, knotted with the Kaamos courtyard.
+   Fringe at the top and bottom, a snowflake-and-diamond border band, check columns down the sides.
+   Above the roofline the rug is sky and follows the real sky over Helsinki; below it the field is
+   the wall of Anna's house, and the day is knotted into it. Every colour is a wool from the
+   drawings in assets/ (made by source/gen.py). */
+
+/* ---------- Fonts (self-hosted, SIL OFL; see fonts/LICENSE.txt) ---------- */
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 600; font-display: swap; src: url("fonts/barlow-condensed-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 700; font-display: swap; src: url("fonts/barlow-condensed-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Albert Sans"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/albert-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Albert Sans"; font-style: normal; font-weight: 600; font-display: swap; src: url("fonts/albert-sans-latin-600-normal.woff2") format("woff2"); }
+
+/* ---------- Wools, taken from the drawings ---------- */
+:root {
+  --night-sky: #0b1029;   /* top of the sky in scene.svg at night */
+  --blue-hour: #1d2a4a;   /* sky by the roofs at night; the sky in mark.svg */
+  --wall: #141c38;        /* the wall of Anna's house: the field of the rug below the roofline */
+  --wall-far: #1b2547;    /* the houses further back */
+  --glass: #0d1430;       /* unlit windows; the bare backing between warp threads */
+  --slate: #3b4763;       /* tin roofs */
+  --seam: #2c3650;        /* roof seams, chimneys, window frames */
+  --far-city: #26345c;    /* the cathedral dome across the city */
+  --snow: #eef2f6;        /* snow on roofs and sills; the white knots of the border */
+  --snow-shade: #c3cee0;  /* snow in shadow, chimney smoke; the warp and the fringe */
+  --warp: #687391;        /* bare warp over the backing: snow-shade wool on the glass-dark backing */
+  --lamp: #f2b04a;        /* Anna's lamp: the one warm accent (clock, now, primary actions) */
+  --lamp-deep: #d9822b;   /* her curtains, lit from behind */
+  --lamp-hot: #ffe2a6;    /* the bulb */
+  --win-cold: #8fa3c8;    /* the neighbours' lit windows */
+  --dusk-rose: #d99a9e;   /* horizon band at low sun */
+  --dusk-gold: #f0c27e;   /* horizon band by the sun */
+  --sun-disc: #f7d9a0;    /* the low sun */
+  --juniper: #2e4a36;     /* the courtyard spruces; the calm field */
+  --juniper-lit: #5f8a68; /* spruce tips in the lamp light */
+  --indigo: #2c3d6b;      /* border band ground in band.svg */
+  --madder: #9c2f2a;      /* border diamonds in band-notice.svg: only for things to notice */
+  --madder-lit: #e07a6c;  /* madder where it must read on the dark field */
+  /* the sky by daylight (the few November hours when it is pale) */
+  --day-sky: #8fb0d4;
+  --day-haze: #c3d5e8;
+  --day-snowlight: #e7eef5;
+  --day-field: #dfe6ee;   /* the field by day: snow light on the wall */
+  --day-ink: #1d2a4a;
+
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", "Helvetica Neue", sans-serif;
+  --text: "Albert Sans", "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --theme-color: #0b1029;
+
+  --k: 7px;          /* one knot of the field and the scene on a phone */
+  --bk: 4px;         /* one knot of the border band */
+  --side: calc(var(--bk) * 3);
+  --pad: 14px;       /* inside the side columns: with them, a 26px gutter */
+  --wrap: 76rem;
+  --top-h: 60px;
+  --step: 6px;
+  --steps: polygon(0 calc(var(--step) * 2), var(--step) calc(var(--step) * 2), var(--step) var(--step), calc(var(--step) * 2) var(--step), calc(var(--step) * 2) 0,
+    calc(100% - var(--step) * 2) 0, calc(100% - var(--step) * 2) var(--step), calc(100% - var(--step)) var(--step), calc(100% - var(--step)) calc(var(--step) * 2), 100% calc(var(--step) * 2),
+    100% calc(100% - var(--step) * 2), calc(100% - var(--step)) calc(100% - var(--step) * 2), calc(100% - var(--step)) calc(100% - var(--step)), calc(100% - var(--step) * 2) calc(100% - var(--step)), calc(100% - var(--step) * 2) 100%,
+    calc(var(--step) * 2) 100%, calc(var(--step) * 2) calc(100% - var(--step)), var(--step) calc(100% - var(--step)), var(--step) calc(100% - var(--step) * 2), 0 calc(100% - var(--step) * 2));
+
+  /* how much of today is knotted: whole half-hour columns */
+  --woven: var(--now, 1);
+}
+@supports (width: round(down, 1.5px, 1px)) {
+  :root { --woven: calc(round(down, var(--now, 1) * 48, 1) / 48); }
+}
+:root[data-day-state="past"] { --woven: 1; }
+:root[data-day-state="future"] { --woven: 0; }
+
+/* Colours that follow the sky, registered so the whole rug fades from one light to the next */
+@property --sky-top { syntax: "<color>"; inherits: true; initial-value: #0b1029; }
+@property --sky-mid { syntax: "<color>"; inherits: true; initial-value: #16204a; }
+@property --sky-low { syntax: "<color>"; inherits: true; initial-value: #1d2a4a; }
+@property --field { syntax: "<color>"; inherits: true; initial-value: #141c38; }
+@property --floor { syntax: "<color>"; inherits: true; initial-value: #070a1a; }
+@property --ink { syntax: "<color>"; inherits: true; initial-value: #eef2f6; }
+@property --ink-soft { syntax: "<color>"; inherits: true; initial-value: #b8c3d8; }
+@property --sky-ink { syntax: "<color>"; inherits: true; initial-value: #eef2f6; }
+@property --sky-ink-soft { syntax: "<color>"; inherits: true; initial-value: #c3cee0; }
+@property --stitch { syntax: "<color>"; inherits: true; initial-value: #5b6888; }
+@property --pile-edge { syntax: "<color>"; inherits: true; initial-value: rgb(0 0 0 / .2); }
+@property --glass-c { syntax: "<color>"; inherits: true; initial-value: #0d1430; }
+
+/* dark: the normal state in November */
+:root {
+  --sky-top: var(--night-sky);
+  --sky-mid: #16204a;
+  --sky-low: var(--blue-hour);
+  --field: var(--wall);
+  --floor: #070a1a;
+  --ink: var(--snow);
+  --ink-soft: #b8c3d8;
+  --sky-ink: var(--snow);
+  --sky-ink-soft: var(--snow-shade);
+  --stitch: #5b6888;
+  --pile-edge: rgb(0 0 0 / .2);
+  --glass-c: var(--glass);
+  --now-ink: var(--lamp);
+  --notice-ink: var(--madder-lit);
+  --focus: var(--lamp);
+  --text-glow: rgb(11 16 41 / .6);
+  color-scheme: dark;
+  transition: --sky-top 1.8s ease, --sky-mid 1.8s ease, --sky-low 1.8s ease, --field 1.8s ease, --floor 1.8s ease,
+    --ink 1.8s ease, --ink-soft 1.8s ease, --sky-ink 1.8s ease, --sky-ink-soft 1.8s ease, --stitch 1.8s ease,
+    --pile-edge 1.8s ease, --glass-c 1.8s ease;
+}
+:root[data-sky="twilight"], :root[data-sky="low-sun"] { --text-glow: rgb(16 24 56 / .85); }
+:root[data-sky="twilight"] {
+  --theme-color: #141c45;
+  --sky-top: #141c45;
+  --sky-mid: #2b3668;
+  --sky-low: #5a5683;
+  --field: #161f3d;
+}
+:root[data-sky="low-sun"] {
+  --theme-color: #2b4677;
+  --sky-top: #2b4677;
+  --sky-mid: #4d6699;
+  --sky-low: #b88f9c;
+  --field: #19223f;
+  --glass-c: #2a3558;
+}
+:root[data-sky="day"] {
+  --theme-color: #8fb0d4;
+  --sky-top: var(--day-sky);
+  --sky-mid: var(--day-haze);
+  --sky-low: var(--day-snowlight);
+  --field: var(--day-field);
+  --floor: #c4cfdc;
+  --ink: var(--day-ink);
+  --ink-soft: #46526e;
+  --sky-ink: var(--day-ink);
+  --sky-ink-soft: #33405f;
+  --stitch: #8d9ab3;
+  --pile-edge: rgb(29 42 74 / .09);
+  --glass-c: #b5c6da;
+  --now-ink: #8a5300;
+  --notice-ink: var(--madder);
+  --focus: var(--indigo);
+  --text-glow: transparent;
+  color-scheme: light;
+}
+
+/* ---------- The rug ---------- */
+html { background: var(--floor); }
+body {
+  background: var(--floor);
+  color: var(--ink);
+  font-family: var(--text);
+  font-size: 1rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { font-family: var(--display); font-weight: 700; margin: 0; }
+p { margin: 0; }
+time, .count, .question-count, .hero-stats strong, .sun-row time { font-variant-numeric: tabular-nums; }
+::selection { background: var(--lamp); color: var(--blue-hour); }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+
+/* knotted fringe hanging off the top and bottom edges */
+body::before, body::after {
+  content: ""; display: block; max-width: 100rem; margin: 0 auto;
+  --thread: repeating-linear-gradient(90deg, transparent 0 1px, var(--snow-shade) 1px 3px, transparent 3px 4px, var(--snow-shade) 4px 6px, transparent 6px 9px);
+  --knots: repeating-linear-gradient(90deg, transparent 0 1px, var(--indigo) 1px 7px, transparent 7px 9px);
+}
+body::before {
+  height: calc(18px + env(safe-area-inset-top));
+  background: var(--thread) 0 0 / 100% calc(100% - 5px) no-repeat, var(--knots) 0 100% / 100% 5px no-repeat;
+}
+body::after {
+  height: calc(18px + env(safe-area-inset-bottom));
+  background: var(--knots) 0 0 / 100% 5px no-repeat, var(--thread) 0 5px / 100% calc(100% - 5px) no-repeat;
+}
+:root[data-mood="notice"] body::before, :root[data-mood="notice"] body::after {
+  --knots: repeating-linear-gradient(90deg, transparent 0 1px, var(--madder) 1px 7px, transparent 7px 9px);
+}
+
+.app {
+  position: relative; max-width: 100rem; margin: 0 auto;
+  padding: 0 var(--side);
+  --check: linear-gradient(to bottom, var(--snow) 50%, var(--indigo) 0);
+  background:
+    var(--check) var(--bk) 0 / var(--bk) calc(var(--bk) * 2) repeat-y,
+    var(--check) calc(100% - var(--bk)) var(--bk) / var(--bk) calc(var(--bk) * 2) repeat-y,
+    linear-gradient(var(--indigo), var(--indigo)) 0 0 / var(--side) 100% no-repeat,
+    linear-gradient(var(--indigo), var(--indigo)) 100% 0 / var(--side) 100% no-repeat,
+    radial-gradient(circle at 45% 40%, transparent 52%, var(--pile-edge)) 0 0 / var(--k) var(--k),
+    var(--field);
+}
+/* the border band: snowflake stars and stepped diamonds between two knot-check rows */
+.app::before, .app::after {
+  content: ""; display: block; height: calc(var(--bk) * 11); margin: 0 calc(var(--side) * -1);
+  background: url("assets/band.svg") 50% 0 / calc(var(--bk) * 18) calc(var(--bk) * 11) repeat-x;
+  transition: background-image .6s ease;
+}
+:root[data-mood="notice"] .app::before, :root[data-mood="notice"] .app::after { background-image: url("assets/band-notice.svg"); }
+
+.skip { background: var(--lamp); color: var(--blue-hour); font-family: var(--display); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: .6rem 1rem; text-decoration: none; }
+
+/* ---------- Buttons ---------- */
+.primary, .ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  min-height: 44px; padding: .4rem 1rem;
+  border-radius: 0; font-family: var(--display); font-weight: 700; font-size: 1.0625rem; letter-spacing: .06em; text-transform: uppercase; line-height: 1;
+  transition: background-color .2s, color .2s, border-color .2s;
+}
+.primary { background: var(--lamp); color: var(--blue-hour); border: 2px solid var(--lamp); }
+.primary:hover:not(:disabled) { background: var(--lamp-hot); border-color: var(--lamp-hot); }
+.ghost { background: transparent; color: inherit; border: 2px solid currentColor; }
+.ghost:hover:not(:disabled) { background: color-mix(in srgb, currentColor 12%, transparent); }
+.ghost:disabled, .primary:disabled { opacity: .42; }
+.icon-button { width: 44px; padding: 0; }
+.primary .icon, .ghost .icon { width: 20px; height: 20px; }
+.link-button {
+  background: none; border: 0; padding: 2px 0; color: var(--now-ink);
+  font-weight: 600; font-size: .9375rem; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px;
+}
+
+/* ---------- Top bar: knotted into the sky ---------- */
+.topbar {
+  position: relative; z-index: 3;
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  height: var(--top-h);
+  padding: 0 max(var(--pad), env(safe-area-inset-right)) 0 max(var(--pad), env(safe-area-inset-left));
+  color: var(--sky-ink);
+}
+.brand { display: inline-flex; align-items: center; gap: .6rem; color: inherit; text-decoration: none; min-width: 0; }
+.brand-mark { width: 36px; height: 36px; flex: none; }
+.brand-name { font-family: var(--display); font-weight: 700; font-size: 1.75rem; letter-spacing: .02em; line-height: 1; }
+.brand-caption {
+  font-family: var(--display); font-weight: 600; font-size: .9375rem; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--sky-ink-soft); padding-left: .7rem; border-left: 2px dotted color-mix(in srgb, var(--sky-ink) 45%, transparent);
+}
+.topbar-actions { display: flex; align-items: center; gap: .5rem; }
+.connection {
+  display: inline-flex; align-items: center; gap: .45rem; margin-right: .25rem;
+  font-family: var(--display); font-weight: 600; font-size: .9375rem; letter-spacing: .1em; text-transform: uppercase; color: var(--sky-ink-soft);
+}
+.connection::before { content: ""; width: 8px; height: 8px; border: 2px solid currentColor; }
+:root[data-mode="live"] .connection::before { background: var(--lamp); border-color: var(--lamp); }
+:root[data-mode="demo"] .connection::before { border-style: dotted; }
+.topbar .ghost { min-height: 42px; }
+
+/* ---------- Hero: the picture field, the courtyard under the real sky ---------- */
+.hero {
+  --scene-w: max(100%, 70rem);
+  position: relative; isolation: isolate; overflow: hidden;
+  display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 1.4rem;
+  margin-top: calc(var(--top-h) * -1);
+  padding: calc(var(--top-h) + 1rem) var(--pad) calc(var(--scene-w) * 40 / 160);
+  color: var(--sky-ink);
+  background: var(--sky-top);
+}
+.hero-scene { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.hero-scene svg {
+  position: absolute; bottom: 0; max-width: none;
+  width: var(--scene-w); height: auto; aspect-ratio: 1;
+  left: clamp(100% - var(--scene-w), 50% - var(--scene-w) * .64, 0px);
+}
+/* the ground line under the picture: two rows of knot check */
+.hero::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--bk) * 2);
+  background: conic-gradient(var(--snow) 25%, var(--indigo) 0 50%, var(--snow) 0 75%, var(--indigo) 0) 0 0 / calc(var(--bk) * 2) calc(var(--bk) * 2);
+}
+.hero-copy { max-width: 40rem; min-width: 0; text-shadow: 0 1px 12px var(--text-glow); }
+.hero-eyebrow {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0 .1rem; margin-bottom: .8rem;
+  font-family: var(--display); font-weight: 600; font-size: 1rem; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--sky-ink-soft);
+}
+.hero-eyebrow .sep { margin: 0 .3em; opacity: .7; }
+.hero-eyebrow #clock { color: var(--now-ink); font-weight: 700; }
+:root[data-sky="day"] .hero-eyebrow #clock, :root[data-sky="low-sun"] .hero-eyebrow #clock { color: var(--sky-ink); }
+.hero h1 {
+  font-size: clamp(2.9rem, 6vw + 1.3rem, 5.6rem); line-height: .94; letter-spacing: .002em;
+  max-width: 12ch; text-wrap: balance; transition: opacity .4s ease;
+}
+/* a day to notice: one madder knot-diamond before the headline, like a window lit red */
+:root[data-mood="notice"] .hero h1::before {
+  content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .22em; vertical-align: .08em;
+  background: var(--madder); box-shadow: inset 0 0 0 .08em var(--madder-lit);
+  clip-path: polygon(40% 0, 60% 0, 60% 20%, 80% 20%, 80% 40%, 100% 40%, 100% 60%, 80% 60%, 80% 80%, 60% 80%, 60% 100%, 40% 100%, 40% 80%, 20% 80%, 20% 60%, 0 60%, 0 40%, 20% 40%, 20% 20%, 40% 20%);
+}
+.hero-lede { margin-top: .9rem; font-size: 1.125rem; line-height: 1.5; max-width: 40ch; }
+.hero-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 1.4rem; max-width: 27rem; text-shadow: none; }
+.hero-stats li {
+  display: flex; flex-direction: column; gap: 2px; padding: .65rem .75rem .55rem;
+  background: var(--snow); color: var(--day-ink); clip-path: var(--steps);
+}
+.hero-stats [data-stat="alerts"] { background: var(--juniper); color: var(--snow); transition: background-color .6s; }
+:root[data-mood="notice"] .hero-stats [data-stat="alerts"] { background: var(--madder); }
+:root[data-mood="unknown"] .hero-stats li { background: transparent; color: var(--sky-ink-soft); clip-path: none; outline: 2px dashed currentColor; outline-offset: -2px; }
+.hero-stats strong { font-family: var(--display); font-weight: 700; font-size: 2.6rem; line-height: .9; }
+.hero-stats span { font-family: var(--display); font-weight: 600; font-size: 1rem; letter-spacing: .06em; text-transform: uppercase; }
+:root[data-mode="disconnected"] .hero-stats { display: none; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.6rem; text-shadow: none; }
+.hero-actions .primary, .hero-actions .ghost { min-height: 50px; padding: .5rem 1.25rem; font-size: 1.125rem; }
+.hero-actions .ghost { background: color-mix(in srgb, var(--sky-top) 55%, transparent); }
+
+/* The sun card: sunrise and sunset, and today's light as one row of 48 knots,
+   knotted up to now with the shuttle at the weaving edge */
+.sun-card {
+  position: relative; align-self: start;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .3rem 1.4rem;
+  font-size: .9375rem; color: var(--sky-ink-soft); text-shadow: 0 1px 10px var(--text-glow);
+}
+.sun-row { display: inline-flex; align-items: center; gap: .45rem; }
+.sun-row .icon { width: 20px; height: 20px; color: var(--dusk-gold); }
+.sun-row:nth-child(2) .icon { color: var(--snow-shade); }
+:root[data-sky="day"] .sun-row .icon, :root[data-sky="low-sun"] .sun-row .icon { color: var(--sky-ink); }
+.sun-row span { font-family: var(--display); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+.sun-row time { font-family: var(--display); font-weight: 700; font-size: 1.375rem; color: var(--sky-ink); line-height: 1; }
+.sun-length { grid-column: 1 / -1; }
+.sun-card::after {
+  content: ""; grid-column: 1 / -1; height: 14px; margin: .35rem 0 .2rem; width: 100%; min-width: 15rem;
+  --rise: var(--sunrise, .34); --set: var(--sunset, .66);
+  background:
+    repeating-linear-gradient(90deg, transparent 0 calc(100% / 48 - 1px), rgb(13 20 48 / .55) 0 calc(100% / 48)),
+    repeating-linear-gradient(90deg, var(--glass) 0 1px, var(--warp) 1px 2px, var(--glass) 2px calc(100% / 48)) 100% 0 / calc((1 - var(--woven)) * 100%) 100% no-repeat,
+    linear-gradient(90deg, var(--blue-hour) calc(var(--rise) * 100%), var(--dusk-rose) 0 calc(var(--rise) * 100% + 100% / 48),
+      var(--dusk-gold) 0 calc(var(--rise) * 100% + 200% / 48), var(--day-haze) 0 calc(var(--set) * 100% - 200% / 48),
+      var(--dusk-gold) 0 calc(var(--set) * 100% - 100% / 48), var(--dusk-rose) 0 calc(var(--set) * 100%), var(--blue-hour) 0);
+  box-shadow: 0 0 0 2px var(--glass);
+}
+.sun-card::before {
+  content: ""; position: absolute; bottom: calc(.2rem - 6px); width: 6px; height: 26px; z-index: 1;
+  left: calc(var(--woven) * (100% - 0px) - 3px);
+  background: var(--lamp); box-shadow: 0 0 0 2px var(--glass);
+  clip-path: polygon(33% 0, 67% 0, 67% 15%, 100% 15%, 100% 85%, 67% 85%, 67% 100%, 33% 100%, 33% 85%, 0 85%, 0 15%, 33% 15%);
+  transition: left 1.2s ease;
+}
+:root:not([data-day-state="today"]) .sun-card::before { display: none; }
+
+/* ---------- The scene, lit by the real sky ---------- */
+.tr-scene * { transition: opacity 1.8s ease, fill 1.8s ease; }
+.tr-sky-0 { fill: var(--sky-top); }
+.tr-sky-1 { fill: color-mix(in oklab, var(--sky-top), var(--sky-mid)); }
+.tr-sky-2 { fill: var(--sky-mid); }
+.tr-sky-3 { fill: color-mix(in oklab, var(--sky-mid) 67%, var(--sky-low)); }
+.tr-sky-4 { fill: color-mix(in oklab, var(--sky-mid) 33%, var(--sky-low)); }
+.tr-sky-5 { fill: var(--sky-low); }
+.tr-win { fill: var(--glass-c); }
+[data-daypart="evening"] .tr-win-late, [data-daypart="night"] .tr-win-late,
+[data-daypart="morning"]:not([data-sky="day"]) .tr-win-early,
+[data-sky="twilight"] .tr-win-early { fill: var(--win-cold); }
+.tr-pile { opacity: .9; }
+
+.tr-stars, .tr-moon { opacity: 1; }
+[data-sky="twilight"] .tr-stars { opacity: .45; }
+[data-sky="twilight"] .tr-moon { opacity: .75; }
+[data-sky="low-sun"] .tr-stars, [data-sky="day"] .tr-stars, [data-sky="low-sun"] .tr-moon, [data-sky="day"] .tr-moon { opacity: 0; }
+.tr-glow-dusk { opacity: .12; }
+[data-sky="twilight"] .tr-glow-dusk { opacity: .6; }
+[data-sky="low-sun"] .tr-glow-dusk { opacity: .95; }
+[data-sky="day"] .tr-glow-dusk { opacity: .18; }
+.tr-glow-day { opacity: 0; }
+[data-sky="day"] .tr-glow-day { opacity: .65; }
+
+/* The sun follows its shallow November arc, one whole knot at a time. On a phone the picture is
+   cropped round Anna's window and the words fill the sky, so the sun keeps low over the cathedral,
+   to the left of her house. */
+.tr-sun {
+  --sx: calc(760px + var(--sun-progress, 0) * 120px);
+  --sy: calc(1410px - var(--sun-altitude, 0) * 160px);
+  opacity: 0; transform: translate(var(--sx), var(--sy));
+  transition: opacity 1.8s ease, transform 2s steps(6);
+}
+@supports (width: round(nearest, 1.5px, 1px)) {
+  .tr-sun { transform: translate(round(nearest, var(--sx), 10px), round(nearest, var(--sy), 10px)); }
+}
+[data-sky="low-sun"] .tr-sun, [data-sky="day"] .tr-sun { opacity: 1; }
+.tr-moon { transform: translate(-400px, 130px); }
+.tr-stars-wide { display: none; }
+
+/* Anna's window: the lamp is always on; on a day to notice it glows further out */
+.tr-halo { opacity: .9; }
+.tr-halo-4 { opacity: 0; }
+[data-sky="day"] .tr-halo { opacity: .4; }
+[data-mood="notice"] .tr-halo { opacity: 1; }
+[data-mood="notice"] .tr-halo-4 { opacity: .45; }
+[data-mood="notice"] .tr-halo-1 { opacity: .9; }
+[data-mood="notice"] .tr-halo-2 { opacity: .75; }
+
+/* gentle loops */
+@keyframes tr-breathe { from { opacity: .62; } to { opacity: 1; } }
+@keyframes tr-fall {
+  0% { transform: translate(0, -40px); opacity: 0; }
+  12% { opacity: .95; }
+  85% { opacity: .95; }
+  100% { transform: translate(30px, 260px); opacity: 0; }
+}
+@keyframes tr-smoke {
+  0% { transform: translate(0, 0); opacity: 0; }
+  30% { opacity: .55; }
+  100% { transform: translate(20px, -60px); opacity: 0; }
+}
+@keyframes tr-twinkle { from { opacity: 1; } to { opacity: .25; } }
+.tr-halo { animation: tr-breathe 7s ease-in-out infinite alternate; }
+[data-mood="notice"] .tr-halo { animation-duration: 4s; }
+.tr-flake { animation: tr-fall 16s linear infinite; }
+.tr-flake-2 { animation-duration: 20s; animation-delay: -7s; }
+.tr-flake-3 { animation-duration: 14s; animation-delay: -3s; }
+.tr-flake-4 { animation-duration: 22s; animation-delay: -12s; }
+.tr-flake-5 { animation-duration: 18s; animation-delay: -9s; }
+.tr-flake-6 { animation-duration: 25s; animation-delay: -16s; }
+.tr-puff { animation: tr-smoke 8s steps(6) infinite; opacity: 0; }
+.tr-puff-2 { animation-delay: -2s; }
+.tr-puff-3 { animation-delay: -4s; }
+.tr-puff-4 { animation-delay: -6s; }
+.tr-twinkle { animation: tr-twinkle 3.5s steps(3) infinite alternate; }
+
+/* ---------- Day bar ---------- */
+.day-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+  max-width: var(--wrap); margin: 0 auto; padding: 1.25rem var(--pad) .75rem;
+}
+.day-field { display: flex; align-items: center; gap: .5rem; }
+.day-field label { font-family: var(--display); font-weight: 600; font-size: .9375rem; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-soft); }
+.day-field input {
+  min-height: 44px; padding: .3rem .6rem; border-radius: 0;
+  background: transparent; color: var(--ink); border: 2px solid var(--ink);
+  font-family: var(--display); font-weight: 700; font-size: 1.125rem; letter-spacing: .04em; font-variant-numeric: tabular-nums;
+}
+.day-field input:disabled { opacity: .75; }
+.day-name { font-family: var(--display); font-weight: 700; font-size: 1.2rem; }
+.day-nav-spacer { flex: 1 1 100%; height: 0; }
+.mode-label {
+  font-family: var(--display); font-weight: 600; font-size: .9375rem; letter-spacing: .1em; text-transform: uppercase;
+  padding: .45rem .7rem; border: 2px dashed var(--stitch); color: var(--ink-soft);
+}
+:root[data-mode="demo"] .mode-label { color: var(--ink); border-color: var(--now-ink); }
+:root[data-mode="disconnected"] .mode-label { border-color: transparent; padding-left: 0; }
+
+.status {
+  display: flex; gap: .7rem; align-items: baseline;
+  max-width: var(--wrap); margin: 0 auto .5rem; padding: 0 var(--pad);
+  font-size: .9375rem; color: var(--ink-soft);
+}
+.status:empty { display: none; }
+.status::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--lamp); transform: translateY(.05rem); }
+.status.error { color: var(--ink); font-weight: 600; }
+.status.error::before { background: var(--madder); box-shadow: 0 0 0 2px var(--madder-lit); }
+
+/* ---------- Content: the day, knotted into the field ---------- */
+.content { max-width: var(--wrap); margin: 0 auto; padding: 1rem var(--pad) 1rem; display: grid; gap: 2rem; }
+.panel { position: relative; min-width: 0; padding: 1.15rem 1.1rem 1.3rem; --chk: var(--stitch); }
+.panel-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .25rem 1rem;
+  padding-bottom: .9rem; margin-bottom: .9rem;
+  background: conic-gradient(var(--chk) 25%, transparent 0 50%, var(--chk) 0 75%, transparent 0) 0 100% / 8px 8px repeat-x;
+}
+.panel h2 { font-size: 1.75rem; line-height: 1; letter-spacing: .01em; }
+.panel-note { font-size: .9375rem; color: var(--ink-soft); max-width: 60ch; }
+.panel > .panel-note { margin: -.2rem 0 1rem; }
+.count { font-family: var(--display); font-weight: 700; font-size: 1rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft); }
+
+/* filled panels are flat fields of wool with stepped corners */
+.attention, .questions, .summary { clip-path: var(--steps); }
+.attention {
+  background: var(--juniper); color: var(--snow);
+  --ink: var(--snow); --ink-soft: #cfdccf; --chk: color-mix(in srgb, var(--snow) 40%, var(--juniper)); --focus: var(--lamp); --now-ink: var(--lamp-hot);
+  transition: background-color .6s;
+}
+:root[data-mood="notice"] .attention { background: var(--madder); --ink-soft: #f3d6d1; --chk: color-mix(in srgb, var(--snow) 45%, var(--madder)); }
+.questions {
+  background: var(--indigo); color: var(--snow);
+  --ink: var(--snow); --ink-soft: #c8d1e4; --chk: color-mix(in srgb, var(--snow) 40%, var(--indigo)); --focus: var(--lamp); --now-ink: var(--lamp-hot);
+}
+.summary {
+  background: var(--snow); color: var(--day-ink);
+  --ink: var(--day-ink); --ink-soft: #46526e; --chk: color-mix(in srgb, var(--indigo) 55%, var(--snow)); --focus: var(--indigo); --now-ink: #8a5300;
+}
+/* open panels: running-stitch edges on the field */
+.timeline, .home { border: 2px dashed var(--stitch); }
+.rhythm { padding: 0; }
+
+/* ---------- Rhythm of the day: a runner knotted on the same loom ---------- */
+.rhythm-track { --lane: 26px; --head: 26px; padding: var(--head) 0 30px; margin-top: .4rem; }
+.rhythm-parts { position: absolute; top: 0; left: 0; right: 0; height: 22px; display: flex; }
+.rhythm-parts span {
+  flex: 1; padding-left: 5px; border-left: 2px solid var(--stitch); overflow: hidden; white-space: nowrap;
+  font-family: var(--display); font-weight: 600; font-size: .875rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft);
+}
+[data-day-state="today"][data-daypart="night"] .rhythm-parts [data-part="night"],
+[data-day-state="today"][data-daypart="morning"] .rhythm-parts [data-part="morning"],
+[data-day-state="today"][data-daypart="afternoon"] .rhythm-parts [data-part="afternoon"],
+[data-day-state="today"][data-daypart="evening"] .rhythm-parts [data-part="evening"] { color: var(--now-ink); border-left-color: var(--now-ink); }
+/* night knots */
+.rhythm-track::before {
+  content: ""; position: absolute; left: 0; right: 0; top: var(--head); height: calc(var(--lane) * 4);
+  background:
+    radial-gradient(circle, var(--snow) 0 1.5px, transparent 2px) 3% 30% / 9% 50% no-repeat,
+    linear-gradient(var(--snow), var(--snow)) 7.3% 72% / 3px 3px no-repeat,
+    linear-gradient(var(--snow), var(--snow)) 14.6% 22% / 3px 3px no-repeat,
+    linear-gradient(var(--snow), var(--snow)) 22.9% 60% / 3px 3px no-repeat,
+    linear-gradient(var(--snow), var(--snow)) 80.2% 30% / 3px 3px no-repeat,
+    linear-gradient(var(--snow), var(--snow)) 89.6% 78% / 3px 3px no-repeat,
+    linear-gradient(var(--snow), var(--snow)) 95.8% 18% / 3px 3px no-repeat,
+    var(--blue-hour);
+  box-shadow: 0 0 0 3px var(--glass);
+}
+/* daylight: knotted from sunrise to sunset, rose and gold at each end */
+.rhythm-daylight {
+  position: absolute; top: var(--head); height: calc(var(--lane) * 4);
+  left: calc(var(--sunrise, .34) * 100%); width: calc((var(--sunset, .66) - var(--sunrise, .34)) * 100%);
+  background: linear-gradient(90deg, var(--dusk-rose) 0 6%, var(--dusk-gold) 0 12%, var(--day-haze) 0 88%, var(--dusk-gold) 0 94%, var(--dusk-rose) 0);
+}
+/* the rest of today is bare warp, not yet knotted */
+.rhythm-track::after {
+  content: ""; position: absolute; top: var(--head); height: calc(var(--lane) * 4); z-index: 1;
+  left: calc(var(--woven) * 100%); right: 0;
+  background: repeating-linear-gradient(90deg, var(--glass) 0 2px, var(--warp) 2px 4px, var(--glass) 4px 7px);
+  transition: left 1.2s ease;
+}
+.rhythm-marks {
+  position: relative; z-index: 2; height: calc(var(--lane) * 4);
+  background:
+    repeating-linear-gradient(90deg, transparent 0 calc(100% / 24 - 2px), rgb(13 20 48 / .7) 0 calc(100% / 24)),
+    repeating-linear-gradient(180deg, transparent 0 calc(var(--lane) - 2px), rgb(13 20 48 / .7) 0 var(--lane)),
+    radial-gradient(circle at 45% 40%, transparent 50%, rgb(0 0 0 / .2)) 0 0 / calc(100% / 48) calc(var(--lane) / 3);
+}
+.mark {
+  position: absolute; top: 0; z-index: 1;
+  left: calc(var(--at) * 100%); width: calc(var(--lane) - 4px); height: calc(var(--lane) - 6px);
+  translate: -50% 2px;
+  display: grid; place-items: center;
+  background: var(--snow); color: var(--blue-hour);
+  box-shadow: 0 0 0 2px var(--glass);
+  animation: tr-knot 280ms steps(4) backwards; animation-delay: calc(var(--at) * 300ms);
+}
+.mark .icon { width: calc(var(--lane) - 12px); height: calc(var(--lane) - 12px); }
+.mark[data-kind="pills"] { top: var(--lane); }
+.mark[data-kind="vision"], .mark[data-kind="other"] { top: calc(var(--lane) * 2); background: var(--win-cold); }
+.mark[data-kind="question"] { top: calc(var(--lane) * 3); background: var(--indigo); color: var(--snow); box-shadow: 0 0 0 2px var(--glass), inset 0 0 0 2px var(--snow); }
+.mark[data-flag="alert"] { background: var(--madder); color: var(--snow); box-shadow: 0 0 0 2px var(--glass), 0 0 0 4px var(--snow); z-index: 2; }
+.mark-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@keyframes tr-knot { from { scale: 0; } }
+/* now: the shuttle at the weaving edge */
+.rhythm-now {
+  position: absolute; z-index: 3; top: calc(var(--head) - 8px); height: calc(var(--lane) * 4 + 14px);
+  left: calc(var(--woven) * 100%); width: 4px; translate: -2px 0;
+  background: var(--lamp); box-shadow: 0 0 0 2px var(--glass);
+  transition: left 1.2s ease;
+}
+.rhythm-now::before {
+  content: ""; position: absolute; left: 50%; top: 30%; width: 12px; height: 34px; translate: -50% 0;
+  background: var(--lamp); box-shadow: 0 0 0 2px var(--glass);
+  clip-path: polygon(33% 0, 67% 0, 67% 12%, 100% 12%, 100% 88%, 67% 88%, 67% 100%, 33% 100%, 33% 88%, 0 88%, 0 12%, 33% 12%);
+  animation: tr-shuttle 16s ease-in-out infinite alternate;
+}
+@keyframes tr-shuttle { from { translate: -50% -14px; } to { translate: -50% 26px; } }
+.rhythm-now span {
+  position: absolute; top: 100%; left: 50%; translate: -50% 2px;
+  background: var(--lamp); color: var(--blue-hour); padding: 1px 6px;
+  font-family: var(--display); font-weight: 700; font-size: .8125rem; letter-spacing: .1em; text-transform: uppercase;
+}
+:root:not([data-day-state="today"]) .rhythm-now, :root:not([data-day-state="today"]) .rhythm-track::after { display: none; }
+.rhythm-hours { position: absolute; left: 0; right: 0; bottom: 0; height: 20px; }
+.rhythm-hours span {
+  position: absolute; top: 0; translate: -50% 0;
+  font-family: var(--display); font-weight: 600; font-size: .875rem; color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
+.rhythm-hours span:nth-child(1) { left: 0; translate: 0 0; }
+.rhythm-hours span:nth-child(2) { left: 25%; }
+.rhythm-hours span:nth-child(3) { left: 50%; }
+.rhythm-hours span:nth-child(4) { left: 75%; }
+.rhythm-hours span:nth-child(5) { left: 100%; translate: -100% 0; }
+
+/* ---------- The board ---------- */
+.board { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.6rem; }
+
+/* Things to notice */
+.alerts { display: grid; gap: .7rem; }
+.alert {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: .9rem; align-items: start;
+  padding: .9rem; background: var(--snow); color: var(--day-ink); clip-path: var(--steps);
+}
+.alert-icon { width: 44px; height: 44px; padding: 10px; background: var(--madder); color: var(--snow); }
+.alert-body strong { display: block; font-family: var(--display); font-weight: 700; font-size: 1.4rem; line-height: 1.1; }
+.alert-body p { margin: .25rem 0 .35rem; max-width: 60ch; }
+.alert-body time { font-family: var(--display); font-weight: 700; font-size: 1rem; letter-spacing: .08em; text-transform: uppercase; color: var(--madder); }
+
+.empty { display: flex; align-items: center; gap: .8rem; color: var(--ink-soft); }
+.empty .icon { width: 28px; height: 28px; color: var(--ink-soft); }
+.empty p { max-width: 40ch; }
+.attention .empty { color: var(--ink); font-size: 1.125rem; }
+.attention .empty .icon { color: var(--snow); }
+
+/* The day, moment by moment */
+.events li.group {
+  display: flex; align-items: center; gap: .6rem;
+  padding: 1.1rem 0 .7rem; margin-bottom: .2rem;
+  font-family: var(--display); font-weight: 700; font-size: 1.2rem; letter-spacing: .1em; text-transform: uppercase;
+  background: conic-gradient(var(--stitch) 25%, transparent 0 50%, var(--stitch) 0 75%, transparent 0) 0 100% / 6px 6px repeat-x;
+}
+.events li.group:first-child { padding-top: .1rem; }
+.events li.group .icon { width: 20px; height: 20px; color: var(--now-ink); }
+.events li.group small { margin-left: auto; font-family: var(--display); font-weight: 600; font-size: 1rem; letter-spacing: .04em; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.events li.event {
+  display: grid; grid-template-columns: 3.4rem 14px 36px minmax(0, 1fr); column-gap: .75rem; align-items: start;
+  padding: .75rem 0;
+}
+.event > time { font-family: var(--display); font-weight: 700; font-size: 1.375rem; line-height: 1; padding-top: 7px; }
+.event-dot { position: relative; align-self: stretch; margin: -.75rem 0; }
+.event-dot::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; background: repeating-linear-gradient(to bottom, var(--stitch) 0 6px, transparent 6px 10px); }
+.event-dot::after { content: ""; position: absolute; left: 2px; top: calc(.75rem + 10px); width: 10px; height: 10px; background: var(--ink); }
+.event-icon { width: 36px; height: 36px; padding: 8px; background: var(--snow); color: var(--day-ink); }
+.event[data-kind="door"] .event-icon { background: var(--indigo); color: var(--snow); box-shadow: inset 0 0 0 2px var(--snow-shade); }
+.event[data-kind="vision"] .event-icon, .event[data-kind="other"] .event-icon { background: var(--win-cold); color: var(--day-ink); }
+.event[data-flag="alert"] .event-icon { background: var(--madder); color: var(--snow); box-shadow: none; }
+.event[data-flag="alert"] > time { color: var(--notice-ink); }
+.event[data-flag="alert"] .event-dot::after { background: var(--notice-ink); width: 14px; height: 14px; left: 0; }
+.event-body strong { display: block; font-weight: 600; font-size: 1.0625rem; line-height: 1.3; }
+.event-where { color: var(--ink-soft); font-size: .9375rem; margin-top: 1px; }
+.event-where::first-letter { text-transform: uppercase; }
+.event-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; margin-top: .5rem; }
+.chip {
+  display: inline-block; padding: 2px 8px;
+  font-family: var(--display); font-weight: 600; font-size: .9375rem; letter-spacing: .06em; text-transform: uppercase;
+  border: 2px solid var(--ink-soft); color: var(--ink);
+}
+.chip-soft { border-style: dashed; border-color: var(--stitch); color: var(--ink-soft); }
+.events li.empty { padding: .5rem 0; }
+
+/* Questions asked */
+.question-list { display: grid; gap: 1rem; }
+.question {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; grid-template-areas: "icon words count" "icon pips count";
+  gap: .35rem .9rem; align-items: center;
+}
+.question > .icon { grid-area: icon; width: 28px; height: 28px; align-self: start; color: var(--snow); }
+.question-words { grid-area: words; }
+.question-words strong { display: block; font-weight: 600; font-size: 1.0625rem; }
+.question-words small { font-size: .9375rem; color: var(--ink-soft); }
+.pips { grid-area: pips; display: flex; flex-wrap: wrap; gap: 3px; }
+.pip { width: 14px; height: 14px; background: var(--snow); }
+.question-count { grid-area: count; font-family: var(--display); font-weight: 700; font-size: 2.6rem; line-height: 1; }
+.questions .empty .icon { color: var(--snow); }
+
+/* Daily note */
+.summary-text { font-size: 1.125rem; line-height: 1.55; max-width: 60ch; }
+.footnote { margin-top: 1rem; padding-top: .8rem; font-size: .9375rem; color: var(--ink-soft); max-width: 60ch; border-top: 2px dashed var(--chk); }
+
+/* Home sensors */
+.sensor-list { display: grid; gap: .8rem; }
+.sensor { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: .9rem; align-items: center; }
+.sensor > .icon { width: 28px; height: 28px; color: var(--ink-soft); }
+.sensor-words strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.sensor-words small { font-size: .9375rem; color: var(--ink-soft); }
+.state {
+  font-family: var(--display); font-weight: 700; font-size: .9375rem; letter-spacing: .08em; text-transform: uppercase;
+  padding: 4px 10px; border: 2px dashed var(--stitch); color: var(--ink-soft);
+}
+.sensor[data-status="online"] .state { border: 2px solid var(--juniper); background: var(--juniper); color: var(--snow); }
+.sensor[data-status="online"] > .icon { color: var(--juniper-lit); }
+:root[data-sky="day"] .sensor[data-status="online"] > .icon { color: var(--juniper); }
+.sensor[data-status="offline"] .state { border: 2px solid var(--madder); background: var(--madder); color: var(--snow); }
+.sensor[data-status="offline"] > .icon { color: var(--notice-ink); }
+
+/* ---------- Footer ---------- */
+.footer {
+  display: flex; align-items: center; gap: .8rem;
+  max-width: var(--wrap); margin: 2rem auto 0;
+  padding: 1.4rem max(var(--pad), env(safe-area-inset-right)) max(1.4rem, env(safe-area-inset-bottom)) max(var(--pad), env(safe-area-inset-left));
+  position: relative; color: var(--ink-soft); font-size: .9375rem;
+}
+.footer::before {
+  content: ""; position: absolute; top: 0; left: var(--pad); right: var(--pad); height: 8px;
+  background: conic-gradient(var(--stitch) 25%, transparent 0 50%, var(--stitch) 0 75%, transparent 0) 0 0 / 8px 8px;
+}
+.footer-mark { width: 32px; height: 32px; flex: none; }
+
+/* ---------- Dialogs: a woven label of undyed snow wool ---------- */
+dialog {
+  --ink: var(--day-ink); --ink-soft: #46526e; --focus: var(--indigo); --stitch: #8d9ab3; --now-ink: #8a5300;
+  width: min(30rem, calc(100vw - 2rem));
+  border: 0; padding: 1.6rem 1.5rem 1.4rem; background: var(--snow); color: var(--ink);
+  color-scheme: light; clip-path: var(--steps);
+}
+dialog::backdrop { background: rgb(7 10 26 / .74); }
+dialog h2 {
+  font-size: 2rem; line-height: 1; padding-bottom: 1rem; margin-bottom: 1rem;
+  background: conic-gradient(var(--indigo) 25%, transparent 0 50%, var(--indigo) 0 75%, transparent 0) 0 100% / 8px 8px repeat-x;
+}
+dialog p { max-width: 60ch; }
+dialog label { display: block; margin-top: 1rem; font-family: var(--display); font-weight: 700; font-size: 1rem; letter-spacing: .1em; text-transform: uppercase; }
+dialog input[type="password"] {
+  display: block; width: 100%; min-height: 46px; margin-top: .35rem; padding: .5rem .75rem;
+  border: 2px solid var(--day-ink); border-radius: 0; background: #ffffff; color: var(--day-ink);
+}
+dialog .primary { border-color: var(--day-ink); }
+dialog input[type="password"]:focus-visible { outline: 3px solid var(--lamp-deep); outline-offset: 2px; }
+dialog .ghost { color: var(--day-ink); }
+.muted { margin-top: .6rem; font-size: .9375rem; color: var(--ink-soft); }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; margin-top: 1.4rem; }
+#evidence-status { color: var(--ink-soft); margin-bottom: .75rem; }
+#evidence-image { width: 100%; box-shadow: 0 0 0 3px var(--day-ink); }
+.theme-options { display: grid; gap: .5rem; }
+.theme-option {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: .8rem;
+  margin: 0; padding: .75rem; cursor: pointer;
+  border: 2px dashed var(--stitch); text-transform: none; letter-spacing: 0; font-family: var(--text); font-weight: 400; font-size: 1rem;
+}
+.theme-option:hover { border-color: var(--day-ink); }
+.theme-option:has(input:checked) { border: 2px solid var(--day-ink); background: #ffffff; box-shadow: inset 4px 0 0 var(--lamp); }
+.theme-option input { width: 20px; height: 20px; margin: 0; accent-color: var(--indigo); }
+.swatches { display: flex; box-shadow: 0 0 0 2px var(--day-ink); }
+.swatch { display: block; width: 16px; height: 28px; }
+.theme-words strong { display: block; font-family: var(--display); font-weight: 700; font-size: 1.25rem; line-height: 1.1; }
+.theme-words small { display: block; font-size: .9375rem; color: var(--ink-soft); line-height: 1.35; }
+
+/* ---------- Loading and entrance: the panels are knotted in, row by row ---------- */
+[data-loading] .hero h1 { opacity: .7; }
+@keyframes tr-row { from { opacity: 0; translate: 0 10px; } }
+.content:not([hidden]) > .rhythm, .content:not([hidden]) .board > .panel { animation: tr-row 300ms steps(4) backwards; }
+.content:not([hidden]) .board > .attention { animation-delay: 60ms; }
+.content:not([hidden]) .board > .timeline { animation-delay: 110ms; }
+.content:not([hidden]) .board > .summary { animation-delay: 160ms; }
+.content:not([hidden]) .board > .questions { animation-delay: 210ms; }
+.content:not([hidden]) .board > .home { animation-delay: 260ms; }
+
+/* ---------- Phone ---------- */
+@media (max-width: 34.99rem) {
+  .brand-caption { display: none; }
+  .connection { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  #theme-button { width: 44px; padding: 0; }
+  #theme-button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .brand-name { font-size: 1.6rem; }
+  .hero-stats strong { font-size: 2.3rem; }
+  .hero-stats span { font-size: .9375rem; letter-spacing: .04em; }
+  .day-field { flex: 1; min-width: 0; }
+  .day-field label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .day-field input { flex: 1; min-width: 0; width: 8rem; }
+  .day-name { display: none; }
+  .events li.event { grid-template-columns: 3rem 14px 32px minmax(0, 1fr); column-gap: .6rem; }
+  .event-icon { width: 32px; height: 32px; padding: 7px; }
+  .mark { width: 18px; }
+  .mark .icon { width: 12px; height: 12px; }
+  .rhythm-parts span { font-size: .8125rem; letter-spacing: .04em; padding-left: 3px; }
+}
+
+/* ---------- Wider screens ---------- */
+@media (min-width: 48rem) {
+  :root { --bk: 5px; --pad: 2rem; }
+  .rhythm-track { --lane: 32px; margin-left: 92px; }
+  .rhythm-marks::before {
+    content: "Door\A Pills\A Glasses\A Asked"; white-space: pre;
+    position: absolute; right: calc(100% + 14px); top: 0; line-height: var(--lane); text-align: right;
+    font-family: var(--display); font-weight: 600; font-size: .9375rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft);
+  }
+  .day-nav-spacer { flex: 1 1 0; }
+  .panel { padding: 1.5rem 1.6rem 1.7rem; }
+  .rhythm { padding: 0; }
+}
+
+@media (min-width: 64rem) {
+  :root { --k: 8px; --bk: 6px; --top-h: 76px; --pad: 2.5rem; }
+  .hero {
+    --scene-w: 100%;
+    grid-template-columns: minmax(0, 1fr) auto; column-gap: 3rem;
+    min-height: clamp(38rem, 30vw + 14rem, 50rem);
+    padding: calc(var(--top-h) + 2.5rem) max(var(--pad), (100% - var(--wrap)) / 2 + var(--pad)) calc(var(--scene-w) * 23 / 160);
+  }
+  .topbar { padding: 0 max(var(--pad), (100% - var(--wrap)) / 2 + var(--pad)); }
+  .sun-card { grid-template-columns: auto auto; gap: .5rem 1.5rem; padding-top: .4rem; }
+  .tr-sun { --sx: calc(700px + var(--sun-progress, 0) * 800px); --sy: calc(1410px - var(--sun-altitude, 0) * 270px); }
+  .tr-moon { transform: none; }
+  .tr-stars-wide { display: inline; }
+  .content { padding-top: 1.5rem; }
+  .board {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); column-gap: 2.25rem; row-gap: 1.75rem; align-items: start;
+    grid-template-areas: "attention summary" "timeline summary" "timeline questions" "timeline home" "timeline .";
+  }
+  .attention { grid-area: attention; }
+  .summary { grid-area: summary; }
+  .timeline { grid-area: timeline; }
+  .questions { grid-area: questions; }
+  .home { grid-area: home; }
+}
+
+/* Not connected: the picture is the page */
+[data-mode="disconnected"] .hero { min-height: calc(100svh - 12rem); }
+@media (min-width: 64rem) {
+  [data-mode="disconnected"] .hero { min-height: max(clamp(38rem, 30vw + 14rem, 50rem), calc(100svh - 14rem)); }
+}
