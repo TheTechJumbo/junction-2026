@@ -1,0 +1,6 @@
+[
+  {"id": "kaamos", "name": "Kaamos", "description": "Helsinki winter light. The page darkens and brightens with the real sky.", "swatches": ["#1d2a4a", "#f2b04a", "#eef2f6"]},
+  {"id": "ryijy", "name": "Ryijy", "description": "A woven rug. The day is knotted in, row by row.", "swatches": ["#9c2f2a", "#2c3d6b", "#d9a441"]},
+  {"id": "almanakka", "name": "Almanakka", "description": "An ink-drawn almanac page, with red letters for days that need a look.", "swatches": ["#1f3a5f", "#c8322b", "#e9edf0"]},
+  {"id": "signal", "name": "Signal", "description": "A calm bedside instrument: the whole day on one dial.", "swatches": ["#14181a", "#7fe0c4", "#f0a35b"]}
+]

@@ -27,6 +27,21 @@ Authorization only from the same origin; redirects, query parameters, URL creden
 unsupported media, and external URLs are rejected. Browser blob URLs are revoked when
 the evidence dialog closes, the day changes or the session ends.
 
+## Looks and the time of day
+
+The page follows the real day in Helsinki: a live clock, sunrise and sunset (`day.js`, worked
+out locally with no network), a "now" line on the rhythm-of-the-day strip, and a hero scene that
+moves with the sun. It reads as calm, quiet or "something to notice" from the backend's alerts
+only; it applies no care rules of its own.
+
+There are several looks to choose from with **Look**. Each one is a folder in `themes/` with its
+own SVG artwork, fonts and stylesheet; `themes/README.md` explains how to make one. `base.css`
+holds only resets and accessibility rules.
+
+Preview options in the address: `?demo` opens the example day, `?theme=<id>` picks a look,
+`?at=HH:MM` previews the scene at another time of day, and `?nosw` skips the offline cache.
+None of them carry credentials.
+
 ## Install as an app
 
 The dashboard installs as a phone or desktop app with its own icon that opens full-screen
