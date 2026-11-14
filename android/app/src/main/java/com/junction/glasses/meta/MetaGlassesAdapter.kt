@@ -442,28 +442,55 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         permissionRefresh?.cancel()
         permissionRefresh = scope.launch {
             for (permission in listOf(Permission.CAMERA, Permission.MICROPHONE)) {
-                val status = try {
-                    Wearables.checkPermissionStatus(permission).getOrNull()
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { null }
+                val status = checkPermission(permission)?.status
                 ensureActive()
                 recordPermission(permission, status)
             }
         }
     }
 
+    private class PermissionCheck(val status: PermissionStatus?)
+
+    /**
+     * The SDK's consent check, off the main thread: it can block on a native lock while the glasses
+     * app does not answer (ANR at 23:50:56: main thread stuck in checkPermissionStatus → LocalChannel.close
+     * after "Heartbeat timeout — DWA unavailable"). Null when no answer came within [PERMISSION_CHECK_MS];
+     * a blocked check then keeps only its IO thread, never the caller.
+     */
+    private suspend fun checkPermission(permission: Permission): PermissionCheck? {
+        val check = scope.async(Dispatchers.IO) {
+            PermissionCheck(try { Wearables.checkPermissionStatus(permission).getOrNull() }
+                catch (e: CancellationException) { throw e } catch (_: Exception) { null })
+        }
+        return withTimeoutOrNull(PERMISSION_CHECK_MS) { check.await() }
+    }
+
+    /** elapsedRealtime of the last consent request that came back not granted, per permission. */
+    private val consentRefusedAt = mutableMapOf<Permission, Long>()
+
     private suspend fun permission(permission: Permission): Boolean {
-        val existing = Wearables.checkPermissionStatus(permission).getOrNull()
+        val check = checkPermission(permission)
+            ?: run { Log.i(TAG, "consent check timed out"); fail("Glasses not answering. Put them on or tap Connect / reconnect glasses."); return false }
+        val existing = check.status
         recordPermission(permission, existing)
         if (existing == PermissionStatus.Granted) return true
         if (permissionResult != null) { fail("Complete the pending glasses permission request first."); return false }
+        // A caller retrying every few seconds (the live glasses camera) must not reopen Meta AI each time.
+        val refusedAt = consentRefusedAt[permission]
+        if (refusedAt != null && SystemClock.elapsedRealtime() - refusedAt < CONSENT_RETRY_MS) {
+            fail("Glasses ${enumName(permission).lowercase()} consent was not given. Allow it in Meta AI; asking again in a minute.")
+            return false
+        }
         val result = CompletableDeferred<PermissionStatus>()
         permissionResult = result
         return try {
+            Log.i(TAG, "asking Meta AI for ${enumName(permission)} consent")
             permissionLauncher.launch(permission)
             val status = withTimeoutOrNull(60_000) { result.await() }
             recordPermission(permission, status)
-            status == PermissionStatus.Granted
+            val granted = status == PermissionStatus.Granted
+            if (granted) consentRefusedAt.remove(permission) else consentRefusedAt[permission] = SystemClock.elapsedRealtime()
+            granted
         } finally { if (permissionResult === result) permissionResult = null }
     }
 
@@ -656,6 +683,9 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         const val STOP_GRACE_MS = 750L
         const val RECONNECT_GAP_MS = 500L
         const val ON_DEMAND_GAP_MS = 10_000L
+        const val PERMISSION_CHECK_MS = 5_000L
+        /** After a consent request comes back not granted, Meta AI is not opened again for this long. */
+        const val CONSENT_RETRY_MS = 60_000L
         val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
         /** The constant's name for SDK enums (DeviceSessionError, DeviceCompatibility); toString otherwise. */
         fun enumName(value: Any?): String = (value as? Enum<*>)?.name ?: value.toString()
