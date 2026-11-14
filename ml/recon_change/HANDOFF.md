@@ -230,3 +230,27 @@ behind them. Agents in flight: item finder recall, the walking test of the posit
 (`jun-25-locate-walk`, draft PR 18), and watched spots for small changes (`jun-22-watch-spots`).
 
 Still not done: a real room of ours, real items, the glasses, a real sensor event, a voice.
+
+## Update, Sat 14 Nov about 12:15 UTC
+
+Deployed and tested live on the GPU lane at 12:09 UTC: change check 15 to 16 s, position fix 3.9 s,
+a painted-in phone found and placed, and the lounge scene with 20 marked spots: 19 right, 1 wrong.
+
+- **Start or restart the workers with** `bash iridis/restart_workers.sh` from the project folder on the
+  cluster. It sources `iridis/worker_env.sh` (the item finder's settings), holds other queued GPU jobs
+  for the minute it takes, and queues replacements behind the new workers. A plain `sbatch` without
+  those settings still works but runs the item finder at its old, weaker settings.
+- **Files the cluster needs** from `ml/recon_change/`: `recon_change.py`, `recon_rust.py` (the change
+  check imports it; without the Rust build it falls back to NumPy), `locate.py`, `items.py`, `watch.py`,
+  `splat.py`, `live/worker.py`, `live/gateway.py`, `iridis/*`. Forgetting `recon_rust.py` took the
+  workers down for three minutes at 12:08 UTC.
+- **Item finder**: a limit per item plus a second opinion from CLIP on weak boxes finds 201 of 303
+  labelled items (was 97), 3 wrong answers in 140, none on 162 held-out item-free photos. Keys over
+  64 px: 14 of 25. "Show it once" did not help in the one synthetic test that could be built.
+- **Watched spots** (`watch.py`): 74% of small changes caught at about 9% false alarms on held-out
+  scenes, against 7% for the room-wide check. Wired into every check and position fix.
+- **Walking test** of the position fix: found fixes are right (3 cm, 1 degree median), no wrong room
+  accepted, 16% of same-room views not found, metres a third too long.
+
+Waiting on Seb: four session pull requests are measured and unmerged (28 position fix v2, 29 carer
+setup page, 30 day log, 31 stable confidence). Still running: the object map (32).
