@@ -196,6 +196,7 @@ class AutomaticSetupActivityTest {
     @Test fun liveCameraAsksForCameraPermissionBeforeCreatingAnyCamera() {
         MainActivity.automaticSetup = false
         launch(Intent(app(), MainActivity::class.java).putExtra(DebugBackendLaunch.EXTRA_RELAY_KEY, "synthetic-relay-key"))
+        button("Phone").performClick() // the glasses are the default camera
         button("Start live camera").performClick()
         assertNull(field("liveSources").get(activity))
         assertNull(field("liveLoop").get(activity))
@@ -217,6 +218,7 @@ class AutomaticSetupActivityTest {
     @Test fun recordVideoWithThePhoneAsksForTheCameraFirstAndCreatesNoRecorder() {
         MainActivity.automaticSetup = false
         launch(Intent(app(), MainActivity::class.java))
+        button("Phone").performClick() // the glasses are the default camera
         button("Record video").performClick()
         assertNull(field("videoRecorder").get(activity))
         assertEquals(listOf(Manifest.permission.CAMERA), shadowOf(activity).lastRequestedPermission.requestedPermissions.toList())
@@ -226,7 +228,7 @@ class AutomaticSetupActivityTest {
     @Test fun recordVideoWithTheGlassesNeedsTheRelayKeyBeforeWatchingForVideos() {
         MainActivity.automaticSetup = false
         launch(Intent(app(), MainActivity::class.java))
-        button("Glasses").performClick()
+        assertEquals("the glasses are the default camera", "GLASSES", field("cameraSource").get(activity).toString())
         button("Record video").performClick()
         assertTrue(text("recordStatus").contains("No relay key"))
         assertNull(field("glassesObserver").get(activity))

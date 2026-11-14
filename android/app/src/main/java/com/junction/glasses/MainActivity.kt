@@ -140,7 +140,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var liveThumb: ImageView
     /** Created only when the live camera or a recording starts; no camera object exists before a frame is wanted. */
     private var liveSources: LiveSources<CameraFrame>? = null
-    private var cameraSource = CameraSource.PHONE
+    // The glasses by default; the phone camera only when picked (always-on recording, live camera and Record room).
+    private var cameraSource = CameraSource.GLASSES
     private var liveLoop: LiveRelayLoop<CameraFrame>? = null
     private var recordJob: Job? = null
     private lateinit var zoneField: EditText
