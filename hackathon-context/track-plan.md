@@ -44,7 +44,7 @@ took your morning pills at 08:00" no longer matches the product. Fix the pitch w
 | 21 | Arduino: Best use of Arduino UNO Q | Cheap, but only with a real sensor | Store and INT8 VGGT already run on the board; the pill-box sensor is missing |
 | 26 | Google DeepMind: Best Use of Gemini API | Cheap to make genuine | Adapter exists; give Gemini a real job |
 | 20 | Aiven: Best Use of Aiven | Cheap | Replica code exists; point it at an Aiven PostgreSQL |
-| 25 | CRACI: Best use of CRACI | Cheap to qualify, unlikely to place | CI workflows exist; one-line runner change |
+| 25 | CRACI: Best use of CRACI | Not pursuing (team decision) | Off the shortlist |
 | 22 | Atech Real World Challenge | Cheap, as a fallback sensor | An Atech IMU or distance module on the pill-box lid |
 | 27 | Google DeepMind: Best Use of Gemma | Possible but costly | Gemma on the UNO Q writing the daily note; speed unknown |
 | 34 | Modal: Best use of Modal | Possible but costly | Same job as Verda; pick one |
@@ -230,21 +230,14 @@ handling). Impact 20%: modest. Creativity 10%: low.
 
 **Risk.** Low. If it is not connected by the demo, do not claim it.
 
-### 3.8 CRACI (optional). Owner: whoever has 1 h
-
-Switch `.github/workflows/bartek-ci.yml` and `android-ci.yml` to `runs-on: craci`. [File] "Do not
-just add runs-on: Craci ... and stop there"; scoring is technical depth 50% and creative use 50%.
-[J] One idea: show the SBOM of the Android app and the UNO Q service in the trust slide ("what
-software runs in Anna's home"). Low chance to place. Do it only if someone is idle.
-
-### 3.9 Atech (fallback for the sensor). Owner: Ayman
+### 3.8 Atech (fallback for the sensor). Owner: Ayman
 
 If no Modulino fits the lid, an Atech IMU or distance module on the lid can send the opening over
 Wi-Fi to the event API. [File] Atech lists "smart reminders for people living alone" as inspiration;
 needs the hardware in the demo, a Discord post, a public repo and a short video. Kits are 2 to 4 per
 team, first come. 2-3 h. [J] Doing this weakens the Arduino claim, so it is plan B, not both.
 
-### 3.10 Gemma (only if Ayman has time after the sensor)
+### 3.9 Gemma (only if Ayman has time after the sensor)
 
 [J] A small Gemma model on the UNO Q writes Sara's daily note from the local event log, so the log
 never leaves the home. It stacks with Arduino's Edge AI criterion. 3-4 h; speed on the board is
@@ -262,9 +255,8 @@ open questions), or claim only one.
 | 5 | Arduino UNO Q | 3-4 h | Ayman | Needed for the "real sensor" story anyway; Project Hub page required |
 | 6 | Gemini | 2-3 h | Bartek | Biggest cash prize, but needs a real job first |
 | 7 | Aiven | 1 h | Bartek | Cheap; modest score as a replica only |
-| 8 | CRACI | 1 h | anyone | Qualifying is cheap; placing is unlikely |
-| 9 | Gemma | 3-4 h | Ayman | Only after the sensor works |
-| 10 | Atech | 2-3 h | Ayman | Only if the Arduino sensor fails |
+| 8 | Gemma | 3-4 h | Ayman | Only after the sensor works |
+| 9 | Atech | 2-3 h | Ayman | Only if the Arduino sensor fails |
 
 Do not do both Verda and Modal, or both Aiven and Tiger Data: one would not be a genuine use.
 

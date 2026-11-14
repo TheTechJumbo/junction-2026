@@ -1,6 +1,6 @@
 # Gemini and Gemma: use cases for our project
 
-Brainstorm, Sat 14 Nov 2026, from Ed's Claude. Builds on `../track-plan.md` (sections 3.6 and 3.10)
+Brainstorm, Sat 14 Nov 2026, from Ed's Claude. Builds on `../track-plan.md` (sections 3.6 and 3.9)
 and `../challenges.md` (challenges 26 and 27). Marked **[F]** where it is a fact from the challenge
 list or our code, **[J]** where it is judgement. Hours are rough estimates.
 
