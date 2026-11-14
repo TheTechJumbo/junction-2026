@@ -81,3 +81,17 @@ Rollback: stop only the new worker(s) using the supervisor or selected scheduler
 ## Local synthetic measurement (2026-11-14)
 
 Apple Silicon Mac, 8 logical CPUs, Python 3.12.13, NumPy 2.5.4, Rust 1.100.0, maturin 1.16.0; `bench_rust.py --sizes 294x518 --threads 4 --repeat 3`. With 24+12 synthetic frames and look-alike off: median NumPy 5.55 s, all Rust 0.94 s; on: 7.33 s versus 0.84 s. Reported peak extra RSS off: 176 versus 173 MB; on: 473 versus 251 MB. Verdict and object counts matched. Each mode runs in a fresh process on the same generated fixture; peak RSS minus current RSS after loading is an estimate, not allocation tracing. Three trials are exploratory and exclude VGGT, network, queue and GPU time. NumPy 2.5.4 on this Mac differs from the intended Linux NumPy 1.26.4 environment; rerun equivalence and performance there. The equivalence suite additionally checked the intermediate arrays.
+
+## Local acceptance record
+
+Implementation reviewed by Astra; Terra implemented and tested in isolated branch `codex/rust-rollout-prep`.
+
+- `bash iridis/build_rust.sh /tmp/junction-rollout-venv/bin/python`: offline locked build, `test_rust.py` and `test_synthetic.py` passed after explicit dependency/cache preparation.
+- `python -m unittest discover -s ml/recon_change -p test_rollout.py -v`: 7 passed, including missing-helper, missing/ABI-incompatible extension, enabled/disabled modes, absent settings/source/Rust and quoted remote path.
+- `python -m unittest discover -s ml/recon_change/live -p test_benchmark.py -v`: passed, including real local HTTP success, fresh locate, invalid metadata, reused response and redirect refusal.
+- `live/test_care_flow.py`, `live/test_day_flow.py`, `live/test_setup_flow.py`, `live/test_view_gate.py`: passed in the isolated local environment.
+- `test_watch.py`, `eval/test_locate_lookalike.py`, `test_synthetic.py`: passed with both `RECON_FAST=1` and `RECON_FAST=0`, four threads.
+- `make check VENV=/Users/ayman/Desktop/junction-2026/.venv/bin`: lint and schemas passed; 470 tests passed, 12 deselected; existing httpx deprecation warning.
+- `git diff --check`: passed.
+
+The dependency/build environment is local to this Mac. The positive full model-cache preflight, Linux/CUDA installation, GPU correctness, actual service start/rollback and live HTTP performance have not been run. Seb must complete those gates on the chosen host. PR #37's missing-helper behavior is incorporated with a narrower exception handler; its unrelated dependency import failures remain visible.
