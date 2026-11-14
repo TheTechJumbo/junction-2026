@@ -6,6 +6,10 @@ remain on this device. This service never makes outbound network requests.
 
 ## Run and deploy
 
+For hardware-free pill-box and door demo inputs, see the
+[Rust sensor simulator](sensor-sim/README.md). It sends clearly identified simulated
+events to this store or the backend; physical sensor validation remains outstanding.
+
 Development: `UNOQ_TOKEN=<32-or-more-characters> UNOQ_DATA=/tmp/household python3 unoq/store.py`.
 Tests: `python3 -m unittest discover -s unoq/tests -v`.
 
