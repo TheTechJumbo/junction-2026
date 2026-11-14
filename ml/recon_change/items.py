@@ -146,6 +146,11 @@ NEAR_M = 0.5  # a detection this close to the remembered spot is "the item is st
 # is within SURFACE_SHARE of it. RECON_ITEMS_SURFACE=0 turns this off (untrusted depth = no position).
 SURFACE = os.environ.get("RECON_ITEMS_SURFACE", "1") != "0"
 SURFACE_SHARE = 0.15
+# Pieces of the picture (the whole of it and its tiles) the detector looks at in one pass. Four is the fastest
+# on the cluster's cards. Each piece at the detector's 960 px holds about 1 GB of attention scores at its
+# peak, so on a card under 10 GB, where VGGT already sits (a laptop's, see run_local.sh), it looks at one
+# piece at a time: slower, and it fits. RECON_ITEMS_BATCH overrides both.
+BATCH = os.environ.get("RECON_ITEMS_BATCH", "")
 
 
 def wanted(text=None):
@@ -336,6 +341,8 @@ class Detector:
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=CACHE)
         self.model = Owlv2ForObjectDetection.from_pretrained(model_id, cache_dir=CACHE).to(self.device).eval()
         self.side = int(self.model.config.vision_config.image_size)  # 960: every pass is one square of this size
+        small_card = self.device == "cuda" and torch.cuda.get_device_properties(0).total_memory < 10e9
+        self.batch = max(1, int(BATCH)) if BATCH.strip() else 1 if small_card else 4
         self.words = {}  # phrase -> its text embedding, computed once
         self.last = {}  # what the last find() did: passes, seconds
         print(f"Item detector {model_id} loaded in {time.time() - t0:.0f} s on {self.device}", flush=True)
@@ -344,7 +351,7 @@ class Detector:
 
     def settings(self, names):
         told = {"model": self.model_id, "names": list(names), "score": self.score, "confirm_score": min(self.score, CONFIRM),
-                "tiles": self.tiles, "input": self.side, "device": self.device}
+                "tiles": self.tiles, "input": self.side, "device": self.device, "batch": getattr(self, "batch", 4)}
         if self.limits:
             told["limits"] = {n: self.limit(n) for n in names}
         if self.look_from > 0 and (self.look_limits or self.judge):
@@ -382,10 +389,12 @@ class Detector:
         rgb = cv2.cvtColor(cv2.resize(canvas, (self.side, self.side), interpolation=how), cv2.COLOR_BGR2RGB)
         return (rgb.astype(np.float32) / 255 - MEAN) / STD
 
-    def detect(self, image_bgr, phrases, tiles=None, floor=FLOOR, batch=4):
+    def detect(self, image_bgr, phrases, tiles=None, floor=FLOOR, batch=None):
         """Raw boxes for each phrase: {phrase: (boxes (n, 4) as x0, y0, x1, y1 in 0..1 of the picture, scores)}.
-        Boxes of one phrase that show the same thing are already thinned to the best one."""
+        Boxes of one phrase that show the same thing are already thinned to the best one.
+        batch: pieces per pass (default: the detector's own, see BATCH)."""
         torch = self.torch
+        batch = batch or getattr(self, "batch", 4)
         t0 = time.time()
         H, W = image_bgr.shape[:2]
         pieces = [(0, 0, W, H)] + [(x, y, s, s) for x, y, s in tile_layout(H, W, self.tiles if tiles is None else tiles)]

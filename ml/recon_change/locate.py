@@ -404,6 +404,11 @@ def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sam
     position, forward = camera(r.E[new[-1]])
     here = on_map(position)[0]
     heading = float(np.degrees(np.arctan2(forward @ east, forward @ north)))  # 0 = north, clockwise
+    # A pass with no trusted point (seen on a real hall filmed in 8 photos all the way round) leaves the map without
+    # an origin or a scale: NaN everywhere. That is "lost", and must not fail the job or put NaN into the reply.
+    usable = bool(np.isfinite(heading) and np.all(np.isfinite(here)) and np.isfinite(metres) and metres > 0)
+    if not usable:
+        heading, here, sure, one_frame, metres = 0.0, np.zeros(3), 0.0, None, 1.0
 
     ball = 0.07 / metres
     marks = [(position, 1.6 * ball, (40, 150, 255))]  # the wearer: blue
@@ -413,7 +418,7 @@ def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sam
 
     waypoints = []
     for place, world in zip(places, spots):
-        if world is None:
+        if world is None or not usable:
             continue
         at = on_map(world)[0]
         east_m, north_m = at[0] - here[0], at[1] - here[1]
@@ -424,23 +429,26 @@ def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sam
 
     # A floor plan to draw: the room's points seen from above, without the floor and the ceiling.
     cloud = on_map(np.concatenate([seen[q][::23] for q in base]))
-    low, high = np.percentile(cloud[:, 2], [40, 90])
-    cloud = cloud[(cloud[:, 2] >= low) & (cloud[:, 2] <= high)]
+    cloud = cloud[np.isfinite(cloud).all(1)]
+    if len(cloud):  # a pass where no baseline point is trusted has no floor plan (it is lost), but must not fail
+        low, high = np.percentile(cloud[:, 2], [40, 90])
+        cloud = cloud[(cloud[:, 2] >= low) & (cloud[:, 2] <= high)]
     if len(cloud) > 1500:
         cloud = cloud[rng.choice(len(cloud), 1500, replace=False)]
 
     state = state_of(sure, one_frame or 0.0, rescue and one_frame is not None)
-    gap, turn, tilt, _ = view_gap(r.E, base, new[-1], room)
+    gap, turn, tilt, _ = view_gap(r.E, base, new[-1], room) if usable else (0.0, 0.0, 0.0, None)
     result = {
         "state": state,
         "confidence": round(sure, 2),
         "position": [round(float(v), 2) for v in here],
         "heading_deg": int(round(heading)),
         "waypoints": waypoints,
-        "track": [[round(float(v), 2) for v in on_map(camera(r.E[q])[0])[0][:2]] for q in new],
+        "track": [[round(float(v), 2) for v in on_map(camera(r.E[q])[0])[0][:2]] for q in new] if usable else [],
         # As 64-bit numbers, so 1.23 is written as 1.23 and not as 1.2300000190734863 (the fix stays small).
-        "map": {"points": np.round(cloud[:, :2].astype(np.float64), 2).tolist(),
-                "cameras": np.round(on_map(np.array([camera(r.E[q])[0] for q in base]))[:, :2].astype(np.float64), 2).tolist()},
+        "map": {"points": np.round(cloud[:, :2].astype(np.float64), 2).tolist() if usable else [],
+                "cameras": np.round(on_map(np.array([camera(r.E[q])[0] for q in base]))[:, :2].astype(np.float64), 2).tolist()
+                if usable else []},
         "match_per_frame": [round(m, 2) for m in matches],
         "looks_alike": None if looks_alike is None else round(looks_alike, 2),  # None: no features, depth only
         "match_by_depth": round(by_depth[-1], 2),
@@ -448,14 +456,16 @@ def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sam
         # Since version 2 (eval/LOCATE_WALK_RESULTS.md):
         "metres_from": room["metres_from"],  # "known distance" or "assumed viewing distance"
         "up_from": room["up_how"]["from"],  # "surface" or "cameras"
-        "up_tilt_deg": room["up_how"]["tilt_deg"],  # the surface's normal against the cameras' average up
+        "up_tilt_deg": room["up_how"]["tilt_deg"] if usable else None,  # the surface's normal against the cameras' average up
         "up_surface_share": room["up_how"]["share"],
         "match_one_frame": None if one_frame is None else round(one_frame, 2),
         "one_frame_only": bool(state == "unsure" and sure < UNSURE),  # unsure only because one baseline frame agrees
-        "view_gap_deg": int(round(gap)),  # the angle to the closest baseline view
-        "hint": None if state == "found" else hint(gap, turn, tilt),  # which way to turn when the room was not filmed this way
-        "baseline_views": coverage(r.E, base, room),
+        "view_gap_deg": int(round(gap)) if usable else None,  # the angle to the closest baseline view
+        "hint": None if state == "found" or not usable else hint(gap, turn, tilt),  # which way to turn when the room was not filmed this way
+        "baseline_views": coverage(r.E, base, room) if usable else None,
     }
+    if not usable:
+        result["unusable"] = "no trusted point in this pass: the room could not be rebuilt from these photos"
     if room["metres_note"]:
         result["metres_note"] = room["metres_note"]
     return result, marks, valid

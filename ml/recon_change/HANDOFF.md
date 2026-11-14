@@ -341,3 +341,18 @@ fresh and read `ml/recon_change/DEMO.md` (how to run the demo) and this section.
 separate environment (with numpy 2.x, which must be replaced by `numpy<2`). OpenCV, VGGT and the 5 GB of
 weights are not there. Run the remaining commands from `DEMO.md`, "Models on the laptop". The relay and the
 event API on Seb's laptop have also stopped: nothing is listening on ports 8000, 8090 or 8091.
+
+**Update, 20:30 UTC: local mode works on the laptop.** The environment is complete (`~/venv-local`: PyTorch
+2.3.1 cu121, `numpy<2`, VGGT, weights in the Hugging Face cache) and `adb` is in `~/platform-tools`.
+- On the RTX 2060 the first runs failed or spilled into shared RAM. Three fixes, all in `recon_change.load_model`
+  and only below 10 GB: the trunk at half size but the camera and depth heads in float32, DINOv2's blocks in
+  float32 (float16 overflowed to NaN on real pictures), and the depth head 2 frames at a time. A fix is now
+  6 frames at 518x294, 1.5 s of inference and about 2 s in all, at 3.5 GB peak. Numbers in `DEMO.md`.
+- `bash ml/recon_change/verify_demo.sh` checks every stage on a synthetic room in its own zone: 16 passed,
+  0 failed, 1 skipped (the item finder, off on the 6 GB card; `RECON_ITEMS_ENV` turns it on, on the CPU).
+- Real room: Seb's hall is the baseline of zone `kitchen`. The phone sends frames from the Android app's new
+  live camera (branch `android-autostart`, not merged: `android/` is Ed's to review). The relay rebuilds the
+  room map (`/viewer?live=kitchen`) and shows frames, fixes and the worker log on `/dashboard`.
+- The glasses were returned. Found before that: the app disconnects them whenever it leaves the screen, and
+  the glasses end an idle session after about 3.5 minutes without a camera or microphone stream ("Session
+  ended by device"). `android-autostart` reconnects for both, untested on hardware.
