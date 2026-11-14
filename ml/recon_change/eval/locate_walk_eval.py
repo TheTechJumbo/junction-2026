@@ -445,8 +445,9 @@ def run(args):
                 row["focal"] = [float(recon.K[-1][0, 0]), float(recon.K[-1][1, 1])]
                 row["median_baseline_depth"] = float(np.median(recon.depth[base_idx][valid[base_idx]]))
                 # For trying other ways to get metres without the GPU: the baseline's trusted points, thinned.
-                cloud = np.concatenate([rc.unproject(recon.depth[i], recon.K[i], recon.E[i])[valid[i]][::47] for i in base_idx])
-                np.savez(out / "fix" / ("_".join(str(v) for v in key) + ".npz"), cloud=cloud.astype(np.float32))
+                if not args.from_dump:  # (with a saved reconstruction the points can be made again)
+                    cloud = np.concatenate([rc.unproject(recon.depth[i], recon.K[i], recon.E[i])[valid[i]][::47] for i in base_idx])
+                    np.savez(out / "fix" / ("_".join(str(v) for v in key) + ".npz"), cloud=cloud.astype(np.float32))
                 print(f"{kind} n={len(base)}+{len(new)} {room} <- {query_room}/{q['rec']}/{q['rgb']}: {row['state']} {row['confidence']:.2f} | "
                       f"model {row['inference_s']} s, locate {row['locate_s']} s", flush=True)
             except Exception as e:  # keep going: one bad fix must not lose the rest
