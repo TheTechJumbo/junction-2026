@@ -72,4 +72,61 @@ class VoiceTurnControllerTest {
         assertEquals(2001, states.last().answer!!.text.length)
     }
 
+    @Test fun audioTestUsesProviderWithoutAskingOrInventingEvidence() {
+        val b = FakeBackend(); val a = FakeAudio(); val states = mutableListOf<TurnState>()
+        val c = VoiceTurnController(b, a, { it() }, states::add)
+        c.testAudio()
+        assertTrue(b.asks.isEmpty())
+        assertEquals("Audio test", states.last().question)
+        assertTrue(states.last().answer!!.evidence.isEmpty())
+        assertEquals(SpeechSource.NONE, states.last().speechSource)
+        b.speeches.single()(Result.success(byteArrayOf(1)))
+        assertEquals(SpeechSource.ELEVENLABS, states.last().speechSource)
+        a.done!!(Result.success(Unit))
+        assertEquals(TurnPhase.COMPLETE, states.last().phase)
+        assertEquals(SpeechSource.ELEVENLABS, states.last().speechSource)
+        c.replay()
+        assertEquals(SpeechSource.NONE, states.last().speechSource)
+        assertTrue(b.asks.isEmpty())
+        c.submit("new question")
+        assertEquals(SpeechSource.NONE, states.last().speechSource)
+    }
+    @Test fun providerPlaybackFailureSwitchesSourceAndPreservesPhoneCompletion() {
+        val b = FakeBackend(); val a = FakeAudio(); val states = mutableListOf<TurnState>()
+        val c = VoiceTurnController(b, a, { it() }, states::add)
+        c.testAudio(); b.speeches.single()(Result.success(byteArrayOf(1)))
+        a.done!!(Result.failure(Exception("decoder failed")))
+        assertEquals(SpeechSource.PHONE, states.last().speechSource)
+        assertEquals(listOf(states.last().answer!!.text), a.fallbacks)
+        a.done!!(Result.success(Unit))
+        assertEquals(TurnPhase.COMPLETE, states.last().phase)
+        assertEquals(SpeechSource.PHONE, states.last().speechSource)
+    }
+    @Test fun unavailableProviderAndPhoneLeaveVisibleAnswerAndPhoneSource() {
+        val b = FakeBackend(); val a = FakeAudio(); val states = mutableListOf<TurnState>()
+        val c = VoiceTurnController(b, a, { it() }, states::add)
+        c.testAudio(); b.speeches.single()(Result.failure(BackendFailure("http", 503)))
+        a.done!!(Result.failure(Exception("private failure")))
+        assertEquals(TurnPhase.ERROR, states.last().phase)
+        assertEquals(SpeechSource.PHONE, states.last().speechSource)
+        assertNotNull(states.last().answer)
+        assertFalse(states.last().message!!.contains("private"))
+    }
+    @Test fun cancelAudioTestIgnoresLateSpeechAndFallbackCallbacks() {
+        val b = FakeBackend(); val a = FakeAudio(); val states = mutableListOf<TurnState>()
+        val c = VoiceTurnController(b, a, { it() }, states::add)
+        c.testAudio(); c.cancel()
+        b.speeches[0](Result.success(byteArrayOf(1)))
+        assertEquals(0, a.played)
+        assertEquals(SpeechSource.NONE, states.last().speechSource)
+        c.testAudio(); b.speeches[1](Result.failure(BackendFailure("http", 503)))
+        val oldFallback = a.done!!
+        c.cancel(); oldFallback(Result.success(Unit))
+        assertEquals(TurnPhase.CANCELLED, states.last().phase)
+        assertEquals(SpeechSource.PHONE, states.last().speechSource)
+        c.testAudio(); oldFallback(Result.failure(Exception("late")))
+        assertEquals(TurnPhase.FETCHING_SPEECH, states.last().phase)
+        assertEquals(SpeechSource.NONE, states.last().speechSource)
+    }
+
 }
