@@ -22,5 +22,5 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 PROJECT="$(dirname "$PWD")"
 # -I is not used here: PYTHONPATH must be read. The photos are only ever decoded by OpenCV.
 "$PROJECT/.venv-recon/bin/python" -u code/eval/items_eval.py detect --set data/lvis/set.json --img data/lvis/img --out out/eval \
-    --clean "kitchen=$PROJECT/baselines/kitchen/*.jpg" --clean "paslcd=$PROJECT/bench/data/PASLCD/*/Instance_1/images/*.JPG" --clean-max 150 "$@"
+    --clean "kitchen=$PROJECT/baselines/kitchen/*.jpg" --clean "paslcd=$PROJECT/bench/data/PASLCD/*/Instance_1/images/*.[jJ][pP][gG]" --clean-max 150 "$@"
 echo "== done $(date +%T)"

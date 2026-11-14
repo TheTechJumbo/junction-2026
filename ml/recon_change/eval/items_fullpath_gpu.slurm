@@ -17,7 +17,7 @@ cd "$SLURM_SUBMIT_DIR"
 export PYTHONPATH="$PWD/pkgs" RECON_ITEMS_CACHE="$PWD/hf/hub" HF_HUB_OFFLINE=1
 export HF_HOME="${HF_HOME:-/scratch/$USER/.cache/huggingface}"
 PROJECT="$(dirname "$PWD")"
-OTHER="$(ls "$PROJECT"/bench/data/PASLCD/Lounge/Instance_1/images/*.JPG | head -1)"
+OTHER="$(ls "$PROJECT"/bench/data/PASLCD/Lounge/Instance_1/images/*.jpg | head -1)"
 echo "== $(hostname) $(date +%T) | $(nvidia-smi --query-gpu=name --format=csv,noheader)"
 "$PROJECT/.venv-recon/bin/python" -u code/eval/items_fullpath.py --baselines "$PROJECT/baselines" --zone kitchen     --originals "$PROJECT/vggt-examples/examples/kitchen/images" --set data/lvis/set.json --img data/lvis/img --other "$OTHER"     --work out/full-gpu "$@"
 echo "== done $(date +%T)"

@@ -338,7 +338,8 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0):
         rows, cols = slice(max(0, y - ry), y + ry + 1), slice(max(0, x - rx), x + rx + 1)
         ok = valid[q][rows, cols] & (r.depth[q][rows, cols] > 0)
         if ok.sum() < max(3, 0.25 * ok.size):
-            item["note"] = "The depth there is not trusted, so it is not on the map."
+            item["note"] = (f"The depth there is not trusted ({int(ok.sum())} of {ok.size} pixels in the middle of the box), "
+                            "so it is not on the map.")
             continue
         depth = float(np.median(r.depth[q][rows, cols][ok]))
         cam = np.array([(x - K[0, 2]) / K[0, 0] * depth, (y - K[1, 2]) / K[1, 1] * depth, depth])

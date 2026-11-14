@@ -13,8 +13,13 @@
   python eval/items_eval.py score --out <out> [--limit 0.3] [--tiles 1] [--phrases chosen]
 
 Counting rules
-- A labelled object is "found" when a box of its name at or above the limit overlaps it with
-  intersection over union of at least 0.5.
+- A box is "on" a labelled object of its name when the two overlap with intersection over union
+  of at least 0.5 (the usual strict rule), or, more loosely, when the middle of the box lies
+  inside the label, or the middle of the label lies inside the box and the box is at most 6 times
+  the area of the label. The loose rule is what an arrow needs, and it is needed for keys: the
+  labels box every single key, the detector boxes the bunch. Tables give the loose count and, in
+  brackets, the strict one.
+- A labelled object is "found" when a box of its name at or above the limit is on it.
 - The glasses give one answer per item and photo (the best box). That answer is "right" when it
   is on a labelled object of that item, "wrong" when it is not: the photo was checked not to
   have the item, or has it with every instance boxed and the answer is on none of them.
@@ -61,7 +66,8 @@ def detect(args):
     detector = items.load(tiles=0)
     todo = []
     if args.set:
-        todo += [("lvis", r["file"], str(Path(args.img) / r["file"])) for r in json.loads(Path(args.set).read_text())]
+        todo += [("lvis", r["file"], str(Path(args.img) / r["file"])) for r in json.loads(Path(args.set).read_text())
+                 if args.only_half in (None, r["half"])]
     for spec in args.clean or []:
         name, pattern = spec.split("=", 1)
         files = sorted(glob.glob(pattern, recursive=True))
@@ -101,10 +107,24 @@ def overlap(box, others):
     return items.iou(np.asarray(box, float), np.asarray(others, float))[0] if len(others) else np.zeros(0)
 
 
+def on(box, truth):
+    """Is a box on each labelled box? Returns (strict, loose) arrays; see the counting rules above."""
+    box, truth = np.asarray(box, float), np.atleast_2d(np.asarray(truth, float))
+    strict = overlap(box, truth) >= 0.5
+    bx, by = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    tx, ty = (truth[:, 0] + truth[:, 2]) / 2, (truth[:, 1] + truth[:, 3]) / 2
+    mine_in = (truth[:, 0] <= bx) & (bx <= truth[:, 2]) & (truth[:, 1] <= by) & (by <= truth[:, 3])
+    area = (box[2] - box[0]) * (box[3] - box[1])
+    theirs_in = ((box[0] <= tx) & (tx <= box[2]) & (box[1] <= ty) & (ty <= box[3])
+                 & (area <= 6 * (truth[:, 2] - truth[:, 0]) * (truth[:, 3] - truth[:, 1])))
+    return strict, strict | mine_in | theirs_in
+
+
 def tally(records, saved, groups, limit, half=None):
     """Counts for one setting. Returns (found[name][size] = [found, there], answer[name] = {right, wrong, none...})."""
-    found = {n: {s[0]: [0, 0] for s in SIZES} for n in NAMES}
-    answer = {n: {"right": 0, "wrong_absent": 0, "wrong_other": 0, "silent_there": 0, "silent_absent": 0, "unclear": 0} for n in NAMES}
+    found = {n: {s[0]: [0, 0, 0] for s in SIZES} for n in NAMES}  # [found, there, found by the strict rule]
+    answer = {n: {"right": 0, "right_strict": 0, "wrong_absent": 0, "wrong_other": 0, "silent_there": 0, "silent_absent": 0,
+                  "unclear": 0, "missed": []} for n in NAMES}
     for r in records:
         if half and r["half"] != half:
             continue
@@ -125,13 +145,17 @@ def tally(records, saved, groups, limit, half=None):
                 size = max(w, h) * to_input
                 bin_name = next(s[0] for s in SIZES if s[1] <= size < s[2])
                 found[name][bin_name][1] += 1
-                found[name][bin_name][0] += int(any(overlap(d["box"], [box])[0] >= 0.5 for d in mine))
+                hits = [on(d["box"], box) for d in mine]
+                found[name][bin_name][0] += int(any(h[1][0] for h in hits))
+                found[name][bin_name][2] += int(any(h[0][0] for h in hits))
             if best is None:
                 answer[name]["silent_there"] += 1
-            elif (overlap(best["box"], truth) >= 0.5).any():
+            elif on(best["box"], truth)[1].any():
                 answer[name]["right"] += 1
+                answer[name]["right_strict"] += int(on(best["box"], truth)[0].any())
             else:
                 answer[name]["wrong_other" if label["all_boxed"] else "unclear"] += 1
+                answer[name]["missed"].append((r["file"], best["box"], truth.tolist(), best["score"]))
     return found, answer
 
 
@@ -151,26 +175,25 @@ def clean_hits(saved, groups, limit):
 def table(found, answer):
     lines = ["| item | " + " | ".join(f"found, {s[0]}" for s in SIZES) + " | found, all | photos: right answer | wrong: item not there | wrong: on something else | said nothing, item there |",
              "|---|" + "---|" * (len(SIZES) + 5)]
-    total = {s[0]: [0, 0] for s in SIZES}
+    total = {s[0]: [0, 0, 0] for s in SIZES}
     sums = dict.fromkeys(["right", "wrong_absent", "wrong_other", "silent_there", "absent"], 0)
     for name in NAMES:
-        cells, every = [], [0, 0]
+        cells, every = [], [0, 0, 0]
         for s in SIZES:
-            f, n = found[name][s[0]]
-            cells.append(f"{f} of {n}")
-            total[s[0]][0] += f
-            total[s[0]][1] += n
-            every[0] += f
-            every[1] += n
+            f, n, strict = found[name][s[0]]
+            cells.append(f"{f} ({strict}) of {n}")
+            for i, value in enumerate((f, n, strict)):
+                total[s[0]][i] += value
+                every[i] += value
         a = answer[name]
         absent = a["wrong_absent"] + a["silent_absent"]
         for k in ("right", "wrong_absent", "wrong_other", "silent_there"):
             sums[k] += a[k]
         sums["absent"] += absent
-        lines.append(f"| {name} | " + " | ".join(cells) + f" | {every[0]} of {every[1]} | {a['right']} | {a['wrong_absent']} of {absent} | {a['wrong_other']} | {a['silent_there']} |")
-    all_found, all_there = sum(v[0] for v in total.values()), sum(v[1] for v in total.values())
-    lines.append("| **all** | " + " | ".join(f"{total[s[0]][0]} of {total[s[0]][1]}" for s in SIZES)
-                 + f" | {all_found} of {all_there} | {sums['right']} | {sums['wrong_absent']} of {sums['absent']} | {sums['wrong_other']} | {sums['silent_there']} |")
+        lines.append(f"| {name} | " + " | ".join(cells) + f" | {every[0]} ({every[2]}) of {every[1]} | {a['right']} | {a['wrong_absent']} of {absent} | {a['wrong_other']} | {a['silent_there']} |")
+    all_found, all_there, all_strict = (sum(v[i] for v in total.values()) for i in range(3))
+    lines.append("| **all** | " + " | ".join(f"{total[s[0]][0]} ({total[s[0]][2]}) of {total[s[0]][1]}" for s in SIZES)
+                 + f" | {all_found} ({all_strict}) of {all_there} | {sums['right']} | {sums['wrong_absent']} of {sums['absent']} | {sums['wrong_other']} | {sums['silent_there']} |")
     return "\n".join(lines)
 
 
@@ -201,6 +224,18 @@ def score(args):
         found, answer = tally(records, s["boxes"], groups, args.limit, half)
         print(f"\n### {half or 'both halves'}: phrases '{args.phrases}', tiles {args.tiles}, limit {args.limit}\n")
         print(table(found, answer))
+    if args.misses:  # pictures of the answers counted as "on something else": label green, answer red
+        folder = Path(args.misses)
+        folder.mkdir(parents=True, exist_ok=True)
+        _, answer = tally(records, s["boxes"], groups, args.limit, None)
+        for name in NAMES:
+            for i, (file, box, truth, value) in enumerate(answer[name]["missed"][:12]):
+                picture = cv2.imread(str(Path(args.img) / file))
+                H, W = picture.shape[:2]
+                for t in truth:
+                    cv2.rectangle(picture, (int(t[0] * W), int(t[1] * H)), (int(t[2] * W), int(t[3] * H)), (0, 220, 0), 2)
+                cv2.rectangle(picture, (int(box[0] * W), int(box[1] * H)), (int(box[2] * W), int(box[3] * H)), (0, 0, 255), 2)
+                cv2.imwrite(str(folder / f"{items.slug(name)}_{i:02d}_{int(value * 100)}.jpg"), picture)
     print("\n### photos that should hold none of the items\n")
     for group, (pictures, listed) in sorted(clean_hits(s["boxes"], groups, args.limit).items()):
         print(f"- {group}: {pictures} photos, {len(listed)} false detections in {len({h[0] for h in listed})} photos")
@@ -229,9 +264,11 @@ def main():
     ap.add_argument("--limit", type=float, default=items.SCORE)
     ap.add_argument("--phrases", default="chosen", choices=list(PHRASES))
     ap.add_argument("--half", default="tune")
+    ap.add_argument("--only-half", default=None, help="detect: only this half of the test photos (the 2-row tiles are slow)")
     ap.add_argument("--sweep", type=float, nargs="*")
     ap.add_argument("--show", type=int, default=12)
-    ap.add_argument("--crops")
+    ap.add_argument("--crops", help="score: folder for pictures of the false detections on the item-free photos")
+    ap.add_argument("--misses", help="score: folder for pictures of the answers that are on something else")
     args = ap.parse_args()
     if args.step == "detect":
         args.tiles = [0, 1, 2] if args.tiles is None else args.tiles

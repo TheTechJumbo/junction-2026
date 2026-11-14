@@ -141,7 +141,7 @@ def main():
     records = json.loads(Path(args.set).read_text())
     spot = (side + u * (view.shape[1] - 1), v * (H - 1))
     picture = None
-    for inside_name, outside_name in (("phone", "remote control"), ("remote control", "phone")):
+    for inside_name, outside_name in (("remote control", "phone"), ("phone", "remote control")):
         for piece in pieces(records, args.img, inside_name):
             trial = wide.copy()
             box = paste(trial, piece, spot[0], spot[1], 80)
