@@ -46,8 +46,8 @@ def child(case, padding):
         border = cv2.copyMakeBorder
 
         def padded(pixels, top, bottom, left, right, kind):
-            return border(pixels, top, max(bottom, padding-pixels.shape[0]),
-                          left, max(right, padding-pixels.shape[1]), kind)
+            return border(pixels, top, max(0, padding-pixels.shape[0]-top),
+                          left, max(0, padding-pixels.shape[1]-left), kind)
 
         cv2.copyMakeBorder = padded
         worker = runpy.run_path(str(Path(__file__).resolve().parents[2] / "privacy" / "worker.py"))
