@@ -24,6 +24,9 @@ a second run with the same --out continues.
 
     python locate_eval.py --data data/PASLCD --poses poses --out out      # on a GPU
     python locate_eval.py --out out --summarise                           # tables only
+
+To try a change to locate.py without the GPU: --dump DIR saves every pass's reconstruction once
+(GPU, no scoring), --from-dump DIR scores the saved ones on a CPU (--shard i/n to run n in parallel).
 """
 import argparse
 import contextlib
@@ -260,6 +263,9 @@ def main():
     ap.add_argument("--detector-dir", help="folder with locate.py and recon_change.py (default: next to this script, else its parent)")
     ap.add_argument("--detector-commit", default="unknown")
     ap.add_argument("--summarise", action="store_true", help="only rebuild results.md from results.jsonl")
+    ap.add_argument("--dump", help="save each pass's reconstruction in this folder instead of scoring it (about 50 MB per pass at 24 photos)")
+    ap.add_argument("--from-dump", help="score reconstructions saved with --dump instead of running the model; passes without a file are skipped")
+    ap.add_argument("--shard", default="0/1", help="i/n: do only every n-th pass, starting at the i-th")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -335,7 +341,7 @@ def main():
         return small[(path, *hw)]
 
     t0 = time.time()
-    for scene in scenes:
+    for scene in [] if args.from_dump else scenes:
         used = [info[scene]] if set(args.kinds) - {"same_other_light"} else []
         for s in used + ([info[scene]["light2"]] if "light2" in info[scene] else []):
             s["hw"] = load(s["base"][0])
@@ -359,9 +365,15 @@ def main():
                     tasks.append(("same_other_light", n, scene, scene, photos[ORDER[k % 12] % len(photos)], k))
     rows = read_rows(out)
     done = {(r["kind"], r["n_baseline"], r["scene"], r["round"]) for r in rows}
+    shard, of = (int(v) for v in args.shard.split("/"))
+    tasks = tasks[shard::of]
+    stored = Path(args.dump or args.from_dump) if args.dump or args.from_dump else None
+    if args.dump:
+        stored.mkdir(parents=True, exist_ok=True)
+        done = {t[:3] + (t[5],) for t in tasks if (stored / f"{t[0]}_{t[1]}_{t[2]}_{t[5]}.npz").exists()}
     print(f"{len(tasks)} passes planned, {len(done)} already done", flush=True)
 
-    model = rc.load_model()
+    model = None if args.from_dump else rc.load_model()
     with open(out / "results.jsonl", "a") as sink:
         for kind, n, scene, query_scene, query, k in tasks:
             if (kind, n, scene, k) in done:
@@ -373,23 +385,40 @@ def main():
             base = rb.pick_even(s["base"], n)
             row = {"kind": kind, "n_baseline": len(base), "scene": scene, "setting": info[scene]["setting"],
                    "query_scene": query_scene, "query": query.name, "round": k}
+            file = stored / f"{kind}_{n}_{scene}_{k}.npz" if stored else None
+            if args.from_dump and not file.exists():
+                continue
             try:
-                frames = [photo(p, s["hw"]) for p in base + [query]]
-                h, w = shapes[query]
-                row["squashed"] = bool(abs(w / h - s["hw"][1] / s["hw"][0]) > 0.03)  # the query has another shape than the baseline
-                log = io.StringIO()
-                t0 = time.time()
-                with contextlib.redirect_stdout(log):
-                    recon = rc.reconstruct(model, frames)
-                row["reconstruct_s"] = round(time.time() - t0, 2)
-                printed = re.search(r"inference ([\d.]+) s", log.getvalue())
-                row["inference_s"] = float(printed.group(1)) if printed else None
-                row["peak_gpu_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 1) if torch.cuda.is_available() else None
+                if args.from_dump:
+                    saved = np.load(file)
+                    recon = rc.Recon(saved["depth"], saved["conf"], saved["K"], saved["E"], None, saved["feat"] if "feat" in saved else None)
+                    row.update(json.loads(str(saved["meta"])))
+                else:
+                    frames = [photo(p, s["hw"]) for p in base + [query]]
+                    h, w = shapes[query]
+                    row["squashed"] = bool(abs(w / h - s["hw"][1] / s["hw"][0]) > 0.03)  # the query has another shape than the baseline
+                    log = io.StringIO()
+                    t0 = time.time()
+                    with contextlib.redirect_stdout(log):
+                        recon = rc.reconstruct(model, frames)
+                    row["reconstruct_s"] = round(time.time() - t0, 2)
+                    printed = re.search(r"inference ([\d.]+) s", log.getvalue())
+                    row["inference_s"] = float(printed.group(1)) if printed else None
+                    row["peak_gpu_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 1) if torch.cuda.is_available() else None
+                if args.dump:  # everything locate reads, without the pictures
+                    part = file.with_suffix(".part.npz")
+                    np.savez(part, depth=recon.depth, conf=recon.conf, K=recon.K, E=recon.E, meta=json.dumps(row),
+                             **({} if recon.feat is None else {"feat": recon.feat}))
+                    part.rename(file)
+                    print(f"round {k} n={len(base)} {kind} {scene} <- {query_scene}/{query.name}: saved, model {row['inference_s']} s", flush=True)
+                    continue
                 t0 = time.time()
                 result, _, _ = locate.locate(recon, list(range(len(base))), [len(base)])
                 row["locate_s"] = round(time.time() - t0, 2)
                 row.update(state=result["state"], match=result["confidence"], position=result["position"],
-                           heading_deg=result["heading_deg"], metres_per_unit=result["metres_per_unit"])
+                           heading_deg=result["heading_deg"], metres_per_unit=result["metres_per_unit"],
+                           looks_alike=result.get("looks_alike"), match_by_depth=result.get("match_by_depth"),
+                           look_limit=result.get("look_limit"))
                 if kind != "wrong":
                     row["pose"] = pose_check(locate.camera, recon.E, [p.name for p in base + [query]], s["truth"], s["size"],
                                              result["metres_per_unit"])
@@ -403,6 +432,8 @@ def main():
             rows.append(row)
             sink.write(json.dumps(row) + "\n")
             sink.flush()
+    if args.dump:
+        return
     text = tables(rows, meta)
     (out / "results.md").write_text(text)
     print("\n" + text)
