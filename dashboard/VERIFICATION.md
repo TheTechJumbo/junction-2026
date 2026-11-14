@@ -2,7 +2,7 @@
 
 - `make setup`: passed in isolated dashboard worktree, credential-free.
 - `make check`: ruff passed, 23 foundation tests passed, generated schemas matched.
-- `npm --prefix dashboard run check`: JS syntax checks and 8 Node built-in tests passed.
+- `npm --prefix dashboard run check`: JS syntax checks and 9 Node built-in tests passed.
 - Real HTTP test uses an ephemeral localhost server, authenticated root `/timeline`,
   `/summary` and PNG evidence, including empty arrays. This is a transport contract test,
   not verification of the production backend.
@@ -16,3 +16,7 @@
   check live browser empty/error/offline/evidence paths after API route wiring.
 
 Serving and manual checks: README.md. No deployment or push performed.
+
+- Follow-up: integrator browser exposed native fetch receiver failure before HTTP requests.
+  Client now calls fetch with globalThis as receiver; receiver-sensitive regression passes.
+  Integrator performs actual browser reconnection verification after cherry-picking patch.

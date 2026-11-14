@@ -35,3 +35,12 @@ test('real HTTP transport reads empty day and authenticated PNG on origin-root r
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));
  const client=new ApiClient({origin:`http://127.0.0.1:${server.address().port}/dashboard/`});client.setToken('test-only-token');const day=await client.day('2026-11-14');assert.deepEqual(day.timeline.events,[]);assert.equal(day.summary.text,'No observations recorded.');assert.equal((await client.evidence('/artifacts/test')).type,'image/png');assert.deepEqual(seen.sort(),['/artifacts/test','/summary?day=2026-11-14','/timeline?day=2026-11-14']);
 });
+
+test('fetch transport receives the global receiver required by browser native fetch',async()=>{
+ let calls=0;
+ function receiverSensitiveFetch(url){
+  assert.equal(this,globalThis,'native browser fetch must receive its global object');calls++;
+  return Promise.resolve(Response.json(url.includes('timeline')?{events:[],alerts:[],questions:[],sensors:[],day:'2026-11-14',timezone:'Europe/Helsinki'}:{text:'No observations.'}));
+ }
+ const client=new ApiClient({origin,fetchImpl:receiverSensitiveFetch});client.setToken('test-only-token');await client.day('2026-11-14');assert.equal(calls,2);
+});

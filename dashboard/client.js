@@ -16,7 +16,8 @@ export class ApiError extends Error {
 export class ApiClient {
   constructor({origin, fetchImpl = fetch}) {
     this.origin = new URL(origin).origin;
-    this.fetch = fetchImpl;
+    // Browser fetch requires its Window receiver; never call it as an ApiClient method.
+    this.fetch = (...args) => fetchImpl.call(globalThis, ...args);
     this.token = '';
   }
   setToken(token) { this.token = token.trim(); }
