@@ -12,6 +12,9 @@ import android.widget.CheckBox
 import kotlinx.coroutines.Job
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.RecordedRequest
+import java.util.concurrent.LinkedBlockingQueue
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -33,8 +36,16 @@ class SetupDiagnosticsTest {
     private lateinit var activity: MainActivity
     private lateinit var server: MockWebServer
     private var backgrounded = false
+    // Backend probes are answered in queue order; the wearer screen's own /timeline refresh is answered apart.
+    private val probes = LinkedBlockingQueue<MockResponse>()
     @Before fun setup() {
-        server = MockWebServer(); server.start()
+        server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.path?.startsWith("/timeline") == true) MockResponse().setResponseCode(404)
+                else probes.poll(5, TimeUnit.SECONDS) ?: MockResponse().setResponseCode(503)
+        }
+        server.start()
         owner = Robolectric.buildActivity(MainActivity::class.java).setup()
         activity = owner.get()
         (field("endpoint").get(activity) as EditText).setText(server.url("/").toString())
@@ -45,7 +56,7 @@ class SetupDiagnosticsTest {
         owner.destroy(); server.shutdown(); drain()
     }
     @Test fun connectionRequiresAuthenticatedResponseAndCanRecheckWithoutRetypingToken() {
-        server.enqueue(page())
+        probes.add(page())
         button("Connect backend").performClick()
         assertNull(field("controller").get(activity))
         assertTrue(text("backendStatus").contains("checking"))
@@ -55,19 +66,19 @@ class SetupDiagnosticsTest {
         val request = server.takeRequest(1, TimeUnit.SECONDS)!!
         assertEquals("/events?limit=1", request.path)
         assertEquals("Bearer synthetic-setup-token", request.getHeader("Authorization"))
-        server.enqueue(page()); button("Connect backend").performClick()
+        probes.add(page()); button("Connect backend").performClick()
         await { text("backendStatus").contains("authenticated") }
         assertNotNull(field("controller").get(activity))
     }
     @Test fun rejectedTokenNeverEnablesQuestions() {
-        server.enqueue(MockResponse().setResponseCode(401))
+        probes.add(MockResponse().setResponseCode(401))
         button("Connect backend").performClick()
         await { text("backendStatus").contains("token rejected") }
         assertNull(field("controller").get(activity))
         assertNull(field("evidenceClient").get(activity))
     }
     @Test fun stopPreventsDelayedProbeFromConnecting() {
-        server.enqueue(page().setBodyDelay(250, TimeUnit.MILLISECONDS))
+        probes.add(page().setBodyDelay(250, TimeUnit.MILLISECONDS))
         button("Connect backend").performClick()
         assertNotNull(server.takeRequest(1, TimeUnit.SECONDS))
         button("Stop").performClick()
@@ -76,7 +87,7 @@ class SetupDiagnosticsTest {
         assertTrue(text("backendStatus").contains("cancelled"))
     }
     @Test fun backgroundPreventsDelayedProbeFromConnecting() {
-        server.enqueue(page().setBodyDelay(250, TimeUnit.MILLISECONDS))
+        probes.add(page().setBodyDelay(250, TimeUnit.MILLISECONDS))
         button("Connect backend").performClick()
         assertNotNull(server.takeRequest(1, TimeUnit.SECONDS))
         owner.pause().stop(); backgrounded = true
@@ -94,7 +105,7 @@ class SetupDiagnosticsTest {
     @Test fun reconnectClearsOldObservationsBeforeProbeCompletes() {
         field("latestEvidence").set(activity, listOf(Observation("old-event", "pillbox_open", "sensor", "2026-11-14T10:00:00Z", "kitchen", null, 1.0, null)))
         (field("answerView").get(activity) as TextView).text = "Old server answer"
-        server.enqueue(page())
+        probes.add(page())
         button("Connect backend").performClick()
         assertTrue((field("latestEvidence").get(activity) as List<*>).isEmpty())
         assertFalse(text("answerView").contains("Old server"))
