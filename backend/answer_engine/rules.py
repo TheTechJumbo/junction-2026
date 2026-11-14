@@ -56,6 +56,13 @@ class RulesAnswerEngine:
 
     def classify(self, question: str) -> str:
         words = _words(question)
+        if re.search(
+            r"\b(diagnos\w*|symptoms?|treatments?|dosages?|dose|overdose|prescri\w*|"
+            r"aspirin|ibuprofen|paracetamol|insulin|antibiotics?|pain|fever|dementia)\b"
+            r"|\b(should|can|may|must) i (?:take|stop|skip|double|increase|reduce)\b"
+            r"|\b(how (?:many|much)|when) (?:pills?|medicine|medication)\b", words
+        ):
+            return "medical"
         if re.search(r"\b(where|directions?|navigate|navigation)\b|\bhow (?:do i |can i )?get\b", words):
             return "navigation"
         if re.search(r"\b(pills?|pillbox|medication|medicines?|meds|tablets?|dose)\b", words):
@@ -100,6 +107,9 @@ class RulesAnswerEngine:
         now_utc = _utc(now)
         tz = ZoneInfo(timezone)
         intent = self.classify(question)
+        if intent == "medical":
+            return Answer(answer="I cannot make medical or dosing decisions. "
+                          "Please ask your doctor or pharmacist.", evidence=[])
         if intent in {"pills", "door"}:
             if re.search(
                 r"\b(yesterday|tomorrow|tonight|last|previous|next|ago|monday|tuesday|"

@@ -23,12 +23,13 @@ def environment(monkeypatch, tmp_path):
 def provider(monkeypatch, handler):
     real_client = httpx.AsyncClient
     transport = httpx.MockTransport(handler)
-    def client(**kwargs):
-        assert kwargs["trust_env"] is False
-        assert kwargs["follow_redirects"] is False
-        kwargs["transport"] = transport
-        return real_client(**kwargs)
-    monkeypatch.setattr(httpx, "AsyncClient", client)
+    class MockClient(real_client):
+        def __init__(self, **kwargs):
+            assert kwargs["trust_env"] is False
+            assert kwargs["follow_redirects"] is False
+            kwargs["transport"] = transport
+            super().__init__(**kwargs)
+    monkeypatch.setattr(httpx, "AsyncClient", MockClient)
 
 
 def configure_gemini(monkeypatch):

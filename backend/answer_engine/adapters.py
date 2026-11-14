@@ -96,7 +96,9 @@ class GeminiOpenAdapter(_Boundary):
                   "systemInstruction": {"parts": [{"text":
                       "Answer briefly and clearly. You have no household observations or location. "
                       "Never claim a person's medicine was taken, a door was locked, or an action "
-                      "was completed. If asked about personal events, say you do not know."}]},
+                      "was completed. Do not provide diagnoses, treatment decisions or dosing "
+                      "advice; refer medical decisions to a doctor or pharmacist. "
+                      "If asked about personal events, say you do not know."}]},
                   "generationConfig": {"maxOutputTokens": 160}},
         )
         if not payload or payload.get("promptFeedback", {}).get("blockReason"):
