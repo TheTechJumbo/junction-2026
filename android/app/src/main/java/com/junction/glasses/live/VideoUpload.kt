@@ -104,7 +104,7 @@ internal data class RecordingReply(
                 throw RelayFailure("Relay refused the video" + (LocateReply.errorText(body)?.let { ": $it" } ?: "."))
             }
             return RecordingReply(
-                id = root.value("id")?.take(64),
+                id = (root.value("id") ?: root.value("session"))?.take(64),
                 zone = root.value("zone")?.take(32),
                 seconds = root.get("seconds")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asDouble?.takeIf { it.isFinite() },
                 status = root.value("status")?.take(200),
@@ -130,11 +130,13 @@ internal sealed class UploadOutcome {
  */
 internal class RecordingUploader(
     private val packageName: String,
+    /** The zone for a video whose file name does not name one (any video is accepted). */
+    private val defaultZone: String? = null,
     private val upload: suspend (file: File, zone: String, onProgress: (Long, Long) -> Unit) -> RecordingReply,
 ) {
     suspend fun send(file: File, keepOnPhone: Boolean, onProgress: (Long, Long) -> Unit): UploadOutcome {
         val pull = RecordingNames.adbPull(packageName, file.name)
-        val zone = RecordingNames.zoneOf(file.name) ?: return UploadOutcome.Failed("Not a room video: ${file.name}.", pull)
+        val zone = RecordingNames.zoneOf(file.name) ?: defaultZone ?: return UploadOutcome.Failed("No zone for ${file.name}.", pull)
         if (!file.isFile) return UploadOutcome.Failed("The video is no longer on the phone.", pull)
         val reply = try {
             upload(file, zone, onProgress)

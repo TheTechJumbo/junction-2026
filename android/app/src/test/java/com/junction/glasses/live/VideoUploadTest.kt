@@ -27,15 +27,19 @@ class VideoUploadTest {
             RecordingNames.adbPull("com.junction.glasses", name))
     }
 
-    @Test fun uploadRequestHasOnlyTheZoneInTheUrlAndTheKeyInTheHeader() {
+    @Test fun uploadRequestIsOneFinalChunkOfASessionWithTheKeyInTheHeader() {
         val file = folder.newFile("room-kitchen-20261114-210509.mp4").apply { writeBytes(ByteArray(1234) { it.toByte() }) }
         val client = RelayClient("http://127.0.0.1:8090", "synthetic-relay-key", "kitchen", allowLocalHttp = true)
         val body = FileUploadBody(file, RelayClient.VIDEO_MP4) { _, _ -> }
-        val request = client.recordingRequest("kitchen", body)
+        val request = client.recordingRequest("kitchen", body, RelayClient.sessionFor(file.name))
         assertEquals("POST", request.method)
         assertEquals("/recording", request.url.encodedPath)
-        assertEquals(setOf("zone"), request.url.queryParameterNames)
+        // The relay's contract: POST /recording?zone=ROOM&session=NAME&seq=N&final=0|1; a whole video is chunk 0, final.
+        assertEquals(setOf("zone", "session", "seq", "final"), request.url.queryParameterNames)
         assertEquals("kitchen", request.url.queryParameter("zone"))
+        assertEquals("room-kitchen-20261114-210509", request.url.queryParameter("session"))
+        assertEquals("0", request.url.queryParameter("seq"))
+        assertEquals("1", request.url.queryParameter("final"))
         assertFalse(request.url.toString().contains("synthetic-relay-key"))
         assertEquals("synthetic-relay-key", request.header("X-Key"))
         assertEquals("video/mp4", request.body!!.contentType().toString())
@@ -45,7 +49,8 @@ class VideoUploadTest {
         assertEquals("/recording", status.url.encodedPath)
         assertEquals(setOf("zone"), status.url.queryParameterNames)
         assertEquals("synthetic-relay-key", status.header("X-Key"))
-        assertThrows(IllegalArgumentException::class.java) { client.recordingRequest("kitchen&fresh=1", body) }
+        assertThrows(IllegalArgumentException::class.java) { client.recordingRequest("kitchen&fresh=1", body, "s") }
+        assertThrows(IllegalArgumentException::class.java) { client.recordingRequest("kitchen", body, "a b") }
     }
 
     @Test fun aVideoFileIsStreamedInChunksWithProgressAndTheReplyIsRead() {
@@ -60,11 +65,11 @@ class VideoUploadTest {
                 val client = RelayClient(server.url("/").toString(), "synthetic-relay-key", "kitchen", allowLocalHttp = true)
                 val reply = client.uploadRecording("kitchen", FileUploadBody(file, RelayClient.VIDEO_MP4) { sent, total ->
                     synchronized(progress) { progress.add(sent to total) }
-                })
+                }, RelayClient.sessionFor(file.name))
                 assertEquals(RecordingReply("rec-7", "kitchen", 42.5, "queued", "/viewer?rec=rec-7"), reply)
                 val request = server.takeRequest(5, TimeUnit.SECONDS)!!
                 assertEquals("POST", request.method)
-                assertEquals("/recording?zone=kitchen", request.path)
+                assertEquals("/recording?zone=kitchen&session=room-kitchen-20261114-210509&seq=0&final=1", request.path)
                 assertEquals("synthetic-relay-key", request.getHeader("X-Key"))
                 assertEquals("video/mp4", request.getHeader("Content-Type"))
                 assertEquals("700000", request.getHeader("Content-Length"))
@@ -88,7 +93,7 @@ class VideoUploadTest {
                 val body = StreamUploadBody({ opened++; ByteArrayInputStream(bytes) }, bytes.size.toLong(), RelayClient.VIDEO_MP4) { _, _ -> }
                 assertEquals(50_000L, body.contentLength())
                 val client = RelayClient(server.url("/").toString(), "synthetic-relay-key", "kitchen", allowLocalHttp = true)
-                assertEquals("queued", client.uploadRecording("kitchen", body).status)
+                assertEquals("queued", client.uploadRecording("kitchen", body, RelayClient.sessionFor("20261115_001625_fe4b2e25.mp4")).status)
                 val request = server.takeRequest(5, TimeUnit.SECONDS)!!
                 assertEquals("video/mp4", request.getHeader("Content-Type"))
                 assertArrayEquals(bytes, request.body.readByteArray())
@@ -141,9 +146,28 @@ class VideoUploadTest {
             val stray = folder.newFile("notes.mp4")
             assertTrue(uploader.send(stray, keepOnPhone = false) { _, _ -> } is UploadOutcome.Failed)
             assertTrue(stray.isFile)
+            // With a zone to fall back on, any video name is accepted.
+            val anyName = RecordingUploader("com.junction.glasses", defaultZone = "kitchen") { file, zone, _ ->
+                uploaded.add("${file.name}@$zone"); RecordingReply("2", zone, null, "final", null)
+            }
+            assertTrue(anyName.send(stray, keepOnPhone = true) { _, _ -> } is UploadOutcome.Sent)
+            assertEquals("notes.mp4@kitchen", uploaded.last())
             assertTrue(RecordingUploader.deleteAfterUpload(uploaded = true, keepOnPhone = false))
             assertFalse(RecordingUploader.deleteAfterUpload(uploaded = true, keepOnPhone = true))
             assertFalse(RecordingUploader.deleteAfterUpload(uploaded = false, keepOnPhone = false))
         }
+    }
+
+    @Test fun sessionNamesComeFromAnyFileNameAndTheRelayReplyIsRead() {
+        assertEquals("20261115_001625_fe4b2e25", RelayClient.sessionFor("20261115_001625_fe4b2e25.mp4"))
+        assertEquals("My-video--1-", RelayClient.sessionFor("My video (1).mov"))
+        assertEquals("video", RelayClient.sessionFor(".mp4"))
+        assertEquals(64, RelayClient.sessionFor("x".repeat(100) + ".mp4").length)
+        // What the relay answered for the 00:26:30 glasses video.
+        val reply = RecordingReply.parse("""{"ok":true,"session":"glasses-20261115-001625","seq":0,"frames_total":50,"status":"final",""" +
+            """"viewer":"/viewer?live=kitchen","duplicate":false,"missing":[],"map":"running","training":"running"}""")
+        assertEquals("glasses-20261115-001625", reply.id)
+        assertEquals("final", reply.status)
+        assertEquals("http://127.0.0.1:8090/viewer?live=kitchen", reply.viewerUrl("http://127.0.0.1:8090"))
     }
 }

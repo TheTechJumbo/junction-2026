@@ -152,11 +152,17 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
             .build()
     }
 
-    /** A room video for the laptop: POST {relay}/recording?zone={zone}, the body streamed (video/mp4). */
-    fun recordingRequest(zone: String, video: RequestBody): Request {
+    /**
+     * A room video for the laptop, sent whole as the only and last chunk of a recording session:
+     * POST {relay}/recording?zone={zone}&session={session}&seq=0&final=1, the body streamed (video/mp4).
+     * The relay maps the room and trains a splat at final=1; the same session sent again counts once.
+     */
+    fun recordingRequest(zone: String, video: RequestBody, session: String): Request {
         require(ZONE.matches(zone)) { "Zone names use a-z, 0-9, _ and -" }
+        require(SESSION.matches(session)) { "Session names use A-Z, a-z, 0-9, _ and -" }
         return Request.Builder()
-            .url(base.newBuilder().addPathSegment("recording").addQueryParameter("zone", zone).build())
+            .url(base.newBuilder().addPathSegment("recording").addQueryParameter("zone", zone)
+                .addQueryParameter("session", session).addQueryParameter("seq", "0").addQueryParameter("final", "1").build())
             .header("X-Key", key)
             .header("Accept", "application/json")
             .post(video)
@@ -174,8 +180,8 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
             .build()
     }
 
-    suspend fun uploadRecording(zone: String, video: RequestBody): RecordingReply =
-        RecordingReply.parse(send(videoHttp, recordingRequest(zone, video)))
+    suspend fun uploadRecording(zone: String, video: RequestBody, session: String): RecordingReply =
+        RecordingReply.parse(send(videoHttp, recordingRequest(zone, video, session)))
 
     suspend fun recordingStatus(zone: String): RecordingReply =
         RecordingReply.parse(send(http, recordingStatusRequest(zone)))
@@ -223,6 +229,12 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         val VIDEO_MP4 = "video/mp4".toMediaType()
         private val LOOPBACK = setOf("localhost", "127.0.0.1", "::1", "10.0.2.2")
         private val ZONE = Regex("[a-z0-9_-]{1,32}")
+        /** The relay's SESSION_NAME. */
+        private val SESSION = Regex("[A-Za-z0-9_-]{1,64}")
+
+        /** A recording session name from a video's file name: no extension, other characters as '-'. */
+        fun sessionFor(fileName: String): String =
+            fileName.substringBeforeLast('.').replace(Regex("[^A-Za-z0-9_-]"), "-").take(64).ifEmpty { "video" }
 
         fun isZone(name: String): Boolean = ZONE.matches(name)
     }

@@ -753,10 +753,10 @@ class MainActivity : ComponentActivity() {
     }
     private fun uploadPhoneVideo(file: File) {
         if (file == videoFile) { uploadStatus.text = "That video is still recording."; return }
-        val zone = RecordingNames.zoneOf(file.name) ?: run { uploadStatus.text = "${file.name} is not a room video."; return }
+        val zone = RecordingNames.zoneOf(file.name) ?: relayZone
         val client = relayClient(uploadStatus, zone) ?: return
-        val uploader = RecordingUploader(packageName) { video, videoZone, progress ->
-            client.uploadRecording(videoZone, FileUploadBody(video, RelayClient.VIDEO_MP4, progress))
+        val uploader = RecordingUploader(packageName, zone) { video, videoZone, progress ->
+            client.uploadRecording(videoZone, FileUploadBody(video, RelayClient.VIDEO_MP4, progress), RelayClient.sessionFor(video.name))
         }
         val keep = keepOnPhone.isChecked
         runUpload(file.name) { progress ->
@@ -774,7 +774,7 @@ class MainActivity : ComponentActivity() {
         runUpload(video.name) { progress ->
             try {
                 val body = StreamUploadBody({ library.open(video.id) }, video.sizeBytes, RelayClient.VIDEO_MP4, progress)
-                sentText(client.uploadRecording(zone, body)) + "\nMeta AI's copy on the phone is unchanged."
+                sentText(client.uploadRecording(zone, body, RelayClient.sessionFor(video.name))) + "\nMeta AI's copy on the phone is unchanged."
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
