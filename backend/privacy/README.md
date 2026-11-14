@@ -17,7 +17,7 @@ try:
 except RedactionUnavailable:
     # Reject evidence attachment. Never store the original as an error fallback.
     raise
-# Store only result.image_bytes, MIME result.content_type (image/png).
+# Store only result.image_bytes with result.content_type (image/jpeg or image/png).
 # result.faces_redacted is operator diagnostics, not a canonical Event field.
 # result.status == "no_faces_detected" explicitly means none were detected;
 # it does not establish that no face exists in the image.
@@ -29,7 +29,8 @@ processes, with immediate busy rejection. Root owns HTTP wiring/error envelopes,
 manifest changes, storage and 24-hour retention. This module changes none of them.
 Metadata should be normalized/stripped before this call; the module also strips
 metadata from its output and handles EXIF orientation for standalone callers.
-Use PNG metadata consistently when storing output: input MIME may have been JPEG.
+Output preserves normalized input format (JPEG or PNG). Both content_type and its
+media_type alias report the actual encoded format; use that value in storage.
 
 A killable isolated Python child decodes, detects, blurs and re-encodes through
 stdin/stdout pipes. The deadline starts before the input-header check and includes
@@ -39,13 +40,17 @@ only PATH/SYSTEMROOT, has no application/provider credentials, ignores PYTHONPAT
 and user-site packages, and pins native thread counts to one. This is processing
 isolation, not an OS security sandbox or a guarantee against host swap/core dumps.
 
-Bounds: 5 MiB encoded input, JPEG or single-frame PNG only, both dimensions
-32..1280, at most 1,048,576 decoded pixels, two concurrent children, 64 returned
-faces, 5,000 pre-NMS candidates, 8 MiB output. The bundled 232,589-byte YuNet model
+Bounds: 5 MiB encoded input, JPEG or single-frame PNG only, positive dimensions
+and at most 16,000,000 decoded pixels, two concurrent children, 64 returned faces,
+5,000 pre-NMS candidates, 5 MiB encoded output. The bundled 232,589-byte YuNet model
 must match its SHA-256 before detection. OpenCV CPU backend/target and no OpenCL;
-score threshold 0.6, NMS 0.3. Each detected box expands by 35% per side and receives
-a Gaussian blur with radius one third of the expanded maximum dimension. Pixels
-outside expanded boxes remain unchanged in decoded RGB. Size/format/model/runtime/
+score threshold 0.6, NMS 0.3. Detector input is downscaled to a longest edge of
+1280, then padded to a minimum 32px per axis for tiny inputs. Returned boxes map
+back using each resized axis independently. Each detected box expands by 35% per
+side at the original resolution and receives
+a Gaussian blur with radius one third of the expanded maximum dimension. Full output resolution is preserved. PNG pixels outside expanded boxes remain
+unchanged in decoded RGB; JPEG encoding at quality 90 introduces normal codec loss
+throughout the image, including outside masks. Size/format/model/runtime/
 malformed detector output/timeout/busy errors return no accepted image.
 
 ## Achievable acceptance and limits
@@ -56,8 +61,10 @@ faces can be missed; the real fixture is not a demographic or capture-condition
 benchmark. Zero detections is reported explicitly, never described as face-free.
 A broad threshold and padded blur reduce exposure on detections but do not prove
 anonymity or prevent every recognition method. Unusual settings can cause false
-positives that blur meaningful scene details. Oversized inputs are rejected rather
-than downsampled and possibly hiding small faces. No full-image blanking fallback.
+positives that blur meaningful scene details. Inputs above 16MP are rejected. Larger accepted images are downsampled only for
+detection, which increases the chance of missing small or distant faces. The
+original full-resolution image is transformed/encoded, never replaced by the
+smaller detector image. High-entropy output that exceeds 5MiB is rejected honestly. No full-image blanking fallback.
 
 Verified acceptance here: a real public-domain portrait is detected, its known
 face extent falls inside the expanded mask, facial detail is strongly reduced,
@@ -119,11 +126,12 @@ and https://pypi.org/pypi/numpy/2.2.6/json . No shared manifests edited by this 
 ## Verification and measurements
 
 Run `.venv/bin/python -m pytest -q backend/tests/privacy` after dependency install;
-tests deliberately do not skip a missing detector. All 23 privacy tests passed on the proposed NumPy2.2.6 / OpenCV4.13.0.92 pairing,
+tests deliberately do not skip a missing detector. All 27 privacy tests passed on the proposed NumPy2.2.6 / OpenCV4.13.0.92 pairing,
 and pip check found no broken requirements. All model and fixture assets are
 bundled, so tests need no credentials or network. Tests cover public-face masks,
 nonface pixels, multiple faces, explicit no-detection output, metadata/orientation,
-input/pixel/animation limits, model integrity, detector errors, subprocess crash/
+input/pixel/animation limits, small 2px/8px PNGs, full-resolution 12MP JPEG and
+scaled face coordinates, model integrity, detector errors, subprocess crash/
 timeout/reaping, total deadline and concurrency saturation.
 
 Measured initially on this worker's macOS ARM64 / Python3.12 with NumPy2.5.4: first native import after wheel
@@ -137,6 +145,16 @@ fixture calls use 10s to tolerate cold native loading; timeout tests exercise
 rejection. No Linux runtime or live hardware measurement performed by this worker.
 
 On the final proposed NumPy2.2.6 pair, ten subsequent full worker calls had median
-0.143s and maximum 0.292s on the same fixture/machine. Final `make check`: 332
+0.143s and maximum 0.292s on the same fixture/machine. Final `make check`: 336
 passed, 8 integration tests deselected; ruff/schema checks passed. Linux execution and
 HTTP/storage integration remain integrator checks.
+
+
+The full-resolution 4000x3000 JPEG regression (12MP, photographic content derived
+from the public portrait) also passed with the default 3s budget: 0.464s full worker,
+1,038,378 input bytes and 935,693 output bytes. This tests common capture-size
+encoding and scaled masks, not actual phone hardware or a diverse scene benchmark.
+After installing/updating native wheels, run `python -c 'import cv2,numpy'` during
+setup/preflight outside upload processing. macOS cold native package initialization
+may exceed even 10s (also observed by integrator); a successful warm import is not
+a future deadline guarantee. Keep request deadlines strict and reject failures.

@@ -20,12 +20,12 @@ def png(image, metadata=None):
     return buffer.getvalue()
 
 
-def decoded(data, *, check_metadata=True):
+def decoded(data, *, check_metadata=True, expected_format="PNG"):
     with Image.open(io.BytesIO(data)) as image:
         image.load()
-        assert image.format == "PNG"
+        assert image.format == expected_format
         if check_metadata:
-            assert not image.info
+            assert not {key for key in image.info if key not in {"jfif", "jfif_version", "jfif_unit", "jfif_density"}}
         return np.array(image)
 
 
@@ -69,7 +69,7 @@ def test_invalid_or_oversize_bytes_rejected_before_subprocess(monkeypatch, data)
         LocalFaceRedactor().redact(data)
 
 
-@pytest.mark.parametrize("size", [(1281, 5), (1025, 1024)])
+@pytest.mark.parametrize("size", [(4097, 4096), (1, 16 * 1024 * 1024 + 1)])
 def test_pixel_limit_rejects_compressible_image_before_child(monkeypatch, size):
     data = png(Image.new("RGB", size))
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: pytest.fail("child spawned"))
@@ -182,7 +182,7 @@ def test_exif_orientation_and_metadata_are_not_retained():
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", exif=exif)
     result = LocalFaceRedactor(timeout_seconds=10).redact(buffer.getvalue())
-    assert decoded(result.image_bytes).shape == (64, 32, 3)
+    assert decoded(result.image_bytes, expected_format="JPEG").shape == (64, 32, 3)
     assert b"synthetic private" not in result.image_bytes
 
 
@@ -237,3 +237,49 @@ def test_invalid_detector_output_cannot_be_treated_as_no_faces(monkeypatch, bad)
     monkeypatch.setattr(cv2.FaceDetectorYN, "create", lambda *args: Detector())
     with pytest.raises(ValueError):
         worker.transform(png(Image.new("RGB", (64, 64))))
+
+
+@pytest.mark.parametrize("edge", [2, 8])
+def test_tiny_png_supported_by_detector_padding(edge):
+    image = Image.new("RGB", (edge, edge), "green")
+    result = LocalFaceRedactor(timeout_seconds=10).redact(png(image))
+    assert result.status == "no_faces_detected"
+    assert result.content_type == result.media_type == "image/png"
+    assert np.array_equal(decoded(result.image_bytes), np.asarray(image))
+
+
+def test_twelve_megapixel_compressed_jpeg_preserves_resolution_and_scaled_mask():
+    # Real public photographic content expanded to a common 4000x3000 capture size.
+    # This is a size/encoding/coordinate regression, not phone-camera validation.
+    with Image.open(FIXTURE) as fixture:
+        image = fixture.convert("RGB").resize((4000, 3000), Image.Resampling.LANCZOS)
+    original = io.BytesIO()
+    image.save(original, format="JPEG", quality=90)
+    assert len(original.getvalue()) < 5 * 1024 * 1024
+    result = LocalFaceRedactor(timeout_seconds=10).redact(original.getvalue())
+    assert result.content_type == result.media_type == "image/jpeg"
+    assert result.faces_redacted == 1
+    assert len(result.image_bytes) < 5 * 1024 * 1024
+    after = decoded(result.image_bytes, expected_format="JPEG")
+    assert after.shape == (3000, 4000, 3)
+    left, top, right, bottom = result.face_boxes[0]
+    assert left < 175 * 4000/512 and right > 270 * 4000/512
+    assert top < 65 * 3000/512 and bottom > 170 * 3000/512
+    before = np.asarray(image)
+    face_before = before[400:990, 1400:2100]
+    face_after = after[400:990, 1400:2100]
+    assert np.abs(face_before.astype(float) - face_after).mean() > 15
+    # Codec loss is expected for JPEG; scene away from the mask remains recognizable.
+    assert np.abs(before[2200:2800, 2500:3500].astype(float) -
+                  after[2200:2800, 2500:3500]).mean() < 5
+
+
+def test_worker_enforces_its_own_pixel_and_output_limits(monkeypatch):
+    image = png(Image.new("RGB", (32, 32)))
+    monkeypatch.setattr(worker, "MAX_PIXELS", 2)
+    with pytest.raises(ValueError, match="Pixel limit"):
+        worker.transform(image)
+    monkeypatch.setattr(worker, "MAX_PIXELS", 16_000_000)
+    monkeypatch.setattr(worker, "MAX_OUTPUT_BYTES", 1)
+    with pytest.raises(ValueError, match="Output limit"):
+        worker.transform(image)

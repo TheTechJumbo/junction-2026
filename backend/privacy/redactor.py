@@ -13,9 +13,8 @@ from pathlib import Path
 from PIL import Image
 
 MAX_INPUT_BYTES = 5 * 1024 * 1024
-MAX_OUTPUT_BYTES = 8 * 1024 * 1024
-MAX_PIXELS = 1024 * 1024
-MAX_DIMENSION = 1280
+MAX_OUTPUT_BYTES = 5 * 1024 * 1024
+MAX_PIXELS = 16_000_000
 
 
 class RedactionUnavailable(Exception):
@@ -28,6 +27,10 @@ class RedactionResult:
     face_boxes: tuple[tuple[int, int, int, int], ...]
     status: str  # detected_faces_redacted | no_faces_detected; neither means face-free
     content_type: str = "image/png"
+
+    @property
+    def media_type(self):
+        return self.content_type
 
     @property
     def faces_redacted(self):
@@ -57,7 +60,7 @@ class LocalFaceRedactor:
             with Image.open(io.BytesIO(image_bytes)) as image:
                 width, height = image.size
                 if (image.format not in {"JPEG", "PNG"} or getattr(image, "n_frames", 1) != 1
-                        or not 32 <= width <= MAX_DIMENSION or not 32 <= height <= MAX_DIMENSION
+                        or width < 1 or height < 1
                         or width * height > MAX_PIXELS):
                     raise ValueError()
         except Exception:
@@ -95,11 +98,14 @@ class LocalFaceRedactor:
             boxes = tuple(tuple(box) for box in metadata["face_boxes"])
             if (metadata["status"] not in {"detected_faces_redacted", "no_faces_detected"}
                     or bool(boxes) != (metadata["status"] == "detected_faces_redacted")
-                    or len(data) > MAX_OUTPUT_BYTES or not data.startswith(b"\x89PNG\r\n\x1a\n")):
+                    or len(data) > MAX_OUTPUT_BYTES
+                    or metadata["content_type"] not in {"image/png", "image/jpeg"}
+                    or not data.startswith(b"\x89PNG\r\n\x1a\n" if metadata["content_type"] == "image/png"
+                                           else b"\xff\xd8")):
                 raise ValueError()
             if time.monotonic() > deadline:
                 raise subprocess.TimeoutExpired(process.args, self.timeout_seconds)
-            return RedactionResult(data, boxes, metadata["status"])
+            return RedactionResult(data, boxes, metadata["status"], metadata["content_type"])
         except subprocess.TimeoutExpired:
             raise RedactionUnavailable("Face redaction timed out; image was not accepted") from None
         except Exception:

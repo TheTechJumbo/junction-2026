@@ -8,9 +8,9 @@ import warnings
 from pathlib import Path
 
 MAX_INPUT_BYTES = 5 * 1024 * 1024
-MAX_OUTPUT_BYTES = 8 * 1024 * 1024
-MAX_PIXELS = 1024 * 1024
-MAX_DIMENSION = 1280
+MAX_OUTPUT_BYTES = 5 * 1024 * 1024
+MAX_PIXELS = 16_000_000
+DETECTOR_EDGE = 1280
 MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 
 
@@ -30,17 +30,24 @@ def transform(data):
     with Image.open(io.BytesIO(data)) as source:
         width, height = source.size
         if (source.format not in {"JPEG", "PNG"} or getattr(source, "n_frames", 1) != 1
-                or not 32 <= width <= MAX_DIMENSION or not 32 <= height <= MAX_DIMENSION
+                or width < 1 or height < 1
                 or width * height > MAX_PIXELS):
             raise ValueError("Pixel limit")
+        output_format = source.format
         image = ImageOps.exif_transpose(source).convert("RGB")
         image.load()
     width, height = image.size
+    scale = min(1.0, DETECTOR_EDGE / max(width, height))
+    detector_width, detector_height = max(1, round(width * scale)), max(1, round(height * scale))
+    detector_image = image.resize((detector_width, detector_height), Image.Resampling.LANCZOS)
+    pixels = cv2.cvtColor(np.asarray(detector_image), cv2.COLOR_RGB2BGR)
+    pixels = cv2.copyMakeBorder(pixels, 0, max(0, 32-detector_height),
+                               0, max(0, 32-detector_width), cv2.BORDER_CONSTANT)
     detector = cv2.FaceDetectorYN.create(
-        str(model), "", (width, height), 0.6, 0.3, 5000,
+        str(model), "", (pixels.shape[1], pixels.shape[0]), 0.6, 0.3, 5000,
         cv2.dnn.DNN_BACKEND_OPENCV, cv2.dnn.DNN_TARGET_CPU,
     )
-    _, faces = detector.detect(cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR))
+    _, faces = detector.detect(pixels)
     boxes = []
     if faces is not None:
         if len(faces) > 64 or faces.ndim != 2 or faces.shape[1] != 15:
@@ -51,6 +58,9 @@ def transform(data):
             x, y, w, h = (float(value) for value in face[:4])
             if w <= 0 or h <= 0 or not .6 <= float(face[-1]) <= 1:
                 raise ValueError("Invalid detector box")
+            # Map actual resized axes back independently (rounding may alter aspect).
+            x, w = x * width / detector_width, w * width / detector_width
+            y, h = y * height / detector_height, h * height / detector_height
             # Expand every detected box 35% in each direction to include its edges.
             box = (max(0, math.floor(x - .35 * w)), max(0, math.floor(y - .35 * h)),
                    min(width, math.ceil(x + 1.35 * w)), min(height, math.ceil(y + 1.35 * h)))
@@ -62,15 +72,19 @@ def transform(data):
             region = region.filter(ImageFilter.GaussianBlur(radius=max(right-left, bottom-top) / 3))
             image.paste(region, box)
             boxes.append(box)
-    # A fresh RGB image and PNG encoding discard source metadata including EXIF/XMP.
+    # A fresh RGB image discards source metadata including EXIF/XMP.
     clean = Image.new("RGB", image.size)
     clean.paste(image)
     output = io.BytesIO()
-    clean.save(output, format="PNG")
+    if output_format == "JPEG":
+        clean.save(output, format="JPEG", quality=90)
+    else:
+        clean.save(output, format="PNG")
     encoded = output.getvalue()
     if len(encoded) > MAX_OUTPUT_BYTES:
         raise ValueError("Output limit")
-    return {"face_boxes": boxes, "status": "detected_faces_redacted" if boxes else "no_faces_detected"}, encoded
+    return {"face_boxes": boxes, "status": "detected_faces_redacted" if boxes else "no_faces_detected",
+            "content_type": "image/jpeg" if output_format == "JPEG" else "image/png"}, encoded
 
 
 def main():
