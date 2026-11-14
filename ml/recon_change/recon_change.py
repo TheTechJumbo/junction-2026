@@ -182,6 +182,9 @@ def run_vggt(frames_bgr, model_id="facebook/VGGT-1B"):
 # ----------------------------------------------------------------------------- geometry
 def unproject(depth, K, E):
     """Depth map -> world points (H, W, 3)."""
+    fast = recon_rust.unproject(depth, K, E)
+    if fast is not None:
+        return fast
     H, W = depth.shape
     u, v = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
     cam = np.stack([(u - K[0, 2]) / K[0, 0] * depth, (v - K[1, 2]) / K[1, 1] * depth, depth], -1)
@@ -321,12 +324,17 @@ def patch_table(r, valid, frames):
     h, w = r.feat.shape[1:3]
     ph, pw = H // h, W // w
     pos, feat, frame = [], [], []
-    for j in frames:
-        d = np.where(valid[j], r.depth[j], np.nan)[:h * ph, :w * pw]
-        d = d.reshape(h, ph, w, pw).transpose(0, 2, 1, 3).reshape(h, w, ph * pw)
-        ok = np.isfinite(d).sum(-1) >= ph * pw // 4
+    medians = recon_rust.patch_median(r.depth, valid, frames, h, w)  # (frames, h, w), NaN = too few trusted pixels
+    for i, j in enumerate(frames):
+        if medians is not None:
+            ok = np.isfinite(medians[i])
+            z = medians[i][ok]
+        else:
+            d = np.where(valid[j], r.depth[j], np.nan)[:h * ph, :w * pw]
+            d = d.reshape(h, ph, w, pw).transpose(0, 2, 1, 3).reshape(h, w, ph * pw)
+            ok = np.isfinite(d).sum(-1) >= ph * pw // 4
+            z = np.nanmedian(d[ok], -1)
         v, u = np.nonzero(ok)
-        z = np.nanmedian(d[ok], -1)
         K, E = r.K[j], r.E[j]
         cam = np.stack([((u + 0.5) * pw - 0.5 - K[0, 2]) / K[0, 0] * z, ((v + 0.5) * ph - 0.5 - K[1, 2]) / K[1, 1] * z, z], -1)
         pos.append((cam - E[:, 3]) @ E[:, :3])
@@ -350,9 +358,14 @@ def same_place_similarity(r, a, b, seed=0, sample=1500):
         return None
     pick = np.random.default_rng(seed).choice(len(pa), min(sample, len(pa)), replace=False)
     z = np.einsum("ij,ij->i", pa[pick], r.E[qa[pick], 2, :3]) + r.E[qa[pick], 2, 3]
-    dist = distances(pa[pick], pb)
-    nearest = dist.argmin(1)
-    close = dist[np.arange(len(pick)), nearest] < 0.015 * z
+    fast = recon_rust.nearest(pa[pick], pb)  # without the (1500, B) distance table
+    if fast is not None:
+        nearest, gap = fast
+    else:
+        dist = distances(pa[pick], pb)
+        nearest = dist.argmin(1)
+        gap = dist[np.arange(len(pick)), nearest]
+    close = gap < 0.015 * z
     if close.sum() < 50:
         return None
     return float(np.percentile(np.einsum("ij,ij->i", fa[pick][close], fb[nearest[close]]), 25))
@@ -370,6 +383,9 @@ def has_lookalike(r, q, pix, pts, table, reach, min_sim, need):
     inv = inv.ravel()
     centre = np.stack([np.bincount(inv, pts[:, k], len(ids)) for k in range(3)], 1) / np.bincount(inv, minlength=len(ids))[:, None]
     z = centre @ r.E[q][2, :3] + r.E[q][2, 3]
+    fast = recon_rust.lookalike_count(centre, z, reach, r.feat[q].reshape(h * w, -1)[ids], pos, feat, frame, min_sim)
+    if fast is not None:
+        return (fast >= need)[inv]
     hit = (distances(centre, pos) < reach * z[:, None]) & (r.feat[q].reshape(h * w, -1)[ids] @ feat.T > min_sim)
     count = np.zeros(len(ids), np.int32)
     for j in np.unique(frame):
