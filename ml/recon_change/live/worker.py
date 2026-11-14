@@ -10,7 +10,9 @@ to RUNNING, does the work, writes result.json, and renames the marker to DONE or
             and report what appeared and what is gone
   locate    reconstruct the zone's baseline frames together with up to 3 frames of what the
             wearer sees now, and report where they stand, which way they face, and the
-            distance and direction to each named place (see locate.py)
+            distance and direction to each named place (see locate.py). With RECON_ITEMS not
+            empty it also reports small things seen in the newest frame ("keys", "glasses",
+            ...) and where they are on the same map (see items.py)
 
 A clip is either a video file or a zip of frames (000.jpg, 001.jpg, ...) that the relay
 already picked, which is far smaller to send than a phone video.
@@ -32,6 +34,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import items  # noqa: E402
 import locate  # noqa: E402
 import recon_change as rc  # noqa: E402
 import splat  # noqa: E402
@@ -46,6 +49,8 @@ N_LOCATE = int(os.environ.get("RECON_LOCATE_FRAMES", "3"))  # frames of the wear
 N_LOCATE_BASE = int(os.environ.get("RECON_LOCATE_BASELINE", min(N_BASELINE, 12)))
 LANE = "-cpu" if DEVICE == "cpu" else ""  # the CPU worker has its own queue and heartbeat
 QUEUE, BASELINES = ROOT / f"queue{LANE}", ROOT / "baselines"
+ITEMS = items.wanted()  # RECON_ITEMS: small things to look for in every position fix; empty = off
+ITEM_DETECTOR = {}  # {"model": the loaded detector} or {"error": why it could not be loaded}
 INFO = {}  # what this worker is, filled in at start and attached to every result
 
 
@@ -168,7 +173,8 @@ def where(model, job, req):
     spread = np.linspace(0, len(files) - 1, min(N_LOCATE_BASE, len(files))).round().astype(int)
     pick = sorted({int(i) for i in spread} | {p["frame"] for p in places})  # a place needs the picture it was picked in
     base = [cv2.imread(str(files[i])) for i in pick]
-    new = [crop_like(f, base[0]) for f in clip_frames(job, req, N_LOCATE)]
+    seen = clip_frames(job, req, N_LOCATE)
+    new = [crop_like(f, base[0]) for f in seen]
     if not new:
         raise RuntimeError("No picture of what the wearer sees.")
     seconds["frames"] = round(time.time() - t0, 2)
@@ -184,6 +190,22 @@ def where(model, job, req):
     out.mkdir(exist_ok=True)
     cv2.imwrite(str(out / "view.jpg"), new[-1], [cv2.IMWRITE_JPEG_QUALITY, 88])
     seconds["locate"] = round(time.time() - t0, 2)
+    result.update({"items": [], "items_looked_for": ITEMS, "items_checked": []})
+    if ITEMS:  # lost items: found in the newest picture, placed with this fix's depth (items.py)
+        t0 = time.time()
+        try:
+            if "model" not in ITEM_DETECTOR:
+                raise RuntimeError(ITEM_DETECTOR.get("error", "not loaded"))
+            found, item_marks = items.look(ITEM_DETECTOR["model"], ITEMS, job / req["file"], seen[-1], base[0], recon,
+                                           list(range(len(base))), len(base) + len(new) - 1, valid, result["state"], out,
+                                           remembered=req.get("remembered"))
+            result.update(found)
+            marks += item_marks
+        except Exception as error:  # the position fix must still go out; nothing was looked for, so the list is empty
+            result.update({"items": [], "items_checked": [], "items_looked_for": [],
+                           "items_note": f"Items were not looked for: {type(error).__name__}: {error}"[:300]})
+            print(f"{job.name} items FAILED: {traceback.format_exc()}", flush=True)
+        seconds["items"] = round(time.time() - t0, 2)
     if req.get("view"):  # the room as a splat, with the wearer (blue) and the places (yellow) marked
         t0 = time.time()
         nothing = {"points": np.zeros((0, 3)), "frames": np.zeros(0, int), "pixels": np.zeros(0, int), "member": np.zeros(0, int)}
@@ -213,6 +235,14 @@ def main():
         "settings": {"baseline_frames": N_BASELINE, "new_frames": N_AFTER, "long_side": LONG_SIDE,
                      "locate_baseline_frames": N_LOCATE_BASE},
     })
+    if ITEMS:
+        try:
+            ITEM_DETECTOR["model"] = items.load(device="cuda" if on_gpu else "cpu")
+            INFO["settings"]["items"] = ITEM_DETECTOR["model"].settings(ITEMS)
+        except Exception as error:  # the worker still serves checks and position fixes
+            ITEM_DETECTOR["error"] = f"{type(error).__name__}: {error}"[:300]
+            INFO["settings"]["items"] = {"model": items.MODEL_ID, "names": ITEMS, "error": ITEM_DETECTOR["error"]}
+            print(f"Item detector NOT loaded: {traceback.format_exc()}", flush=True)
     (ROOT / f"worker{LANE}.json").write_text(json.dumps(INFO))
     print("worker ready", flush=True)
     while not stop.exists():

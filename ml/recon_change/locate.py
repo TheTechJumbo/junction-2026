@@ -49,6 +49,28 @@ def axes(E, base):
     return up, north, np.cross(north, up)
 
 
+def map_frame(r, base, valid, typical_m=2.0):
+    """The room map of one pass, and the ONE place its transform is defined: where the map's origin
+    is in the pass's 3D frame, which way east, north and up point there (unit vectors, at right
+    angles), and how many metres one unit of the pass is. Named places (locate) and lost items
+    (items.py) both go through this, so swapping it for a stored room frame changes both."""
+    up, north, east = axes(r.E, base)
+    return {"origin": camera(r.E[base[0]])[0], "east": east, "north": north, "up": up,
+            "metres": typical_m / float(np.median(r.depth[base][valid[base]]))}
+
+
+def to_map(room, points):
+    """Points in the pass's 3D frame -> (n, 3) map positions: east, north, up in rough metres."""
+    d = (np.atleast_2d(points) - room["origin"]) * room["metres"]
+    return np.stack([d @ room["east"], d @ room["north"], d @ room["up"]], 1)
+
+
+def from_map(room, positions):
+    """Map positions (east, north, up) -> (n, 3) points in the pass's 3D frame. The inverse of to_map."""
+    p = np.atleast_2d(np.asarray(positions, float)) / room["metres"]
+    return room["origin"] + p[:, :1] * room["east"] + p[:, 1:2] * room["north"] + p[:, 2:3] * room["up"]
+
+
 def unit_features(r):
     """The patch features at length 1, so that a dot product is a cosine similarity. None if the
     reconstruction was saved without them."""
@@ -109,15 +131,13 @@ def locate(r, base, new, places=(), typical_m=2.0, conf_pct=25.0, tol=0.06, samp
     (world position, radius, RGB colour), and the trusted-pixel mask."""
     valid = rc.valid_mask(r, conf_pct)
     near = rc.nearest_in_window(r.depth, 7)
-    up, north, east = axes(r.E, base)
-    metres = typical_m / float(np.median(r.depth[base][valid[base]]))
-    origin = camera(r.E[base[0]])[0]
+    room = map_frame(r, base, valid, typical_m)
+    up, north, east, metres = room["up"], room["north"], room["east"], room["metres"]
     rng = np.random.default_rng(seed)
     trusted = float(valid[base].mean())
 
     def on_map(points):
-        d = (np.atleast_2d(points) - origin) * metres
-        return np.stack([d @ east, d @ north, d @ up], 1)
+        return to_map(room, points)
 
     feat = unit_features(r) if look else None
 
@@ -184,8 +204,9 @@ def locate(r, base, new, places=(), typical_m=2.0, conf_pct=25.0, tol=0.06, samp
         "heading_deg": int(round(heading)),
         "waypoints": waypoints,
         "track": [[round(float(v), 2) for v in on_map(camera(r.E[q])[0])[0][:2]] for q in new],
-        "map": {"points": np.round(cloud[:, :2], 2).tolist(),
-                "cameras": np.round(on_map(np.array([camera(r.E[q])[0] for q in base]))[:, :2], 2).tolist()},
+        # As 64-bit numbers, so 1.23 is written as 1.23 and not as 1.2300000190734863 (the fix stays small).
+        "map": {"points": np.round(cloud[:, :2].astype(np.float64), 2).tolist(),
+                "cameras": np.round(on_map(np.array([camera(r.E[q])[0] for q in base]))[:, :2].astype(np.float64), 2).tolist()},
         "match_per_frame": [round(m, 2) for m in matches],
         "looks_alike": None if looks_alike is None else round(looks_alike, 2),  # None: no features, depth only
         "match_by_depth": round(by_depth[-1], 2),
