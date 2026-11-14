@@ -307,8 +307,10 @@ class DayLog:
             record["id"] = str(event["id"])
         if isinstance(event.get("confidence"), (int, float)):
             record["c"] = round(float(event["confidence"]), 2)
+        same = (lambda r: r.get("id") == record["id"]) if "id" in record else \
+            (lambda r: (r["type"], r["t"], r.get("object")) == (record["type"], record["t"], record["object"]))
         with self.lock:
-            if "id" in record and any(r["k"] == "event" and r.get("id") == record["id"] for r in self.records(self.day_of(t))):
+            if any(r["k"] == "event" and same(r) for r in self.records(self.day_of(t))):
                 return None
             return self.add(record)
 

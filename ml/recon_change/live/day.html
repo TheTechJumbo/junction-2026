@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon Day Log</title>
+<style>
+  :root {
+    --bg: #05070a; --card: #0d131b; --line: #223040; --ink: #e8eef5; --dim: #93a1b2;
+    --blue: #4fc3ff; --green: #3cdc78; --red: #ff6b5b; --amber: #ffb84d; --violet: #b79cff;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0 8px 0 0; letter-spacing: .04em; }
+  h2 { font-size: 12px; margin: 0; color: var(--dim); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  main { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 40px; max-width: 980px; margin: 0 auto; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  button, select { font: inherit; color: var(--ink); background: #12202d; border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; min-height: 38px; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  button[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
+  button:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  a { color: var(--blue); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .meta { font-size: 12.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #summary p { margin: 0 0 6px; font-size: 16px; }
+  #summary p:last-child { margin-bottom: 0; }
+  .empty { color: var(--dim); }
+  /* the strip: one line per place, time runs left to right */
+  .strip { display: grid; grid-template-columns: minmax(84px, 150px) minmax(0, 1fr); gap: 6px 10px; align-items: center; }
+  .strip .name { font-size: 13px; overflow-wrap: anywhere; line-height: 1.25; }
+  .track { position: relative; height: 26px; background: #0a0f15; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .track.axis { height: 18px; background: none; border: 0; overflow: visible; }
+  .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
+  .axis .tick { background: none; font-size: 11px; color: var(--dim); transform: translateX(-50%); white-space: nowrap; width: auto; }
+  .bar { position: absolute; top: 3px; bottom: 3px; min-width: 5px; border: 0; padding: 0; min-height: 0; border-radius: 4px; background: var(--blue); cursor: pointer; }
+  .bar.place { background: var(--green); }
+  .bar.gap { background: repeating-linear-gradient(135deg, #2a3644 0 5px, #18212b 5px 10px); top: 0; bottom: 0; border-radius: 0; }
+  .bar.unsure { background-image: repeating-linear-gradient(90deg, transparent 0 4px, rgba(5, 7, 10, .65) 4px 7px); }
+  .mark { position: absolute; top: 3px; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; border: 2px solid var(--amber); background: #0a0f15; padding: 0; min-height: 0; cursor: pointer; }
+  .mark.question { border-color: var(--violet); } .mark.item { border-color: var(--dim); }
+  .mark.reminder.done { border-color: var(--green); } .mark.reminder.missed { border-color: var(--red); }
+  .bar[aria-current="true"], .mark[aria-current="true"] { outline: 2px solid #fff; outline-offset: 1px; z-index: 2; }
+  #detail { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  #list li { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 2px 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+  #list li:last-child { border-bottom: 0; }
+  #list .when { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 13.5px; }
+  #list .gap .what { color: var(--dim); }
+  .chip { display: inline-block; font-size: 11.5px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); margin-left: 6px; white-space: nowrap; vertical-align: 1px; }
+  .chip.low { color: var(--amber); border-color: var(--amber); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--blue); }
+  .dot.place { background: var(--green); } .dot.gap { background: #3a4756; } .dot.event { background: var(--amber); }
+  .dot.question { background: var(--violet); } .dot.item { background: var(--dim); } .dot.walk { background: #7fd7c4; }
+  .dot.reminder { background: var(--amber); } .dot.reminder.done { background: var(--green); } .dot.reminder.missed { background: var(--red); }
+  @media (max-width: 520px) {
+    main { padding: 10px 10px 32px; } .card { padding: 12px; }
+    #list li { grid-template-columns: minmax(0, 1fr); } .strip { grid-template-columns: 78px minmax(0, 1fr); gap: 6px 8px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>BEACON <span style="font-weight:400;color:var(--dim)">day log</span></h1>
+  <button id="prev" aria-label="The day before">&larr;</button>
+  <select id="days" aria-label="Day"></select>
+  <button id="next" aria-label="The day after">&rarr;</button>
+  <span class="meta" id="status"></span>
+  <a id="back" style="margin-left:auto">Dashboard</a>
+</header>
+<main>
+  <section class="card">
+    <div class="row">
+      <h2 id="sumtitle">The day in short</h2>
+      <span style="margin-left:auto" class="row">
+        <button id="forcarer" aria-pressed="true">For the carer</button>
+        <button id="forwearer" aria-pressed="false">What the wearer is told</button>
+      </span>
+    </div>
+    <div id="summary"><p class="empty">Loading…</p></div>
+    <p class="meta" style="margin:0">Only what was seen, and when. A stretch with no information means the glasses could not tell, not that nothing happened. The log follows the glasses, not the person.</p>
+  </section>
+  <section class="card">
+    <div class="row"><h2>Where and when</h2>
+      <span style="margin-left:auto" class="row"><button id="zoom" aria-pressed="false">Whole day</button></span></div>
+    <div class="strip" id="strip"></div>
+    <div id="detail" hidden></div>
+    <p class="meta" style="margin:0">Tap a bar or a circle to read it. Striped grey: no information. A bar with gaps in it is an uncertain entry.</p>
+  </section>
+  <section class="card">
+    <div class="row"><h2>Everything, in order</h2></div>
+    <div class="row" id="filters"></div>
+    <ul id="list"></ul>
+  </section>
+</main>
+<script>
+const key = new URLSearchParams(location.search).get('k') || '';
+const $ = id => document.getElementById(id);
+const withKey = path => path + (path.includes('?') ? '&' : '?') + 'k=' + encodeURIComponent(key);
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+$('back').href = withKey('/dashboard');
+let report = null, voice = 'carer', whole = false, chosen = null, filter = 'all';
+let date = new URLSearchParams(location.search).get('date') || '';
+const FILTERS = [['all', 'All'], ['where', 'Places'], ['event', 'Sensors and camera'], ['question', 'Questions'], ['reminder', 'Reminders'], ['item', 'Items'], ['gap', 'No information']];
+const inFilter = e => filter === 'all' || e.kind === filter || (filter === 'where' && ['room', 'place', 'walk'].includes(e.kind));
+const nice = name => String(name).replace(/[_-]+/g, ' ');
+const when = e => e.from === e.to ? e.from : e.from + ' to ' + e.to;
+const low = e => e.confidence_pct != null && e.confidence_pct < report.limits.speak_pct;
+
+function chip(e) {
+  if (e.confidence_pct == null) return null;
+  return el('span', 'chip' + (low(e) ? ' low' : ''), (low(e) ? 'uncertain, ' : '') + e.confidence_pct + '% sure');
+}
+
+function describe(box, e) {
+  box.replaceChildren();
+  const top = el('div'); top.append(el('strong', '', when(e) + '  '), el('span', '', e.text));
+  const c = chip(e); if (c) top.append(c);
+  box.append(top, el('div', 'meta', 'Based on: ' + e.based_on + '.'));
+}
+
+function drawSummary() {
+  const box = $('summary'); box.replaceChildren();
+  for (const s of report.summary[voice]) box.append(el('p', '', s));
+  $('forcarer').setAttribute('aria-pressed', voice === 'carer'); $('forwearer').setAttribute('aria-pressed', voice === 'wearer');
+}
+
+function drawStrip() {
+  const strip = $('strip'); strip.replaceChildren();
+  const entries = report.timeline, H = 3600;
+  let lo = 0, hi = 24;
+  if (!whole && entries.length) {
+    lo = Math.max(0, Math.floor((Math.min(...entries.map(e => e.start)) - report.start) / H));
+    hi = Math.min(24, Math.max(lo + 1, Math.ceil((Math.max(...entries.map(e => e.end)) - report.start) / H)));
+  }
+  const T0 = report.start + lo * H, T1 = report.start + hi * H, pos = t => 100 * Math.min(1, Math.max(0, (t - T0) / (T1 - T0)));
+  const step = hi - lo > 12 ? 4 : hi - lo > 6 ? 2 : 1;
+  const ticks = track => { for (let h = lo; h <= hi; h += step) { const t = el('span', 'tick'); t.style.left = 100 * (h - lo) / (hi - lo) + '%'; track.append(t); } };
+  const line = (name, items, cls) => {
+    const track = el('div', 'track'); ticks(track);
+    for (const g of report.timeline.filter(e => e.kind === 'gap')) {  // no information shows on every line
+      const b = el('span', 'bar gap'); b.style.left = pos(g.start) + '%'; b.style.width = Math.max(0, pos(g.end) - pos(g.start)) + '%'; b.style.cursor = 'default'; track.append(b);
+    }
+    for (const e of items) {
+      const point = !['room', 'place'].includes(e.kind);
+      const b = el('button', point ? 'mark ' + e.kind + ' ' + (e.state || '') : 'bar ' + cls + (low(e) ? ' unsure' : ''));
+      b.style.left = pos(point ? e.start : e.start) + '%';
+      if (!point) b.style.width = Math.max(0, pos(e.end) - pos(e.start)) + '%';
+      b.setAttribute('aria-label', when(e) + ': ' + e.text); b.title = when(e) + ': ' + e.text;
+      if (chosen === e) b.setAttribute('aria-current', 'true');
+      b.onclick = () => { chosen = e; drawStrip(); };
+      track.append(b);
+    }
+    strip.append(el('div', 'name', name), track);
+  };
+  const axis = el('div', 'track axis');
+  for (let h = lo; h <= hi; h += step) { const t = el('span', 'tick', String(h).padStart(2, '0') + ':00'); t.style.left = 100 * (h - lo) / (hi - lo) + '%'; axis.append(t); }
+  strip.append(el('div'), axis);
+  const of = kind => entries.filter(e => e.kind === kind);
+  for (const zone of [...new Set(of('room').map(e => e.zone))]) line('In the ' + nice(zone), of('room').filter(e => e.zone === zone), 'room');
+  for (const place of [...new Set(of('place').map(e => e.place))]) line('Near the ' + place, of('place').filter(e => e.place === place), 'place');
+  if (!of('room').length && !of('place').length) line('Position', [], 'room');
+  for (const [kind, name] of [['event', 'Sensors and camera'], ['question', 'Questions'], ['reminder', 'Reminders'], ['item', 'Items seen']])
+    if (of(kind).length) line(name, of(kind), kind);
+  const detail = $('detail');
+  detail.hidden = !chosen;
+  if (chosen) describe(detail, chosen);
+  $('zoom').setAttribute('aria-pressed', whole);
+}
+
+function drawList() {
+  const bar = $('filters'); bar.replaceChildren();
+  for (const [id, name] of FILTERS) {
+    const n = id === 'all' ? report.timeline.length : report.timeline.filter(e => e.kind === id || (id === 'where' && ['room', 'place', 'walk'].includes(e.kind))).length;
+    if (!n && id !== 'all') continue;
+    const b = el('button', '', name + ' ' + n); b.setAttribute('aria-pressed', filter === id);
+    b.onclick = () => { filter = id; drawList(); }; bar.append(b);
+  }
+  const list = $('list'); list.replaceChildren();
+  const shown = report.timeline.filter(inFilter);
+  if (!shown.length) list.append(el('li', 'empty', 'Nothing recorded for this day.'));
+  for (const e of shown) {
+    const li = el('li', e.kind), what = el('div', 'what');
+    const head = el('div', 'when'); head.append(el('span', 'dot ' + e.kind + ' ' + (e.state || '')), document.createTextNode(when(e)));
+    what.append(document.createTextNode(e.text)); const c = chip(e); if (c) what.append(c);
+    what.append(el('div', 'meta', 'Based on: ' + e.based_on + '.'));
+    li.append(head, what); list.append(li);
+  }
+}
+
+function drawDays() {
+  const days = [...new Set([...report.days, report.day])].sort(), select = $('days');
+  select.replaceChildren(...days.map(d => { const o = el('option', '', d === report.day && report.today ? d + ' (today)' : d); o.value = d; return o; }));
+  select.value = report.day;
+  const i = days.indexOf(report.day);
+  $('prev').disabled = i <= 0; $('next').disabled = i >= days.length - 1;
+  $('prev').onclick = () => load(days[i - 1]); $('next').onclick = () => load(days[i + 1]);
+  select.onchange = () => load(select.value);
+}
+
+async function load(day, quiet) {
+  if (day !== undefined) { date = day; chosen = null; }
+  try {
+    const reply = await fetch(withKey('/day' + (date ? '?date=' + encodeURIComponent(date) : '')), { cache: 'no-store' });
+    const body = await reply.json();
+    if (!reply.ok || !body.ok) throw new Error(body.error || 'HTTP ' + reply.status);
+    if (chosen) chosen = body.timeline.find(e => e.kind === chosen.kind && e.start === chosen.start && e.text === chosen.text) || null;
+    report = body;
+    $('status').textContent = report.today ? 'updates every 30 s' : '';
+    drawDays(); drawSummary(); drawStrip(); drawList();
+  } catch (err) {
+    if (!quiet) { $('summary').replaceChildren(el('p', 'empty', 'Could not read the day log: ' + err.message)); }
+    $('status').textContent = 'not connected';
+  }
+}
+
+$('forcarer').onclick = () => { voice = 'carer'; drawSummary(); };
+$('forwearer').onclick = () => { voice = 'wearer'; drawSummary(); };
+$('zoom').onclick = () => { whole = !whole; drawStrip(); };
+load();
+setInterval(() => { if (report && report.today && !document.hidden) load(undefined, true); }, 30000);
+</script>
+</body>
+</html>

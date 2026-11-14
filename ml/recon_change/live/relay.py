@@ -29,6 +29,8 @@ It prints the link to open. The link carries an access key, and every request ne
     GET  /reminders               the reminders, each with its state today: later, due, done or missed
     POST /reminder                body = {"text": "Time to take your pills", "time": "14:00", "place": "pill box"}
     POST /reminder?id=ID&now=1    show it now (also &done=1: finished by hand, &delete=1)
+    GET  /day?date=YYYY-MM-DD     what the wearer did that day (no date: today): timeline and two summaries
+    GET  /dayview                 the carer's page for one day
 
 A reminder is shown and spoken on the glasses display when it is due, with the way to its place.
 One for the pill box is done when a sensor reports the box was opened (read from the event API).
@@ -99,6 +101,10 @@ try:
     import recon_change as rc
 except ImportError:  # no OpenCV here: videos are forwarded whole
     cv2 = rc = None
+
+# ---- day log (JUN-26): what the wearer did through the day. day.py is next to recon_change.py and needs nothing else.
+sys.path.insert(0, str(HERE.parent))
+import day as day_log  # noqa: E402
 
 
 class Link:
@@ -299,6 +305,58 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
     except (OSError, ValueError):
         seen = {}
 
+    # ---- day log (JUN-26): one file per day in the evidence folder, no pictures in it. See day.py. ----
+    try:  # BEACON_NEAR_M: how close to a place counts as a visit, in the fix's metres (see eval/DAY_RESULTS.md)
+        near_m = float(os.environ.get("BEACON_NEAR_M") or day_log.ENTER_M)
+    except ValueError:
+        near_m = day_log.ENTER_M
+    log = day_log.DayLog(evidence_dir / "day", clock=home_time, name=os.environ.get("BEACON_WEARER_NAME") or None,
+                         enter=near_m, leave=near_m + day_log.LEAVE_M - day_log.ENTER_M)
+    asked_events = {"at": 0.0}
+
+    def log_fix(zone, fix, result):
+        """Hand a finished position fix to the day log, with the items it placed. When the fix carries the
+        stabiliser's answer under "stable", day.py uses that. Never costs the wearer the fix itself."""
+        try:
+            log.fix(fix)
+            for item in result.get("items") or []:
+                if item.get("position"):
+                    log.item(item["name"], near=(seen.get(zone, {}).get(item["name"]) or {}).get("near", ""), zone=zone, position=item["position"])
+        except Exception as err:  # noqa: BLE001
+            sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
+
+    def log_sensor_events(wait=False):
+        """Read the sensor and camera events the event API has collected since the last one in the day log.
+        In the background after a fix, at most every 15 s; at once for the day page (wait), at most every 3 s.
+        Reads the event list, so no question is logged."""
+        if not api_base or time.time() - asked_events["at"] < (3 if wait else 15):
+            return
+        asked_events["at"] = time.time()
+
+        def pull():
+            start = log.last_event_time() or log.window(log.day_of(time.time()), None)[0]  # else from midnight in the home
+            params = {"since": datetime.fromtimestamp(start, timezone.utc).isoformat(timespec="seconds"), "limit": 100}
+            try:
+                for _ in range(5):
+                    request = urllib.request.Request(f"{api_base}/events?{urlencode(params)}",
+                                                     headers={"Authorization": f"Bearer {api_token}"})
+                    with urllib.request.urlopen(request, timeout=4) as response:
+                        page = json.loads(response.read())
+                    for event in page.get("events", []):
+                        if isinstance(event, dict) and event.get("source") in ("sensor", "vision"):
+                            log.event(event)
+                    if not page.get("events") or not page.get("next_cursor"):
+                        break
+                    params = {"cursor": page["next_cursor"], "limit": 100}
+            except Exception as err:  # noqa: BLE001  the event API being down must not break a page or a fix
+                sys.stderr.write(f"day log: events not read: {type(err).__name__}\n")
+
+        if wait:
+            pull()
+        else:
+            threading.Thread(target=pull, daemon=True).start()
+    # ---- end of the day log's own functions ----
+
     def remember_items(zone, result, images):
         """Keep where each item in this fix was seen. Only with a position: a lost fix places nothing."""
         found = [item for item in result.get("items") or [] if item.get("position")]
@@ -473,6 +531,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             asked_sensors["at"] = now
         if changed:
             save_reminders()
+        try:  # day log (JUN-26): a reminder becoming due, done or missed is recorded once
+            log.reminders(out, at=now)
+        except Exception as err:  # noqa: BLE001
+            sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
         return out
 
     def keep_evidence(job, blob):
@@ -539,6 +601,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if url.path == "/reminders":
                 with reminder_lock:
                     return self.send_json(200, {"ok": True, "reminders": reminder_list(), "sensors": bool(api_base)})
+            # ---- day log (JUN-26): the day as data, and the carer's page for it ----
+            if url.path == "/dayview":
+                return self.send_bytes(200, (HERE / "day.html").read_bytes(), "text/html; charset=utf-8")
+            if url.path == "/day":
+                date = parse_qs(url.query).get("date", [""])[0]
+                try:
+                    datetime.fromisoformat(date + "T12:00:00") if date else None
+                except ValueError:
+                    return self.send_json(400, {"ok": False, "error": "GET /day?date=YYYY-MM-DD (no date: today)"})
+                log_sensor_events(wait=True)
+                with reminder_lock:
+                    reminder_list()  # so a reminder that became due or missed since the last look is in the log
+                return self.send_json(200, {"ok": True, **log.report(date or None)})
+            # ---- end day log ----
             zone = parse_qs(url.query).get("zone", [""])[0]
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
@@ -574,6 +650,21 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if not isinstance(text, str) or not text.strip():
                 return self.send_json(400, {"ok": False, "error": f'POST /{op} with a JSON body: {{"{field}": "..."}}'})
             text = text.strip()[:2000]
+            # ---- day log (JUN-26): every question is logged, and a question about the day ("What did I do
+            # today?", "When was I last in the kitchen?") is answered from the log before the event API is asked.
+            if op == "ask":
+                try:
+                    log.question(text, topic=item_in(text))
+                    about_day = None if item_in(text) else log.answer(text)
+                except Exception as err:  # noqa: BLE001
+                    about_day = None
+                    sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
+                if about_day:
+                    if api_base:  # still counted by the event API, like a lost-item question
+                        threading.Thread(target=log_question, args=(text,), daemon=True).start()
+                    return self.send_json(200, {"ok": True, "question": text, "answer": about_day["answer"], "evidence": [], "point": None,
+                                                "answered_by": "day log", "confidence_pct": about_day.get("confidence_pct")})
+            # ---- end day log ----
             item = item_in(text) if op == "ask" else None
             if item:
                 if api_base:
@@ -714,6 +805,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 except OSError:
                     pass
                 remember_items(zone, result, images)
+                log_fix(zone, fix, result)  # day log (JUN-26). Keep this after the line that adds fix["stable"].
+                log_sensor_events()
                 return self.send_json(200, {**fix, "age_s": 0.0, "seen": seen_list(zone, fix)})
             headline, detail = in_plain_words(result)
             events = to_events(result, zone, images)
@@ -765,6 +858,7 @@ def main():
     for address in addresses:
         print(f"  http://{address}:{args.port}/?k={args.token}", flush=True)
     print(f"dashboard: http://127.0.0.1:{args.port}/dashboard?k={args.token}", flush=True)
+    print(f"day log:   http://127.0.0.1:{args.port}/dayview?k={args.token}", flush=True)
     print("questions (/ask, /speak): " + ("passed on to the event API" if event_api and api_token
                                            else "off (EVENT_API_URL and EVENT_API_TOKEN are not both set)"), flush=True)
     print(f"frame picking on this laptop: {'on' if rc else 'off (OpenCV not found)'}; evidence images in {evidence_dir}", flush=True)
