@@ -184,8 +184,9 @@ def locate(r, base, new, places=(), typical_m=2.0, conf_pct=25.0, tol=0.06, samp
         "heading_deg": int(round(heading)),
         "waypoints": waypoints,
         "track": [[round(float(v), 2) for v in on_map(camera(r.E[q])[0])[0][:2]] for q in new],
-        "map": {"points": np.round(cloud[:, :2], 2).tolist(),
-                "cameras": np.round(on_map(np.array([camera(r.E[q])[0] for q in base]))[:, :2], 2).tolist()},
+        # As 64-bit numbers, so 1.23 is written as 1.23 and not as 1.2300000190734863 (the fix stays small).
+        "map": {"points": np.round(cloud[:, :2].astype(np.float64), 2).tolist(),
+                "cameras": np.round(on_map(np.array([camera(r.E[q])[0] for q in base]))[:, :2].astype(np.float64), 2).tolist()},
         "match_per_frame": [round(m, 2) for m in matches],
         "looks_alike": None if looks_alike is None else round(looks_alike, 2),  # None: no features, depth only
         "match_by_depth": round(by_depth[-1], 2),

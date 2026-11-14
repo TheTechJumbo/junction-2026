@@ -121,6 +121,36 @@ is the glasses display that draws it: an arrow, a distance and a mini map.
 `/hud?k=KEY&demo=1` is a sample room that needs no relay. A view that does not match the room
 comes back as `lost`. Distances are rough: they assume things are about 2 m away.
 
+**Questions, reminders and lost items (the demo flow):** the glasses display also asks and
+reminds. Start the relay with the team's event API (the backend that holds the sensor events)
+next to it:
+
+    EVENT_API_URL=http://127.0.0.1:8000/events EVENT_API_TOKEN=<its token> python live/relay.py
+
+- *Questions.* `POST /ask` with `{"question": "Did I take my pills?"}` is passed to the event
+  API and its answer is shown and spoken on `/hud`. When no pill box opening is recorded, the
+  arrow then points to the pill box. "Where is the pill box?" is answered by the event API
+  from `/where`; if it cannot read the position within its 0.4 s limit, the relay answers from
+  its own fix in the same words. The event API still decides what kind of question it is, so
+  its refusal of medical questions stands.
+- *Reminders.* Add them on `/places` (text, time of day, place). When one is due, `/hud` shows
+  and speaks it and points the arrow at its place. A reminder for the pill box ends when a
+  sensor reports the box was opened, which the relay reads from the event API's event list.
+  That is an observation of the box, never a claim that the pills were taken. Other reminders
+  end with the Done button. "Show now" on `/places` makes one due at once, for a demo. Times
+  are in the home's time zone (`BEACON_TZ`, default Europe/Helsinki), not the laptop's.
+- *Lost items.* "Where are my keys?" is answered by the relay: where and when a position fix
+  last saw them ("last seen at 10:42 near the pill box, about 2 m to your left"), and the arrow
+  points there. This needs the item finder in the worker, which is being built on branch
+  `jun-26-lost-items`; until it is deployed the answer is "I cannot look for your keys yet."
+  The relay already sends the wearer's newest photo at up to 1280 px (`big.jpg`) for it.
+- `/hud?k=KEY&demo=1` rehearses all of it with stand-ins and no backend: "Remind me" and "Open
+  the pill box" play the reminder and the sensor.
+- `python live/test_care_flow.py` tests the relay side offline, with a stand-in gateway and a
+  stand-in event API.
+- `/speak` is passed on too. Without a voice set up in the event API the page uses the
+  browser's own voice.
+
 - The video stays on the laptop: the relay picks the sharp frames with OpenCV and sends only
   those (about 1 MB) to Iridis.
 - Baselines are kept on scratch, so they survive a worker restart.

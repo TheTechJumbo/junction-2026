@@ -151,3 +151,37 @@ scored on, and it adds about 2 s per check.
 
 Still not done: a real room recorded with a phone or the glasses, places named in it, a rehearsal.
 Not tested anywhere: two rooms in one home that look alike, blur, night lighting, people in view.
+
+## Update, Sat 14 Nov about 09:50 UTC
+
+Seb chose the demo moment: **directions and pills**, then added **reminders** and **lost keys**.
+
+Built and tested on branch `jun-26-care-flow` (relay and pages only, nothing new on the cluster):
+
+- The glasses display (`/hud`) can ask a question. The relay passes it to Bartek's event API
+  (`POST /ask`), shows and speaks the answer, and points the arrow at the pill box when no
+  opening is recorded.
+- Reminders: set on `/places`, shown and spoken on `/hud` when due, with the way to the place.
+  A pill box reminder ends when the event API has a sensor `pillbox_open` event after it started.
+- Lost items: the relay remembers where each position fix saw an item and answers "Where are my
+  keys?". The item finder itself (an open-vocabulary detector in the worker) is being built by an
+  agent on branch `jun-26-lost-items`; until it is deployed the answer is "I cannot look for
+  your keys yet."
+
+Tested end to end on this laptop against Bartek's branch `codex/bartek-foundation` (PR 13) run
+locally, with the live GPU worker: pills answer, medical refusal, place answers, a reminder ended
+by a real `POST /events` sensor event ("The pill box was opened at 11:47."). Also in a browser.
+
+Two things found on the way, both reported to Bartek on Linear:
+- `/where` was 109 kB and his adapter reads at most 64 kB, so every place answer fell back.
+  Fixed on this side: it is 19 kB now.
+- His adapter makes a new HTTP client per question, which takes about 280 ms of its 400 ms
+  limit on this Windows laptop, so place answers time out inside his server. Until that
+  changes, the relay answers place questions from its own fix when his answer is the fallback.
+
+Running now on the laptop: the relay on 8090 (connected to a local copy of Bartek's API on
+8000 with an empty store and a throwaway token), GPU job 2219443 and CPU job 2219444 until
+about 11:28 UTC.
+
+Not done: the item finder is not deployed, no ElevenLabs voice is set up (the browser's voice
+speaks), no real sensor has sent an event, and nothing has run on the glasses or in a real room.

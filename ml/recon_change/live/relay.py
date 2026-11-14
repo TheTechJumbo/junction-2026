@@ -22,6 +22,19 @@ It prints the link to open. The link carries an access key, and every request ne
     POST /waypoint?zone=kitchen&name=pill+box&delete=1
     GET  /hud                     the glasses display page: arrow and distance to a place
     GET  /places                  name places by clicking in a baseline picture, and test a fix
+    POST /ask?zone=kitchen        body = {"question": "Did I take my pills?"} -> the answer in words
+                                  ("Where are my keys?" is answered here: where a position fix last saw them)
+    POST /speak                   body = {"text": "..."} -> the sentence as MP3 speech
+    GET  /reminders               the reminders, each with its state today: later, due, done or missed
+    POST /reminder                body = {"text": "Time to take your pills", "time": "14:00", "place": "pill box"}
+    POST /reminder?id=ID&now=1    show it now (also &done=1: finished by hand, &delete=1)
+
+A reminder is shown and spoken on the glasses display when it is due, with the way to its place.
+One for the pill box is done when a sensor reports the box was opened (read from the event API).
+
+/ask and /speak are passed on to the team's event API, which holds the sensor events and writes
+the answers (set EVENT_API_URL to its /events address and EVENT_API_TOKEN to its token). They exist
+so the glasses display needs one address and one key. Without those settings they answer 503.
 
 /check answers with a plain-language headline, events in the team's schema, and links to a
 "before" and a "now" picture. If EVENT_API_URL is set, the events are also POSTed there. The
@@ -35,6 +48,7 @@ import argparse
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -44,18 +58,36 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 HERE = Path(__file__).resolve().parent
 REMOTE = "cd /scratch/$USER/junction-recon && exec .venv-recon/bin/python -u live/gateway.py"
 MAX_BODY = 200 * 1024 * 1024
 FRAMES = {"baseline": 24, "check": 12, "locate": 3}  # keep in step with worker.py
 LONG_SIDE = 518  # the model's input size: no point sending more pixels
+BIG_SIDE = 1280  # the wearer's newest photo is also sent at this size, for finding small items
+REMINDER_WINDOW = 2 * 3600  # a reminder nobody finished within two hours counts as missed
+NEAR_PLACE_M = 1.5  # an item this close to a named place is described as "near" it
+FRESH_FIX_S = 60  # "to your left" is only said from a position fix this recent
+
+# Clock times (reminders, "last seen at") are in the home's time zone, the same one the event API
+# answers in, not the laptop's. Set BEACON_TZ to change it.
+try:
+    from zoneinfo import ZoneInfo
+    HOME_TZ = ZoneInfo(os.environ.get("BEACON_TZ", "Europe/Helsinki"))
+except Exception:  # no time zone data on this machine: fall back to the laptop's own zone
+    HOME_TZ = None
+
+
+def home_time(seconds):
+    """Seconds since 1970 as a clock time in the home."""
+    return datetime.fromtimestamp(seconds, HOME_TZ) if HOME_TZ else datetime.fromtimestamp(seconds).astimezone()
 
 try:
     sys.path.insert(0, str(HERE.parent))
@@ -136,18 +168,55 @@ def one_photo(photo):
     """A single photo as a one-frame bundle, shrunk to the model's input size when OpenCV is here."""
     if cv2 is None and photo[:2] != b"\xff\xd8":
         raise ValueError("only JPEG photos without OpenCV")
+    big = None
     if cv2 is not None:
         frame = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
             raise ValueError("not a picture")
-        scale = LONG_SIDE / max(frame.shape[:2])
-        if scale < 1:
-            frame = cv2.resize(frame, (round(frame.shape[1] * scale), round(frame.shape[0] * scale)), interpolation=cv2.INTER_AREA)
-        photo = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+
+        def shrunk(side):
+            scale = side / max(frame.shape[:2])
+            small = frame if scale >= 1 else cv2.resize(
+                frame, (round(frame.shape[1] * scale), round(frame.shape[0] * scale)), interpolation=cv2.INTER_AREA)
+            return cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+
+        photo = shrunk(LONG_SIDE)
+        if max(frame.shape[:2]) > LONG_SIDE:
+            big = shrunk(BIG_SIDE)  # keys are a few pixels wide at the model's size: the item finder gets more
     bundle = io.BytesIO()
     with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as z:
         z.writestr("000.jpg", photo)
+        if big:
+            z.writestr("big.jpg", big)  # a worker without the item finder ignores it
     return bundle.getvalue()
+
+
+# Things the wearer may ask for, and the words that mean them. Keep in step with the worker's RECON_ITEMS.
+ITEM_WORDS = {"keys": ("key", "keys"), "glasses": ("glasses", "spectacles"), "wallet": ("wallet", "purse"),
+              "phone": ("phone", "mobile"), "remote control": ("remote",)}
+
+
+# Other words for a named place, used only when a place of that name exists in the room.
+PLACE_WORDS = {"pill box": ("pills", "pillbox", "medication", "medicine"), "front door": ("door",), "bathroom": ("toilet",)}
+# How the event API starts its answer when it could not get a position.
+NO_POSITION = "I do not have a reliable current location."
+
+
+def item_in(question):
+    """The item a question is about ("Where are my keys?" -> "keys"), or None."""
+    words = set(re.sub(r"[^\w]+", " ", question.casefold()).split())
+    return next((name for name, aliases in ITEM_WORDS.items() if words & set(aliases)), None)
+
+
+def side_of(bearing):
+    return "ahead" if abs(bearing) <= 20 else "behind you" if abs(bearing) >= 150 else "to your right" if bearing > 0 else "to your left"
+
+
+def from_here(position, fix):
+    """Distance in metres and bearing (0 ahead, + to the right) from the wearer of a fix to a spot on the map."""
+    east, north = position[0] - fix["position"][0], position[1] - fix["position"][1]
+    bearing = (math.degrees(math.atan2(east, north)) - fix["heading_deg"] + 180) % 360 - 180
+    return round(math.hypot(east, north), 1), int(round(bearing))
 
 
 def where_in_plain_words(fix):
@@ -206,7 +275,9 @@ def post_events(url, events):
 REPO = "TheTechJumbo/junction-2026"
 
 
-def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None):
+def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None, api_token=None):
+    # The event API's address without the /events at its end: where /ask and /speak live.
+    api_base = re.sub(r"/events/?$", "", event_api).rstrip("/") if event_api and api_token else None
     history_file = evidence_dir / "history.json"
     try:
         history = json.loads(history_file.read_text())  # earlier checks, so the dashboard survives a restart
@@ -218,6 +289,159 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         where = json.loads(where_file.read_text())  # latest position fix per zone
     except (OSError, ValueError):
         where = {}
+
+    seen_file = evidence_dir / "seen.json"
+    try:
+        seen = json.loads(seen_file.read_text())  # {zone: {item: where and when it was last seen}}
+    except (OSError, ValueError):
+        seen = {}
+
+    def remember_items(zone, result, images):
+        """Keep where each item in this fix was seen. Only with a position: a lost fix places nothing."""
+        found = [item for item in result.get("items") or [] if item.get("position")]
+        for item in found:
+            near = min(result.get("waypoints") or [], default=None,
+                       key=lambda w: math.dist(w["position"][:2], item["position"][:2]))
+            if near and math.dist(near["position"][:2], item["position"][:2]) > NEAR_PLACE_M:
+                near = None
+            seen.setdefault(zone, {})[item["name"]] = {
+                "name": item["name"], "position": item["position"], "score": item.get("score"), "at": time.time(),
+                "near": near["name"] if near else "", "image": images.get(item.get("image") or "")}
+        if found:
+            try:
+                seen_file.write_text(json.dumps(seen))
+            except OSError:
+                pass
+
+    def seen_list(zone, fix):
+        """The items seen in a zone, each with how long ago and, from a usable fix, the way to it."""
+        out = []
+        for spot in seen.get(zone, {}).values():
+            entry = {**spot, "age_s": round(time.time() - spot["at"]),
+                     "time": home_time(spot["at"]).strftime("%H:%M")}
+            if fix and fix.get("state") != "lost":
+                entry["distance_m"], entry["bearing_deg"] = from_here(spot["position"], fix)
+            out.append(entry)
+        return out
+
+    def item_answer(name, zone, question):
+        """Answer "where are my keys?" from what the position fixes saw: last seen where and when."""
+        fix = where.get(zone) or max(where.values(), key=lambda f: f["at"], default=None)
+        zone = fix["zone"] if fix else zone
+        spot = seen.get(zone, {}).get(name)
+        today = spot and home_time(spot["at"]).date() == home_time(time.time()).date()
+        them, were = ("them", "were") if name.endswith("s") else ("it", "was")
+        reply = {"ok": True, "question": question, "evidence": [], "item": name, "point": None}
+        if not today:
+            watching = fix and name in (fix.get("items_looked_for") or [])
+            reply["answer"] = (f"I have not seen your {name} today. Look around slowly and I will keep watching for {them}."
+                               if watching else f"I cannot look for your {name} yet.")
+            return reply
+        text = f"Your {name} {were} last seen at {home_time(spot['at']):%H:%M}"
+        if spot.get("near"):
+            text += f" near the {spot['near']}"
+        if fix and fix.get("state") != "lost" and time.time() - fix["at"] < FRESH_FIX_S:
+            distance, bearing = from_here(spot["position"], fix)
+            text += ", right by you" if distance < 0.8 else f", about {distance:.1f} metres {side_of(bearing)}"
+        reply.update(answer=text + ".", point={"name": name, "position": spot["position"], "image": spot.get("image")})
+        return reply
+
+    def place_answer(question, zone):
+        """Answer "where is the pill box?" from the latest position fix, in the event API's own wording.
+        Only from a fix that is found and fresh; otherwise None. Used when the event API could not read
+        the position in time (it allows itself 0.4 s), or when no event API is connected."""
+        words = " " + re.sub(r"[^\w]+", " ", question.casefold()).strip() + " "
+        if not re.search(r" (where|find|way|directions?|navigate|get to|take me|show me) ", words):
+            return None  # "Did I take my pills?" is not a request for the way to the pill box
+        fix = where.get(zone) or max(where.values(), key=lambda f: f["at"], default=None)
+        if not fix or fix.get("state") != "found" or time.time() - fix["at"] > FRESH_FIX_S:
+            return None
+        places = {w["name"]: w for w in fix.get("waypoints") or []}
+        named = [n for n in sorted(places, key=len, reverse=True) if f" {n.casefold()} " in words]
+        named += [name for name, aliases in PLACE_WORDS.items() if name in places and any(f" {a} " in words for a in aliases)]
+        if not named:
+            return {"answer": f"The latest location estimate places you in {fix['zone']}.", "point": None} if " where am i " in words else None
+        place = places[named[0]]
+        return {"answer": f"The {place['name']} is estimated to be about {place['distance_m']:.1f} metres {side_of(place['bearing_deg'])}.",
+                "point": {"name": place["name"], "position": place["position"]}}
+
+    def log_question(question):
+        """Tell the event API a question was asked, so the carer's count of questions stays complete."""
+        try:
+            request = urllib.request.Request(f"{api_base}/ask", json.dumps({"question": question}).encode(),
+                                             {"Content-Type": "application/json", "Authorization": f"Bearer {api_token}"})
+            urllib.request.urlopen(request, timeout=8).close()
+        except OSError:
+            pass
+
+    reminders_file = evidence_dir / "reminders.json"
+    try:
+        reminders = json.loads(reminders_file.read_text())  # what to remind the wearer of, and when
+    except (OSError, ValueError):
+        reminders = []
+    reminder_lock = threading.Lock()
+    asked_sensors = {"at": 0.0}
+
+    def save_reminders():
+        try:
+            reminders_file.write_text(json.dumps(reminders))
+        except OSError:
+            pass
+
+    def starts_at(reminder, now):
+        """When today's reminder starts: its time of day, or the moment someone pressed "show now" today."""
+        local = home_time(now)
+        forced = reminder.get("now_at")
+        if forced and home_time(forced).date() == local.date():
+            return forced
+        hour, minute = map(int, reminder["time"].split(":"))
+        return local.replace(hour=hour, minute=minute, second=0, microsecond=0).timestamp()
+
+    def pill_box_opened_since(start):
+        """The time (HH:MM) of a pill box opening that a sensor reported at or after `start`, else None.
+        Read from the event API's event list, so no question is logged."""
+        params = {"since": datetime.fromtimestamp(start, timezone.utc).isoformat(timespec="seconds"), "limit": 100}
+        try:
+            for _ in range(5):
+                request = urllib.request.Request(f"{api_base}/events?{urlencode(params)}",
+                                                 headers={"Authorization": f"Bearer {api_token}"})
+                with urllib.request.urlopen(request, timeout=4) as response:
+                    page = json.loads(response.read())
+                for event in page.get("events", []):
+                    if event.get("type") == "pillbox_open" and event.get("source") == "sensor":
+                        at = datetime.fromisoformat(event["ts"])
+                        if at.timestamp() >= int(start):  # sensors stamp whole seconds
+                            return home_time(at.timestamp()).strftime("%H:%M")
+                if not page.get("events") or not page.get("next_cursor"):
+                    break
+                params = {"cursor": page["next_cursor"], "limit": 100}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+        return None
+
+    def reminder_list():
+        """Every reminder with its state today: later, due, done or missed. Call with reminder_lock held.
+        A pill box reminder is done when a sensor reports the box was opened: that is an observation
+        of the box, never a claim that the pills were taken."""
+        now = time.time()
+        ask_sensors = bool(api_base) and now - asked_sensors["at"] > 4  # at most every few seconds
+        out, changed = [], False
+        for r in reminders:
+            start = starts_at(r, now)
+            done = bool(r.get("done_at")) and r["done_at"] >= start
+            if not done and now >= start and r.get("until") == "pillbox_open" and ask_sensors:
+                opened = pill_box_opened_since(start)
+                if opened:
+                    r.update(done_at=now, done_note=f"The pill box was opened at {opened}.")
+                    done = changed = True
+            state = "done" if done else "later" if now < start else "due" if now - start < REMINDER_WINDOW else "missed"
+            out.append({**{k: r.get(k) for k in ("id", "text", "time", "place", "zone", "until")},
+                        "state": state, "due_at": round(start), "done_note": (r.get("done_note") or "") if done else ""})
+        if ask_sensors:
+            asked_sensors["at"] = now
+        if changed:
+            save_reminders()
+        return out
 
     def keep_evidence(job, blob):
         """Unpack the pictures and the 3D file a job produced. Returns ({name: url}, splat url)."""
@@ -257,7 +481,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             self.wfile.write(data)
 
         def send_json(self, code, body):
-            self.send_bytes(code, json.dumps(body, indent=2).encode(), "application/json")
+            # Compact on purpose: a position fix with its floor plan is about 25 kB this way and over 64 kB
+            # indented, and the event API refuses to read more than 64 kB from /where.
+            self.send_bytes(code, json.dumps(body, separators=(",", ":")).encode(), "application/json")
 
         def allowed(self, query):
             given = query.get("k", [""])[0] or self.headers.get("X-Key", "")
@@ -278,12 +504,15 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200, {"ok": True, "checks": history[-40:][::-1]})
             if url.path == "/work":
                 return self.send_json(200, {"ok": True, "repo": REPO, "pull_requests": pull_requests()})
+            if url.path == "/reminders":
+                with reminder_lock:
+                    return self.send_json(200, {"ok": True, "reminders": reminder_list(), "sensors": bool(api_base)})
             zone = parse_qs(url.query).get("zone", [""])[0]
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:
                     return self.send_json(404, {"ok": False, "error": "No position fix yet. POST a photo to /locate first."})
-                return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1)})
+                return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1), "seen": seen_list(fix["zone"], fix)})
             if url.path == "/waypoints":
                 header, _ = link.call({"op": "waypoints", "zone": zone})
                 return self.send_json(200 if header.get("ok") else 404, header)
@@ -295,12 +524,91 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(404, header)
             if url.path == "/status":
                 header, _ = link.call({"op": "status"})
-                return self.send_json(200 if header.get("ok") else 503, header)
+                return self.send_json(200 if header.get("ok") else 503, {**header, "answers": bool(api_base)})
             match = re.fullmatch(r"/evidence/([\w-]+)/(\w+)\.(jpg|splat)", url.path)
             if match and (evidence_dir / match[1] / f"{match[2]}.{match[3]}").exists():
                 kind = "image/jpeg" if match[3] == "jpg" else "application/octet-stream"
                 return self.send_bytes(200, (evidence_dir / match[1] / f"{match[2]}.{match[3]}").read_bytes(), kind)
             self.send_json(404, {"ok": False, "error": "not found"})
+
+        def answer_service(self, op, raw, zone):
+            """Answer a question (/ask) or speak a sentence (/speak). A question about a lost item is
+            answered here, from what the position fixes saw. Everything else goes to the team's event API."""
+            field = "question" if op == "ask" else "text"
+            try:
+                text = json.loads(raw)[field]
+            except (ValueError, KeyError, TypeError):
+                text = None
+            if not isinstance(text, str) or not text.strip():
+                return self.send_json(400, {"ok": False, "error": f'POST /{op} with a JSON body: {{"{field}": "..."}}'})
+            text = text.strip()[:2000]
+            item = item_in(text) if op == "ask" else None
+            if item:
+                if api_base:
+                    threading.Thread(target=log_question, args=(text,), daemon=True).start()
+                return self.send_json(200, item_answer(item, zone, text))
+            if not api_base:
+                own = place_answer(text, zone) if op == "ask" else None
+                if own:  # the way to a named place needs no event API
+                    return self.send_json(200, {"ok": True, "question": text, "evidence": [], **own})
+                return self.send_json(503, {"ok": False, "error": "The answer service is not connected. "
+                                            "Start the relay with EVENT_API_URL and EVENT_API_TOKEN set."})
+            request = urllib.request.Request(f"{api_base}/{op}", json.dumps({field: text}).encode(),
+                                             {"Content-Type": "application/json", "Authorization": f"Bearer {api_token}"})
+            try:
+                with urllib.request.urlopen(request, timeout=8) as response:
+                    data = response.read()
+            except urllib.error.HTTPError as err:  # for /speak, 503 means no voice is set up: the page then uses its own
+                return self.send_json(503 if err.code >= 500 else 502,
+                                      {"ok": False, "error": f"The answer service refused that (HTTP {err.code})."})
+            except OSError:
+                return self.send_json(503, {"ok": False, "error": "Cannot reach the answer service."})
+            if op == "speak":
+                return self.send_bytes(200, data, "audio/mpeg")
+            try:
+                reply = json.loads(data)
+                evidence = [{k: e.get(k) for k in ("type", "ts", "zone", "object")} for e in reply.get("evidence", [])]
+                out = {"ok": True, "question": text, "answer": str(reply["answer"]), "evidence": evidence, "point": None}
+                # The event API classified the question (and refused it if it was medical). If it wanted a
+                # position and could not read one in time, the relay, which holds the position, answers.
+                own = place_answer(text, zone) if out["answer"].startswith(NO_POSITION) else None
+                if own:
+                    out.update(own, answered_by="relay")
+                return self.send_json(200, out)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                return self.send_json(502, {"ok": False, "error": "The answer service sent something unreadable."})
+
+        def change_reminder(self, query, zone, raw):
+            """Add a reminder (JSON body), or with ?id=: delete=1, done=1 (finished by hand) or now=1 (show it now)."""
+            flag = lambda name: bool(query.get(name, [""])[0])  # noqa: E731
+            chosen = query.get("id", [""])[0]
+            with reminder_lock:
+                if chosen:
+                    reminder = next((r for r in reminders if r["id"] == chosen), None)
+                    if reminder is None:
+                        return self.send_json(404, {"ok": False, "error": "No reminder with that id."})
+                    if flag("delete"):
+                        reminders.remove(reminder)
+                    elif flag("done"):
+                        reminder.update(done_at=time.time(), done_note="")
+                    elif flag("now"):
+                        reminder.update(now_at=time.time(), done_at=None, done_note="")
+                    else:
+                        return self.send_json(400, {"ok": False, "error": "POST /reminder?id=ID with delete=1, done=1 or now=1"})
+                else:
+                    try:
+                        new = json.loads(raw)
+                        text, at = str(new["text"]).strip()[:120], str(new["time"])
+                        place = str(new.get("place") or "").strip()[:40]
+                    except (ValueError, KeyError, TypeError, AttributeError):
+                        text, at, place = "", "", ""
+                    if not text or not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", at) or len(reminders) >= 20:
+                        return self.send_json(400, {"ok": False, "error": 'POST /reminder with a JSON body: {"text": "...", '
+                                                    '"time": "HH:MM", "place": "pill box"} (at most 20 reminders)'})
+                    reminders.append({"id": secrets.token_hex(4), "text": text, "time": at, "place": place, "zone": zone,
+                                      "until": "pillbox_open" if "pill" in place.lower() else ""})
+                save_reminders()
+                return self.send_json(200, {"ok": True, "reminders": reminder_list(), "sensors": bool(api_base)})
 
         def do_POST(self):
             url = urlparse(self.path)
@@ -309,6 +617,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return
             op, zone = url.path.strip("/"), query.get("zone", [""])[0]
             size = int(self.headers.get("Content-Length", 0))
+            if op in ("ask", "speak"):
+                return self.answer_service(op, self.rfile.read(min(size, 65536)), zone)
+            if op == "reminder":
+                return self.change_reminder(query, zone, self.rfile.read(min(size, 65536)))
             if op == "waypoint":  # name or remove a place; everything is in the query, the body is ignored
                 self.rfile.read(min(size, 65536))
                 req = {"op": "waypoint", "zone": zone, "name": query.get("name", [""])[0]}
@@ -344,6 +656,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200, {"ok": True, "zone": zone, "frames": result["frames"], "seconds": seconds})
             images, splat_url = keep_evidence(header["job"], blob)
             if op == "locate":
+                for part in ("points", "cameras"):  # whole centimetres: 32-bit numbers print with 17 digits otherwise
+                    if isinstance(result.get("map"), dict):
+                        result["map"][part] = [[round(float(v), 2) for v in p] for p in result["map"].get(part) or []]
                 headline, detail = where_in_plain_words(result)
                 fix = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail, **result,
                        "images": images, "splat": splat_url, "seconds": {**seconds, **result.get("seconds", {})},
@@ -353,7 +668,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     where_file.write_text(json.dumps(where))
                 except OSError:
                     pass
-                return self.send_json(200, {**fix, "age_s": 0.0})
+                remember_items(zone, result, images)
+                return self.send_json(200, {**fix, "age_s": 0.0, "seen": seen_list(zone, fix)})
             headline, detail = in_plain_words(result)
             events = to_events(result, zone, images)
             body = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail,
@@ -394,7 +710,8 @@ def main():
                  "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, REMOTE])
     evidence_dir = Path(tempfile.gettempdir()) / "beacon-evidence"
     evidence_dir.mkdir(exist_ok=True)
-    handler = make_handler(link, evidence_dir, args.token, os.environ.get("EVENT_API_URL"))
+    event_api, api_token = os.environ.get("EVENT_API_URL"), os.environ.get("EVENT_API_TOKEN")
+    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     addresses = ["127.0.0.1"]
     if args.host == "0.0.0.0":
@@ -403,6 +720,8 @@ def main():
     for address in addresses:
         print(f"  http://{address}:{args.port}/?k={args.token}", flush=True)
     print(f"dashboard: http://127.0.0.1:{args.port}/dashboard?k={args.token}", flush=True)
+    print("questions (/ask, /speak): " + ("passed on to the event API" if event_api and api_token
+                                           else "off (EVENT_API_URL and EVENT_API_TOKEN are not both set)"), flush=True)
     print(f"frame picking on this laptop: {'on' if rc else 'off (OpenCV not found)'}; evidence images in {evidence_dir}", flush=True)
     try:
         server.serve_forever()
