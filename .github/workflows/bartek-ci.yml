@@ -114,6 +114,7 @@ jobs:
               "test_authenticated_ingest_answer_timeline_and_question_counts",
               "test_actual_ayman_demo_script_and_store_export",
               "test_actual_seb_relay_http_check_through_authenticated_wrapper",
+              "test_assembled_entrypoint_actual_relay_cache",
           }
           missing = required - {case.attrib["name"] for case in cases}
           if missing or skipped:

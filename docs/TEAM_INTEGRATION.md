@@ -60,9 +60,10 @@ dashboard truthfully says no image attached. No arbitrary URL fetching, cloud im
 copying, or change to API authentication is introduced. SSH/GPU availability still
 belongs to Seb's relay deployment. Central deterministic answers never wait for it.
 
-Cached navigation adapter can be injected with explicit zone/age/confidence policy; it
-reads `/where` only. Policy remains a team decision; it is not enabled by merely setting
-a token. A real physical room/glasses navigation run remains outstanding.
+The normal launcher now supports cached navigation with all five explicit settings in
+[Navigation setup](NAVIGATION_SETUP.md). It reads `/where` only. Policy remains a team
+decision; no age/confidence thresholds are invented, and a token alone fails startup
+with a configuration error. A physical room/glasses navigation run remains outstanding.
 
 ## Reproducible verification
 
