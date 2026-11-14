@@ -267,9 +267,14 @@ def main():
     ap.add_argument("--only-half", default=None, help="detect: only this half of the test photos (the 2-row tiles are slow)")
     ap.add_argument("--sweep", type=float, nargs="*")
     ap.add_argument("--show", type=int, default=12)
+    ap.add_argument("--sizes", type=float, nargs="*", help="score: other size limits in pixels than 32 and 64, e.g. 32 64 128 256")
     ap.add_argument("--crops", help="score: folder for pictures of the false detections on the item-free photos")
     ap.add_argument("--misses", help="score: folder for pictures of the answers that are on something else")
     args = ap.parse_args()
+    if args.sizes:
+        edges = [0.0] + sorted(args.sizes) + [1e9]
+        SIZES[:] = [(f"under {b:g} px" if a == 0 else f"over {a:g} px" if b == 1e9 else f"{a:g} to {b:g} px", a, b)
+                    for a, b in zip(edges[:-1], edges[1:])]
     if args.step == "detect":
         args.tiles = [0, 1, 2] if args.tiles is None else args.tiles
         detect(args)

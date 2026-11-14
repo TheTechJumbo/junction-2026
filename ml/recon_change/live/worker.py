@@ -201,8 +201,8 @@ def where(model, job, req):
                                            remembered=req.get("remembered"))
             result.update(found)
             marks += item_marks
-        except Exception as error:  # the position fix must still go out
-            result.update({"items": [], "items_checked": [],
+        except Exception as error:  # the position fix must still go out; nothing was looked for, so the list is empty
+            result.update({"items": [], "items_checked": [], "items_looked_for": [],
                            "items_note": f"Items were not looked for: {type(error).__name__}: {error}"[:300]})
             print(f"{job.name} items FAILED: {traceback.format_exc()}", flush=True)
         seconds["items"] = round(time.time() - t0, 2)

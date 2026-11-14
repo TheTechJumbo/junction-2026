@@ -35,7 +35,11 @@ MODEL_ID = os.environ.get("RECON_ITEMS_MODEL", "google/owlv2-base-patch16-ensemb
 CACHE = os.environ.get("RECON_ITEMS_CACHE") or None
 DEFAULT_ITEMS = "keys, glasses, wallet, phone, remote control"
 # A box counts from this score on. Chosen in eval/ITEMS_RESULTS.md; higher = fewer wrong answers, more misses.
-SCORE = float(os.environ.get("RECON_ITEMS_SCORE", "0.45"))
+SCORE = float(os.environ.get("RECON_ITEMS_SCORE", "0.5"))
+# A lower limit for one question only: is a remembered item still at its spot (check)? There the place
+# is already known, so a weaker box of that name within NEAR_M of it is enough, and the lower limit
+# misses a present item far less often. It never creates a sighting.
+CONFIRM = min(SCORE, float(os.environ.get("RECON_ITEMS_CONFIRM", "0.3")))
 # Rows of square tiles across the picture's short side, looked at besides the whole picture.
 # 0 = whole picture only (1 pass), 1 = tiles as high as the picture (16:9 and 4:3: 3 passes), 2 = 2 rows.
 TILES = int(os.environ.get("RECON_ITEMS_TILES", "1"))
@@ -185,8 +189,8 @@ class Detector:
         print(f"Item detector {model_id} loaded in {time.time() - t0:.0f} s on {self.device}", flush=True)
 
     def settings(self, names):
-        return {"model": self.model_id, "names": list(names), "score": self.score, "tiles": self.tiles,
-                "input": self.side, "device": self.device}
+        return {"model": self.model_id, "names": list(names), "score": self.score, "confirm_score": min(self.score, CONFIRM),
+                "tiles": self.tiles, "input": self.side, "device": self.device}
 
     def text(self, phrases):
         torch = self.torch
@@ -500,8 +504,8 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
         fields["items_note"] = f"{BIG} has another shape than the newest frame, so the small frame was searched."
     if picture is None:
         picture, saw = newest, "newest frame"
-    every = detector.find(picture, names)
-    found = best_per_name(every)
+    every = detector.find(picture, names, score=min(detector.score, CONFIRM))  # down to the look-again limit
+    found = best_per_name([d for d in every if d["score"] >= detector.score])  # sightings: the full limit only
     room = locate.map_frame(r, base, valid)
     window = crop_window(newest.shape, like.shape)
     items, marks = place(found, r, base, q, valid, window, state, room=room)
