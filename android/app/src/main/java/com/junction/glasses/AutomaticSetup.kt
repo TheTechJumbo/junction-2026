@@ -187,12 +187,14 @@ internal class DebugBackendLaunch private constructor(
     val relayZone: String?,
     /** The laptop's address on the same Wi-Fi (http://<LAN IP>:8090), used when 127.0.0.1 does not answer. */
     val relayLanUrl: String? = null,
+    /** `--ez always_on false` switches the always-on recording off (and stops it); true opts in. Null: unchanged. */
+    val alwaysOn: Boolean? = null,
 ) {
     val hasBackend: Boolean get() = backendUrl != null || apiToken != null
     val hasRelay: Boolean get() = relayUrl != null || relayKey != null || relayZone != null || relayLanUrl != null
 
     override fun toString() = "DebugBackendLaunch(backendUrl=$backendUrl, apiToken=${secret(apiToken)}, " +
-        "relayUrl=$relayUrl, relayKey=${secret(relayKey)}, relayZone=$relayZone, relayLanUrl=$relayLanUrl)"
+        "relayUrl=$relayUrl, relayKey=${secret(relayKey)}, relayZone=$relayZone, relayLanUrl=$relayLanUrl, alwaysOn=$alwaysOn)"
 
     companion object {
         const val EXTRA_BACKEND_URL = "backend_url"
@@ -201,7 +203,8 @@ internal class DebugBackendLaunch private constructor(
         const val EXTRA_RELAY_KEY = "relay_key"
         const val EXTRA_RELAY_ZONE = "relay_zone"
         const val EXTRA_RELAY_LAN_URL = "relay_lan_url"
-        private val EXTRAS = listOf(EXTRA_BACKEND_URL, EXTRA_API_TOKEN, EXTRA_RELAY_URL, EXTRA_RELAY_KEY, EXTRA_RELAY_ZONE, EXTRA_RELAY_LAN_URL)
+        const val EXTRA_ALWAYS_ON = "always_on"
+        private val EXTRAS = listOf(EXTRA_BACKEND_URL, EXTRA_API_TOKEN, EXTRA_RELAY_URL, EXTRA_RELAY_KEY, EXTRA_RELAY_ZONE, EXTRA_RELAY_LAN_URL, EXTRA_ALWAYS_ON)
 
         private fun secret(value: String?) = if (value == null) "absent" else "redacted"
 
@@ -217,6 +220,7 @@ internal class DebugBackendLaunch private constructor(
                     relayKey = intent.getStringExtra(EXTRA_RELAY_KEY)?.trim()?.takeIf { it.isNotEmpty() },
                     relayZone = intent.getStringExtra(EXTRA_RELAY_ZONE)?.trim()?.takeIf { it.isNotEmpty() },
                     relayLanUrl = intent.getStringExtra(EXTRA_RELAY_LAN_URL)?.trim()?.takeIf { it.isNotEmpty() },
+                    alwaysOn = if (intent.hasExtra(EXTRA_ALWAYS_ON)) intent.getBooleanExtra(EXTRA_ALWAYS_ON, false) else null,
                 )
             } catch (_: RuntimeException) { null }
         }

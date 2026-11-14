@@ -111,6 +111,7 @@ class RecordingService : LifecycleService() {
 
     private fun stopRecording() {
         AlwaysOn.stoppedByUser = true
+        setWanted(this, false)
         val recorder = AlwaysOn.recorder ?: run { stopForegroundAndSelf(); return }
         lifecycleScope.launch {
             recorder.stop()
@@ -219,8 +220,20 @@ class RecordingService : LifecycleService() {
                 .joinToString(" · ").ifEmpty { null },
         ).joinToString("\n")
 
+        private const val PREFS = "always_on"
+        private const val WANTED = "wanted"
+
+        /** The user's last choice, remembered across app restarts: true after Start, false after Stop (default). */
+        internal fun wanted(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(WANTED, false)
+
+        internal fun setWanted(context: Context, on: Boolean) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(WANTED, on).apply()
+        }
+
         /** Starts the recording from the Activity (in front): the settings go through [AlwaysOn.pending]. */
         internal fun start(context: Context, config: AlwaysOn.Config) {
+            setWanted(context, true)
             AlwaysOn.pending = config
             AlwaysOn.stoppedByUser = false
             ContextCompat.startForegroundService(context, Intent(context, RecordingService::class.java).setAction(ACTION_START))
@@ -228,6 +241,7 @@ class RecordingService : LifecycleService() {
 
         internal fun stop(context: Context) {
             AlwaysOn.stoppedByUser = true
+            setWanted(context, false)
             context.startService(Intent(context, RecordingService::class.java).setAction(ACTION_STOP))
         }
     }

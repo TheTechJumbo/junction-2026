@@ -262,7 +262,8 @@ class MainActivity : ComponentActivity() {
         backendChip = chip(); glassesChip = chip(); micChip = chip()
         setupStatus = note("Setting up automatically…")
         card("Always-on recording")
-        note("Records the room for the laptop all the time, also with the screen off or in other apps, until you tap Stop here or in the notification. " +
+        note("Starts only when you tap Start recording. It then records the room for the laptop all the time, also with the screen off, in other apps " +
+            "and after the app restarts, until you tap Stop here or in the notification. " +
             "Frames go only to the configured relay; chunks stay on the phone only until they are uploaded. Camera: the glasses, or the phone if you pick it.")
         val sourceGroup = RadioGroup(this).apply { orientation = LinearLayout.HORIZONTAL }
         for (source in CameraSource.values()) {
@@ -460,6 +461,10 @@ class MainActivity : ComponentActivity() {
         val extras = DebugBackendLaunch.read(source, BuildConfig.DEBUG) ?: return false
         setIntent(DebugBackendLaunch.withoutExtras(source))
         if (!apply) return false
+        extras.alwaysOn?.let { on ->
+            RecordingService.setWanted(this, on)
+            if (!on && AlwaysOn.isRecording) RecordingService.stop(this)
+        }
         if (extras.hasRelay) applyRelaySettings(extras.relayUrl, extras.relayKey, extras.relayZone, extras.relayLanUrl)
         extras.backendUrl?.let { endpoint.setText(it) }
         extras.apiToken?.let { connectAutomatically(it) }
@@ -958,11 +963,11 @@ class MainActivity : ComponentActivity() {
     }
     // ---- Always-on recording: a foreground service keeps recording until Stop ----
 
-    /** Starts by itself when the app opens with a relay key, unless already recording or stopped in this run. */
+    /** Opt-in: resumes by itself on opening only if the last choice was Start (remembered), never on a fresh install. */
     private fun maybeAutoStartAlwaysOn() {
         if (!automaticSetup || !alwaysOnAutoStart || pendingAlwaysOn) return
-        if (AlwaysOnRules.autoStart(enabled = true, relayKeySet = !relayKey.isNullOrBlank(), recording = AlwaysOn.isRecording,
-                stoppedByUser = AlwaysOn.stoppedByUser)) startAlwaysOn(auto = true)
+        if (AlwaysOnRules.autoStart(wanted = RecordingService.wanted(this), relayKeySet = !relayKey.isNullOrBlank(),
+                recording = AlwaysOn.isRecording)) startAlwaysOn(auto = true)
     }
     /** Starts the service from the Activity in front; asks once for notifications and, for the phone, the camera. */
     private fun startAlwaysOn(auto: Boolean) {

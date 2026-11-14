@@ -168,9 +168,12 @@ notification, "Recording the room for the laptop", showing the frames sent, the 
 state, the last upload and the battery, with a **Stop** button. Leaving the app does not
 stop it.
 
-- **Start**: automatic when the app opens with a relay key set (debug extras above),
-  unless Stop was tapped in this run of the app; or tap **Start recording**. The first
-  start asks once to allow notifications.
+- **Start**: only when you tap **Start recording** (a fresh install never records by
+  itself). The choice is remembered: after Start, opening the app resumes the recording
+  (with a relay key set); after Stop it stays off until you tap Start again. Debug builds
+  can switch it with `adb shell am start -n com.junction.glasses/.MainActivity --ez always_on false`
+  (off, and stops a running recording) or `--ez always_on true`. The first start asks once
+  to allow notifications.
 - **Camera**: the glasses (the session stays up in the background; if they are not
   registered or asleep the card says what it is waiting for), or the phone's back camera
   only if you pick Phone. It never switches by itself.

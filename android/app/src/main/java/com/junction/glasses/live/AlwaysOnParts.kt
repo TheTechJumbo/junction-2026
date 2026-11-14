@@ -167,11 +167,12 @@ internal class FailoverRelay<C>(
 /** The always-on recording's decisions that need no Android: when it starts, which camera, heat. */
 internal object AlwaysOnRules {
     /**
-     * Starts by itself when the app opens with a relay key set, unless it already runs or the user
-     * stopped it in this run of the app (Stop sticks until the app is opened anew or Start is tapped).
+     * Opt-in: it starts by itself when the app opens only if the user's last choice was Start
+     * ([wanted], remembered across app restarts; Stop or `--ez always_on false` clear it), a relay key
+     * is set and it is not already running. A fresh install never records until Start is tapped.
      */
-    fun autoStart(enabled: Boolean, relayKeySet: Boolean, recording: Boolean, stoppedByUser: Boolean): Boolean =
-        enabled && relayKeySet && !recording && !stoppedByUser
+    fun autoStart(wanted: Boolean, relayKeySet: Boolean, recording: Boolean): Boolean =
+        wanted && relayKeySet && !recording
 
     /** The glasses, unless the phone was picked in the app; a failing camera never switches by itself. */
     fun source(picked: CameraSource): CameraSource = picked

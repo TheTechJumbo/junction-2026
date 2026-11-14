@@ -127,12 +127,13 @@ class AlwaysOnPartsTest {
         }
     }
 
-    @Test fun recordingStartsByItselfOnlyWithAKeyAndUntilTheUserStopsIt() {
-        assertTrue(AlwaysOnRules.autoStart(enabled = true, relayKeySet = true, recording = false, stoppedByUser = false))
-        assertFalse(AlwaysOnRules.autoStart(enabled = true, relayKeySet = false, recording = false, stoppedByUser = false))
-        assertFalse(AlwaysOnRules.autoStart(enabled = true, relayKeySet = true, recording = true, stoppedByUser = false))
-        assertFalse(AlwaysOnRules.autoStart(enabled = true, relayKeySet = true, recording = false, stoppedByUser = true))
-        assertFalse(AlwaysOnRules.autoStart(enabled = false, relayKeySet = true, recording = false, stoppedByUser = false))
+    @Test fun recordingIsOptInAndResumesOnlyAfterStartUntilStop() {
+        // A fresh install (no Start yet) or after Stop: never by itself, even with a relay key.
+        assertFalse(AlwaysOnRules.autoStart(wanted = false, relayKeySet = true, recording = false))
+        // After Start (remembered across app restarts): resumes when the app opens.
+        assertTrue(AlwaysOnRules.autoStart(wanted = true, relayKeySet = true, recording = false))
+        assertFalse(AlwaysOnRules.autoStart(wanted = true, relayKeySet = false, recording = false))
+        assertFalse("already running", AlwaysOnRules.autoStart(wanted = true, relayKeySet = true, recording = true))
     }
 
     @Test fun theGlassesAreTheSourceAndThePhoneOnlyWhenPicked() {
