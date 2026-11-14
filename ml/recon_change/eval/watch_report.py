@@ -283,6 +283,17 @@ def main():
                      + ["-", pct(len(u) - len(us), len(u))])
     table("As a live check would run: all 12 new frames given, median score of the 3 best looks (same limits)",
           ["Scenes", "Region size", "Spots", "Caught at the 5% limit", "False alarms", "Caught at the 1% limit", "False alarms", "AUC", "Not seen"], lines)
+    if rows2:
+        lines = []
+        for name, data in (("same lighting", rows), ("other lighting", rows2)):
+            p = [multi(r) for r in pick(data, indoor, "changed", 1)]
+            n = [multi(r) for r in pick(data, indoor, "changed", 0) if r.get("spot")]
+            ps, ns = [s for s in p if s is not None], [s for s in n if s is not None]
+            lines.append([name, len(p)] + [x for lim in limits.values() for x in
+                                           (pct(sum(s > lim for s in ps), len(p)), pct(sum(s > lim for s in ns), len(ns)))]
+                         + [pct(len(p) - len(ps), len(p))])
+        table("Live mode and lighting: the five indoor scenes, all 12 new frames (same limits)",
+              ["Baseline", "Changed spots", "Caught at the 5% limit", "False alarms", "Caught at the 1% limit", "False alarms", "Not seen"], lines)
 
 
 if __name__ == "__main__":

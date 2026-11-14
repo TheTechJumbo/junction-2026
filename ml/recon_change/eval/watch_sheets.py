@@ -18,6 +18,7 @@ the direction most like the new frame's), which need not be the frame the spot w
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -139,7 +140,9 @@ def main():
         s["name"] = f"spot {i + 1:02d}"
         s["box"] = [round(float(x), 4) for x in s["box"]]
 
+    t0 = time.time()
     answers = watch.check(recon, base, after, spots)
+    print(f"{args.scene}: watch.check on {len(spots)} spots, {len(base)} baseline and {len(after)} new frames: {time.time() - t0:.1f} s", flush=True)
     rows, tiles = [], []
     for s, a in zip(spots, answers):
         right = "not seen" if a["state"] == "not_seen" else "right" if a["state"] == s["truth"] else "wrong"
