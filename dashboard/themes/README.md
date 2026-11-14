@@ -45,8 +45,8 @@ designed around its illustration, not like a template with a picture dropped in.
   `--sun-*`, `--sunrise`, `--sunset`): the script sets them on `<html>` and would overwrite yours.
 - `icons.svg` contains exactly these symbols, each `<symbol id="i-NAME" viewBox="0 0 24 24">`,
   drawn with `currentColor` so CSS can colour them: `pill`, `door`, `eye` (seen by the glasses),
-  `question`, `alert`, `sensor`, `calm` (nothing to worry about), `sun`, `moon`, `theme`,
-  `refresh`, `install`, `chevron-left`, `chevron-right`.
+  `question`, `alert`, `sensor`, `calm` (nothing to worry about), `sun`, `moon`, `theme`, `info`,
+  `refresh`, `install`, `chevron-left`, `chevron-right`, `info`.
 - No external URLs in CSS. Fonts are self-hosted woff2 in `fonts/`. Fetch them from the
   @fontsource packages on jsDelivr, for example
   `https://cdn.jsdelivr.net/npm/@fontsource/<family>@5/files/<family>-latin-<weight>-normal.woff2`

@@ -224,8 +224,14 @@ class RulesAnswerEngine:
               if _utc(q.ts) <= _utc(now) and q.ts.astimezone(tz).date() == day}
         counts = Counter(q.intent for q in qs.values())
         detail = ", ".join(f"{intent}: {count}" for intent, count in sorted(counts.items()))
-        text = (f"On {day.isoformat()}, {pills} pill box opening(s) and {doors} front door "
-                f"opening(s) were recorded by sensors. {alert_count} night door alert(s). "
-                f"{len(qs)} question(s) were recorded")
+        text = (f"On {day.isoformat()}, {_count(pills, 'pill box opening')} and "
+                f"{_count(doors, 'front door opening')} were recorded by sensors. "
+                f"{_count(alert_count, 'night door alert')}. "
+                f"{_count(len(qs), 'question')} {'was' if len(qs) == 1 else 'were'} recorded")
         text += f" ({detail})." if detail else "."
         return text + " Openings do not confirm medication ingestion or door locking."
+
+
+def _count(n: int, noun: str) -> str:
+    """'1 question', '2 questions', '0 questions'."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"

@@ -10,14 +10,15 @@ let demo = params.has('demo'), controller, generation = 0, evidenceController, e
 // ---------- Words ----------
 const KINDS = {
   pillbox_open: {title: 'Pill box opened', icon: 'pill', kind: 'pills'},
-  door_open: {title: 'Front door opened', icon: 'door', kind: 'door'},
-  door_closed: {title: 'Front door closed', icon: 'door', kind: 'door'},
-  object_appeared: {title: 'Something new was seen', icon: 'eye', kind: 'vision'},
-  object_gone: {title: 'Something was no longer seen', icon: 'eye', kind: 'vision'},
+  door_open: {title: 'Door opened', icon: 'door', kind: 'door'},
+  door_closed: {title: 'Door closed', icon: 'door', kind: 'door'},
+  object_appeared: {title: 'Item seen', icon: 'eye', kind: 'vision'},
+  object_gone: {title: 'Item gone', icon: 'eye', kind: 'vision'},
 };
-const SOURCES = {sensor: 'Home sensor', vision: 'Glasses', voice: 'Voice'};
-const INTENTS = {pills: 'Did I take my pills?', door: 'Did I lock the door?', navigation: 'Where is it?', medical: 'A medical question', open: 'Something else'};
+const SOURCES = {sensor: {label: 'Home sensor', icon: 'sensor'}, vision: {label: 'Glasses', icon: 'eye'}, voice: {label: 'Voice', icon: 'question'}};
+const INTENTS = {pills: 'Pills taken?', door: 'Door locked?', navigation: 'Where is it?', medical: 'Medical', open: 'Other'};
 const readable = text => String(text ?? '').replaceAll('_', ' ');
+const capital = text => readable(text).replace(/^./, c => c.toUpperCase());
 const kindOf = event => KINDS[event.type] || {title: readable(event.type).replace(/^./, c => c.toUpperCase()), icon: 'eye', kind: 'other'};
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -110,7 +111,7 @@ function tick() {
   $('clock').textContent = timeLabel(now.toISOString()); $('clock').dateTime = now.toISOString();
   $('next-day').disabled = demo || ($('day').value || today) >= today;
   $('today').hidden = ($('day').value || today) === today;
-  if (refreshedAt && !demo) $('updated').textContent = `Updated ${ago(refreshedAt, now)}. Refresh for the latest.`;
+  if (refreshedAt && !demo) $('updated').textContent = `Updated ${ago(refreshedAt, now)}`;
 }
 function ago(then, now) {
   const minutes = Math.round((now - then) / 60000);
@@ -135,7 +136,7 @@ function dayName(day) {
 // ---------- Rendering ----------
 function heroFor(data, state) {
   const today = state === 'today';
-  if (!data) return demo ? ['Loading the example day…', ''] : ['Connect to see the day at home.', 'Daylight shows the moments that matter: the pill box, the front door, and the questions asked.'];
+  if (!data) return demo ? ['Loading…', ''] : ['Connect to see the day at home.', ''];
   const {timeline, summary} = data, alerts = timeline.alerts.length;
   const title = alerts ? `${plural(alerts, 'thing', 'things')} to notice${today ? ' today' : ''}.`
     : !timeline.events.length ? (today ? 'Quiet so far today.' : 'A quiet day.')
@@ -145,7 +146,9 @@ function heroFor(data, state) {
 function renderHero() {
   const state = dayState($('day').value, localDay());
   const [title, lede] = heroFor(lastData, state);
-  $('hero-title').textContent = title; $('hero-lede').textContent = lede;
+  $('hero-title').textContent = title; $('summary-text').textContent = lede;
+  $('info-button').hidden = !lastData;
+  $('info-footnote').hidden = /not confirm/i.test(lede); // the backend's note may already say it
   $('hero-place').textContent = demo ? "Anna's home · example" : 'At home';
   const t = lastData?.timeline;
   $('stat-alerts').textContent = t ? t.alerts.length : '–';
@@ -172,18 +175,20 @@ function renderRhythm(timeline) {
   $('rhythm-marks').replaceChildren(...marks.sort((a, b) => a.style.getPropertyValue('--at') - b.style.getPropertyValue('--at')));
 }
 function renderAlerts(timeline) {
-  $('alert-count').textContent = timeline.alerts.length ? plural(timeline.alerts.length, 'alert', 'alerts') : 'All calm';
-  if (!timeline.alerts.length) { empty('alerts', 'Nothing needs your attention on this day.'); return; }
+  $('alert-count').textContent = timeline.alerts.length || '';
+  if (!timeline.alerts.length) { empty('alerts', 'All calm'); return; }
   $('alerts').replaceChildren(...timeline.alerts.map(alert => {
     const row = node('article', undefined, 'alert'); row.dataset.type = alert.type;
     const night = ['door_open_night', 'night_door_open'].includes(alert.type);
     const body = node('div', undefined, 'alert-body');
-    body.append(node('strong', night ? 'The front door opened at night' : readable(alert.type).replace(/^./, c => c.toUpperCase())), node('p', alert.message), timeEl(alert.ts, `${timeLabel(alert.ts)} Helsinki`));
+    body.append(node('strong', night ? 'Door opened at night' : capital(alert.type)));
+    if (!night && alert.message) body.append(node('p', alert.message));
+    body.append(timeEl(alert.ts));
     row.append(icon(night ? 'moon' : 'alert', 'alert-icon'), body); return row;
   }));
 }
 function renderEvents(timeline) {
-  $('event-count').textContent = plural(timeline.events.length, 'observation', 'observations');
+  $('event-count').textContent = timeline.events.length || '';
   const alertIds = new Set(timeline.alerts.flatMap(alert => alert.event_ids || []));
   const items = [];
   const events = sortedEvents(timeline.events);
@@ -191,44 +196,45 @@ function renderEvents(timeline) {
     const inPart = events.filter(event => { const hour = dayFraction(event.ts) * 24; return hour >= part.from && hour < part.to; });
     if (!inPart.length) continue;
     const head = node('li', undefined, 'group'); head.dataset.part = part.id;
-    head.append(icon(part.id === 'night' || part.id === 'evening' ? 'moon' : 'sun'), node('span', part.label), node('small', `${String(part.from).padStart(2, '0')}–${String(part.to).padStart(2, '0')}`));
+    head.append(icon(part.id === 'night' || part.id === 'evening' ? 'moon' : 'sun'), node('span', part.label));
     items.push(head);
     for (const event of inPart) {
       const k = kindOf(event);
       const row = node('li', undefined, 'event'); row.dataset.kind = k.kind; row.dataset.source = event.source;
       if (alertIds.has(event.id)) row.dataset.flag = 'alert';
       const detail = node('div', undefined, 'event-body');
-      const where = [readable(event.zone), event.object ? readable(event.object) : ''].filter(Boolean).join(' · ');
-      detail.append(node('strong', k.title), node('p', where, 'event-where'));
+      detail.append(node('strong', k.title), node('p', capital(event.zone), 'event-where'));
       const meta = node('p', undefined, 'event-meta');
-      meta.append(node('span', SOURCES[event.source] || readable(event.source), 'chip'));
-      if (event.source === 'vision' && typeof event.confidence === 'number') meta.append(node('span', `${Math.round(event.confidence * 100)}% sure`, 'chip chip-soft'));
-      if (event.evidence_url && !demo) { const button = node('button', 'See the moment', 'link-button'); button.type = 'button'; button.addEventListener('click', () => showEvidence(event)); meta.append(button); }
-      detail.append(meta);
+      const source = SOURCES[event.source] || {label: readable(event.source), icon: 'sensor'};
+      // Home sensors are the usual source, so only the glasses and voice get a badge.
+      if (event.source !== 'sensor') { const chip = node('span', undefined, 'chip chip-icon'); chip.title = source.label; chip.append(icon(source.icon), node('span', source.label, 'visually-hidden')); meta.append(chip); }
+      if (event.source === 'vision' && typeof event.confidence === 'number') { const sure = node('span', `${Math.round(event.confidence * 100)}%`, 'chip chip-soft'); sure.title = 'How sure the glasses were'; meta.append(sure); }
+      if (event.evidence_url && !demo) { const button = node('button', 'Photo', 'link-button'); button.type = 'button'; button.addEventListener('click', () => showEvidence(event)); meta.append(button); }
+      if (meta.childElementCount) detail.append(meta);
       row.append(timeEl(event.ts), node('span', undefined, 'event-dot'), icon(k.icon, 'event-icon'), detail);
       items.push(row);
     }
   }
-  if (!items.length) { const li = node('li', undefined, 'empty'); li.append(icon('calm'), node('p', 'No observations recorded on this day.')); items.push(li); }
+  if (!items.length) { const li = node('li', undefined, 'empty'); li.append(icon('calm'), node('p', 'Nothing recorded')); items.push(li); }
   $('events').replaceChildren(...items);
 }
 function renderQuestions(timeline) {
-  if (!timeline.questions.length) { empty('questions', 'No questions were asked on this day.', 'question'); return; }
+  if (!timeline.questions.length) { empty('questions', 'None', 'question'); return; }
   $('questions').replaceChildren(...timeline.questions.map(q => {
     const row = node('div', undefined, 'question'); row.dataset.intent = q.intent; row.style.setProperty('--count', q.count);
-    const words = node('div', undefined, 'question-words'); words.append(node('strong', INTENTS[q.intent] || readable(q.intent)), node('small', `Last asked at ${timeLabel(q.last_ts)}`));
+    const words = node('div', undefined, 'question-words'); words.append(node('strong', INTENTS[q.intent] || readable(q.intent)), timeEl(q.last_ts));
     const pips = node('span', undefined, 'pips'); pips.setAttribute('aria-label', `Asked ${q.count} times`);
     for (let i = 0; i < Math.min(q.count, 12); i++) pips.append(node('span', undefined, 'pip'));
     row.append(icon('question'), words, pips, node('span', `${q.count}×`, 'question-count')); return row;
   }));
 }
 function renderSensors(timeline) {
-  if (!timeline.sensors.length) { empty('sensors', 'No sensors are set up yet.', 'sensor'); return; }
-  const fmt = new Intl.DateTimeFormat('en-GB', {timeZone: TIMEZONE, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+  if (!timeline.sensors.length) { empty('sensors', 'None set up', 'sensor'); return; }
+  const fmt = new Intl.DateTimeFormat('en-GB', {timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit'});
   $('sensors').replaceChildren(...timeline.sensors.map(sensor => {
     const state = ['online', 'offline', 'unknown'].includes(sensor.status) ? sensor.status : 'unknown';
     const row = node('div', undefined, 'sensor'); row.dataset.status = state;
-    const words = node('div', undefined, 'sensor-words'); words.append(node('strong', readable(sensor.id)), node('small', sensor.last_seen ? `Last heard ${fmt.format(new Date(sensor.last_seen))}` : 'Not heard from yet'));
+    const words = node('div', undefined, 'sensor-words'); words.append(node('strong', readable(sensor.id)), ...(sensor.last_seen ? [timeEl(sensor.last_seen, fmt.format(new Date(sensor.last_seen)))] : []));
     row.append(icon('sensor'), words, node('span', {online: 'Online', offline: 'Offline', unknown: 'Unknown'}[state], 'state')); return row;
   }));
 }
@@ -236,7 +242,6 @@ function render(data) {
   lastData = data;
   const {timeline, summary} = data;
   renderHero(); renderRhythm(timeline); renderAlerts(timeline); renderEvents(timeline); renderQuestions(timeline); renderSensors(timeline);
-  $('summary-text').textContent = summary.text || 'No daily note has been written for this day yet.';
   $('content').hidden = false;
   root.dataset.loaded = String(Date.now()); // themes may key entrance animations off this
 }
@@ -258,13 +263,12 @@ async function load() {
   lastData = null; root.dataset.loading = 'true';
   $('content').hidden = true; $('refresh').disabled = true;
   root.dataset.mode = demo ? 'demo' : api.token ? 'live' : 'disconnected';
-  $('mode-label').textContent = demo ? 'Example day · not real data' : 'Private family view';
   $('connection-label').textContent = demo ? 'Example day' : api.token ? 'Connected' : 'Not connected';
   $('connection-button').textContent = api.token ? 'Disconnect' : 'Connect';
-  $('demo').textContent = demo ? 'Leave example' : 'Example day';
+  $('demo').textContent = demo ? 'Exit example' : 'Example';
   $('day').disabled = $('prev-day').disabled = $('today').disabled = demo;
   renderHero(); showSun($('day').value); tick();
-  status(demo ? 'Loading the example day…' : api.token ? 'Loading the day…' : '');
+  status('');
   try {
     let data;
     if (demo) {
@@ -272,16 +276,16 @@ async function load() {
       const [timeline, summary] = await Promise.all(['timeline', 'summary'].map(async name => { const response = await fetch(`./fixtures/${name}${variant}.json`, {signal: controller.signal, cache: 'no-store'}); if (!response.ok) throw new Error('The example day is unavailable.'); return response.json(); }));
       data = {timeline, summary}; $('day').value = timeline.day;
     } else {
-      if (!api.token) { status(''); $('updated').textContent = 'Connect to view recorded observations.'; return; }
+      if (!api.token) { $('updated').textContent = ''; return; }
       if (!navigator.onLine) throw new Error('You are offline. Reconnect, then refresh to load this day.');
       data = await api.day($('day').value, controller.signal);
     }
     if (active !== generation) return;
     showSun($('day').value); $('day-name').textContent = dayName($('day').value);
     render(data);
-    status(demo ? 'This is an example day from 14 November 2026, made up for demonstration. It is not real data.' : '');
+    status('');
     refreshedAt = new Date();
-    $('updated').textContent = demo ? 'Example day · 14 November 2026' : 'Updated just now.';
+    $('updated').textContent = demo ? 'Example data, not a real home' : 'Updated just now';
     tick();
   } catch (error) { if (error.name !== 'AbortError' && active === generation) { status(error.message, true); $('updated').textContent = 'The day could not be loaded. Refresh to try again.'; } }
   finally { if (active === generation) { $('refresh').disabled = false; delete root.dataset.loading; } }
@@ -308,6 +312,8 @@ $('close-evidence').addEventListener('click', () => $('evidence-dialog').close()
 $('evidence-dialog').addEventListener('close', cleanupEvidence);
 $('evidence-image').addEventListener('error', () => { cleanupEvidence(); $('evidence-status').textContent = 'This image could not be shown.'; });
 $('theme-button').addEventListener('click', () => $('theme-dialog').showModal());
+$('info-button').addEventListener('click', () => $('info-dialog').showModal());
+$('close-info').addEventListener('click', () => $('info-dialog').close());
 window.addEventListener('offline', () => { if (!demo && api.token) { controller?.abort(); generation++; $('refresh').disabled = false; $('content').hidden = true; status('You are offline. Reconnect, then refresh to load this day.', true); } });
 window.addEventListener('online', () => { if (!demo && api.token) status('Back online. Refresh to load the latest.'); });
 setInterval(tick, 30000);

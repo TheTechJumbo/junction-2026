@@ -17,6 +17,9 @@ img,svg{max-width:100%}
 .skip{position:absolute;left:1rem;top:-4rem;z-index:100}
 .skip:focus{top:1rem}
 .rhythm-track{position:relative}
+.hero-title-row{display:flex;align-items:flex-start;gap:.5rem}
+.hero-title-row h1{flex:1;min-width:0}
+.info-button{flex:none;margin-top:.35em}
 .rhythm-marks{list-style:none;margin:0;padding:0}
 .events{list-style:none;margin:0;padding:0}
 .hero-stats{list-style:none;margin:0;padding:0}

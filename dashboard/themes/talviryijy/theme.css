@@ -769,7 +769,7 @@ dialog .ghost { color: var(--day-ink); }
   .content { padding-top: 1.5rem; }
   .board {
     grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); column-gap: 2.25rem; row-gap: 1.75rem; align-items: start;
-    grid-template-areas: "attention summary" "timeline summary" "timeline questions" "timeline home" "timeline .";
+    grid-template-areas: "attention questions" "timeline home" "timeline .";
   }
   .attention { grid-area: attention; }
   .summary { grid-area: summary; }

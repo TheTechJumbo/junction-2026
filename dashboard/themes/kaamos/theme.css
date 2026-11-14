@@ -666,7 +666,7 @@ dialog input[type="password"]:focus-visible { border-color: var(--lamp); }
   .content { padding-top: 1.75rem; }
   .board {
     grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); column-gap: 2.75rem; align-items: start;
-    grid-template-areas: "attention summary" "timeline summary" "timeline questions" "timeline home" "timeline .";
+    grid-template-areas: "attention questions" "timeline home" "timeline .";
   }
   .kaamos-sun { transform: translate(calc(-40px + var(--sun-progress, 0) * 760px), calc(var(--sun-altitude, 0) * -165px)); }
   .attention { grid-area: attention; }
