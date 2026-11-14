@@ -330,3 +330,18 @@ def test_parent_logs_only_allowed_worker_category(monkeypatch, caplog, stderr, c
     assert f"category={category} returncode=1" in caplog.text
     assert "private" not in caplog.text
     assert "secret" not in caplog.text
+
+
+def test_default_budget_tiny_green_jpeg_after_actual_api_normalization():
+    # Exact Linux live-HTTP failure payload and codec path. This deliberately uses
+    # the production three-second processor budget rather than test-only ten seconds.
+    from backend.app import verify_image
+
+    original = io.BytesIO()
+    Image.new("RGB", (8, 8), "green").save(original, format="JPEG")
+    normalized, media_type = verify_image(original.getvalue(), "image/jpeg")
+    assert media_type == "image/jpeg"
+    result = LocalFaceRedactor().redact(normalized)
+    assert result.content_type == "image/jpeg"
+    assert result.status == "no_faces_detected"
+    assert decoded(result.image_bytes, expected_format="JPEG").shape == (8, 8, 3)
