@@ -30,8 +30,8 @@ and endpoint in this app are session-only and are cleared when its process ends.
 2. For a USB-connected phone run `adb reverse tcp:8000 tcp:8000`. For our isolated
    development server on port8097 use `adb reverse tcp:8000 tcp:8097` instead.
 3. Open **Memory with receipts**, enter `http://127.0.0.1:8000` and the central API
-   session token, then Connect backend. This configures the client; the first Ask
-   verifies connectivity. The token disappears from the input after configuration.
+   session token, then Connect backend. This verifies authentication with a read-only GET /events?limit=1 probe.
+   A failed check leaves questions disabled; enter a corrected token or retry. The token disappears from the input after configuration.
 4. Type a question, then try Use phone microphone. Recognition uses Android's
    speech service with offline preference; availability and processing depend on
    that service. Typing remains available if speech permission/service is absent.
@@ -99,3 +99,28 @@ are memory-only, upload request copies are cleared after transport completes,
 application backup is disabled, screenshots are blocked, and SDK analytics/crash
 reporting are opted out. This does not establish privacy behavior of Meta AI,
 Android's chosen speech service or the entire device.
+
+## Setup diagnostics
+
+Connect backend verifies the authenticated event API, rather than merely storing an
+address. It reports rejected tokens, unreachable servers and unexpected responses.
+The in-memory token can be reused by pressing Connect backend again; changing the
+server requires its token. No credentials persist across app restarts.
+
+The glasses setup section separates Android Bluetooth/microphone/camera permissions
+from Meta camera/microphone consent. UNKNOWN means consent has not been checked;
+it does not mean permission was denied. Registration, detected devices, session and
+component states remain visible separately from question results.
+
+- Test display sends fixed text and asks the wearer to confirm seeing it. SDK acceptance
+  is not proof that the wearer saw it.
+- Test audio calls /speak with a fixed test phrase, without recording a question via
+  /ask. It labels ElevenLabs or offline Android fallback, including completion/failure.
+  Android controls the media route; confirm sound on the glasses yourself.
+- Start glasses camera, then Test camera captures a JPEG in memory and discards it.
+  It never uploads the test photo. Supporting-photo upload remains a separate action.
+- Stop, backgrounding, asking or replaying cancels pending hardware diagnostics.
+  Reconnecting clears old observation choices and invalidates pending upload dialogs.
+
+Physical pairing, Meta consent, wearer visibility and Bluetooth routing still require
+real glasses. Emulator checks cannot establish these.

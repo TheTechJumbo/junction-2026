@@ -27,6 +27,7 @@ class AssembledBackendTest {
         val token = System.getenv("JUNCTION_ANDROID_TEST_TOKEN")
         assumeTrue("Explicit isolated integration server required", !origin.isNullOrBlank() && !token.isNullOrBlank())
         val client = HttpBackendClient(origin!!, token!!, true)
+        assertTrue("Authenticated connection probe failed", await<Unit> { client.checkConnection(it) }.isSuccess)
         val id = "android-integration-${UUID.randomUUID()}"
         val event = JsonObject().apply {
             addProperty("id", id); addProperty("type", "pillbox_open"); addProperty("source", "sensor")
