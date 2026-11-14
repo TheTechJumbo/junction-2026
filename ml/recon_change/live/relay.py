@@ -753,7 +753,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     "verdict": result["verdict"], "events": events, "images": images, "splat": splat_url,
                     "device": result.get("device"), "on_gpu": result.get("on_gpu"), "host": result.get("host"),
                     "settings": result.get("settings"), "gaussians": result.get("gaussians"),
-                    "median_depth": result.get("median_depth"),
+                    "median_depth": result.get("median_depth"), "watch": result.get("watch") or [],
                     "seconds": {**seconds, **result.get("seconds", {})}}
             history.append({**body, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")})
             del history[:-200]
