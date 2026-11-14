@@ -1,0 +1,20 @@
+[Unit]
+Description=Junction local household store
+After=local-fs.target
+
+[Service]
+WorkingDirectory=/home/arduino/junction/unoq
+EnvironmentFile=/home/arduino/.config/junction/store.env
+ExecStart=/usr/bin/python3 store.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/arduino/.local/share/junction
+MemoryMax=256M
+
+[Install]
+WantedBy=default.target
