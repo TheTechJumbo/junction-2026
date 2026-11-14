@@ -208,6 +208,12 @@ def main():
     code, body = call("/reminders")
     assert code == 200 and body["sensors"] is False and len(body["reminders"]) == 1
 
+    # Forgetting an item: the answer goes back to "not seen".
+    code, body = call("/forget?zone=kitchen&name=keys", raw=b"")
+    assert code == 200 and body["seen"] == [], body
+    code, body = call("/ask?zone=kitchen", {"question": "Where are my keys?"})
+    assert body["answer"].startswith("I have not seen your keys today."), body
+
     for server in (relay_server, alone_server, api_server):
         server.shutdown()
     print("care flow: all checks passed")

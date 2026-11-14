@@ -24,6 +24,7 @@ It prints the link to open. The link carries an access key, and every request ne
     GET  /places                  name places by clicking in a baseline picture, and test a fix
     POST /ask?zone=kitchen        body = {"question": "Did I take my pills?"} -> the answer in words
                                   ("Where are my keys?" is answered here: where a position fix last saw them)
+    POST /forget?zone=kitchen&name=keys   forget where an item was seen (no name: every item in the zone)
     POST /speak                   body = {"text": "..."} -> the sentence as MP3 speech
     GET  /reminders               the reminders, each with its state today: later, due, done or missed
     POST /reminder                body = {"text": "Time to take your pills", "time": "14:00", "place": "pill box"}
@@ -652,6 +653,16 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.answer_service(op, self.rfile.read(min(size, 65536)), zone)
             if op == "reminder":
                 return self.change_reminder(query, zone, self.rfile.read(min(size, 65536)))
+            if op == "forget":  # drop what is remembered about one item in a zone, or about all of them
+                self.rfile.read(min(size, 65536))
+                name, spots = query.get("name", [""])[0], seen.get(zone, {})
+                for known in [n for n in spots if not name or n == name]:
+                    del spots[known]
+                try:
+                    seen_file.write_text(json.dumps(seen))
+                except OSError:
+                    pass
+                return self.send_json(200, {"ok": True, "zone": zone, "seen": seen_list(zone, where.get(zone))})
             if op == "waypoint":  # name or remove a place; everything is in the query, the body is ignored
                 self.rfile.read(min(size, 65536))
                 req = {"op": "waypoint", "zone": zone, "name": query.get("name", [""])[0]}
