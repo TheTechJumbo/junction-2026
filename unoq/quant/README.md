@@ -111,3 +111,14 @@ Both limits and RSS must be considered; fitting weights alone is insufficient.
 Three frames also completed: load 14.59 s, inference 400.14 s, peak RSS
 2,423,860 KiB (2.31 GiB). Finite camera/depth outputs and the local recon.npz
 adapter were validated. Full room-change quality remains unvalidated.
+
+Experimental output directories are not enrolled in the store's artifact retention
+sweep. Use public/synthetic inputs only until the inference path is integrated with
+the artifact API and its retention lifecycle. The bounded job uses a private output
+directory and owner-only creation mask. Geometry-quality comparisons are still
+pending; do not use these experiments as evidence for user-facing safety claims.
+
+Nine frames at 224x224 were stopped by the 600-second runtime limit, with no
+completed reconstruction. See nine-frame-board-result.json. This was a timeout,
+not an OOM result. INT4 was not added because the observed limitation was time,
+not weight memory. No claim of a working full room-change pipeline is made.

@@ -16,7 +16,7 @@ if report.exists():
     sys.exit('Use a fresh output directory: report.json already exists')
 start = time.monotonic()
 command = ['systemd-run', '--setenv=PYTHONPATH=/home/arduino/junction-vggt', '--setenv=HF_HUB_OFFLINE=1', '--setenv=OMP_NUM_THREADS=2', '--setenv=OPENBLAS_NUM_THREADS=2', '--user', '--wait', '--pipe', '--collect', '--unit=junction-vggt-probe',
-           '-p', 'MemoryMax=2800M', '-p', 'MemorySwapMax=0', '-p', 'RuntimeMaxSec=600', '-p', 'TimeoutStopSec=5',
+           '-p', 'UMask=0077', '-p', 'NoNewPrivileges=yes', '-p', 'MemoryMax=2800M', '-p', 'MemorySwapMax=0', '-p', 'RuntimeMaxSec=600', '-p', 'TimeoutStopSec=5',
            '/home/arduino/junction-vggt-env/bin/python', '/home/arduino/junction/unoq/quant/run.py', *args]
 result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 (out / 'supervisor.log').write_text(result.stdout)

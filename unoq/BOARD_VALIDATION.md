@@ -48,3 +48,8 @@ load 20.10 seconds, inference 270.79 seconds, peak process RSS 2,405,060 KiB
 (2.29 GiB). See `quant/two-frame-board-result.json` and `quant/README.md`.
 This proves execution, not acceptable geometric accuracy or real-time operation.
 Storage stayed active. No personal imagery or remote inference was used.
+
+Three-frame quantized inference also passed: 400.14 s, peak RSS 2.31 GiB, finite
+calibration matrices and correct local reconstruction output shapes. The nine-frame
+run timed out at 600.46 s without completed outputs. Memory limits did not stop it.
+Thus execution is proved for small batches; full before/after quality remains pending.
