@@ -380,6 +380,8 @@ def main():
     args = ap.parse_args()
     global ALLOWED
     ALLOWED = args.allowed
+    more = __import__("items_second_look").MORE  # wording tests: every phrase, or every phrase for keys only
+    ev.PHRASES.update({"more": more, "keys-more": {**ev.PHRASES["chosen"], "keys": more["keys"]}})
     D = Data(args)
     if args.evidence:
         return evidence(D, args)

@@ -93,7 +93,7 @@ def main():
             b = d["box"]
             cv2.rectangle(frame, (int(b[0] * W), int(b[1] * H)), (int(b[2] * W), int(b[3] * H)), colour, 3 if d["accepted"] else 1)
             cv2.putText(frame, f"{d['matched']} {d['score']:.2f}", (int(b[0] * W), max(14, int(b[1] * H) - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2)
-        cells.append(cv2.resize(frame, (320, int(320 * H / W))))
+        cells.append(cv2.resize(frame, (320, int(320 * later[0].shape[0] / later[0].shape[1]))))
     (out / "frames.json").write_text(json.dumps({"item": name, "count": count, "settings": detector.settings([name]), "frames": rows}))
     if cells:
         cells += [np.zeros_like(cells[0])] * (-len(cells) % 5)

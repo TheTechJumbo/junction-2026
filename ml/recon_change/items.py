@@ -91,7 +91,7 @@ JUDGE_TEXTS = [t for texts in JUDGE_OF.values() for t in texts] + [
 # similarity of what the detector sees in the two boxes) is accepted
 # and marked "matched": "enrolled". No folder: nothing changes. The folder is read again when a file in it changes.
 ENROLLED = os.environ.get("RECON_ITEMS_ENROLLED") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrolled")
-ENROLLED_SCORE = float(os.environ.get("RECON_ITEMS_ENROLLED_SCORE", "0.6"))
+ENROLLED_SCORE = float(os.environ.get("RECON_ITEMS_ENROLLED_SCORE", "0.75"))
 ENROLLED_PER_ITEM, ENROLLED_ITEMS = 4, 12  # pictures used per item, and items
 ENROLLED_FLOOR = 0.4  # boxes less alike than this to a shown thing are not even kept as candidates
 # RECON_ITEMS_CANDIDATES=0.25: also list every box from that score up that could be placed, accepted or
