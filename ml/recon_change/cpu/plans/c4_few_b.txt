@@ -1,0 +1,2 @@
+--clips cpu/clips/after.mp4 cpu/clips/after_box.mp4 --frames 8+4 --long-side 448
+--clips cpu/clips/after.mp4 cpu/clips/after_box.mp4 --frames 6+3 --long-side 518 --precision int8
