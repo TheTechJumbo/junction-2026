@@ -115,6 +115,12 @@ class RulesAnswerEngine:
                               "refers to from these observations.", evidence=[])
             selected = self._events(events, now.astimezone(tz).date(), timezone, now)
             if intent == "pills":
+                mentioned_rooms = set(re.findall(
+                    r"\b(kitchen|bedroom|bathroom|garage|office|garden|entrance|living room|"
+                    r"dining room|hospital|school)\b", _words(question)))
+                if mentioned_rooms - {_words(zone) for zone in self.config.pillbox_zones}:
+                    return Answer(answer="I do not have reliable pill box observations for "
+                                  "that place.", evidence=[])
                 relevant = [e for e in selected if self._sensor(
                     e, {"pillbox_open"}, self.config.pillbox_objects)
                     and now_utc - _utc(e.ts) <= self.config.pills_max_age]
