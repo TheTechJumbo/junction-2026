@@ -157,7 +157,8 @@ function show(fix) {
   $('detail').textContent = fix.detail;
   plan(fix);
   const s = fix.seconds || {};
-  $('numbers').textContent = `match with the map ${Math.round(fix.confidence * 100)}% (${fix.state}) · facing ${fix.heading_deg}° · ` +
+  const alike = fix.looks_alike == null ? '' : `looks alike ${Math.round(fix.looks_alike * 100)}% · `;
+  $('numbers').textContent = `match with the map ${Math.round(fix.confidence * 100)}% (${fix.state}) · ${alike}facing ${fix.heading_deg}° · ` +
     `${s.total ?? '?'} s in total, ${s.reconstruct ?? '?'} s in the model · ${fix.device || ''}`;
   $('view').innerHTML = '';
   if (fix.images && fix.images.view) { const img = new Image(); img.src = withKey(fix.images.view); img.style.cssText = 'width:100%;border-radius:8px;margin-top:8px'; $('view').append(img); }

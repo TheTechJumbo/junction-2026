@@ -122,3 +122,32 @@ Agents running now, each with a draft PR to open within 20 minutes:
 
 Still not done: a real room recorded with a phone or the glasses, places named in it, and a
 rehearsal of the demo. Nothing has run on the glasses.
+
+## Update, Sat 14 Nov about 07:45 UTC
+
+Merged into `jun-22-hud-waypoints` and deployed: the position-fix benchmark (PR 12) and the
+appearance check for the position fix (PR 14). A matched spot must now also look alike, not only
+sit at the same depth.
+
+Benchmark (PASLCD, 10 real scenes, scored from saved reconstructions):
+- Wrong room: 540 of 540 lost at 24, 12 and 8 baseline photos. Before, one was found at 0.97.
+- Same room: 267 of 270 found, 1 lost (at 8 photos), position within 2 percent, heading within 1.6 degrees.
+- 12 baseline photos are now as safe as 24 on this data, so the GPU worker uses 12 for a fix.
+
+Live, through the relay, with that code:
+
+| | GPU worker (L4) | CPU worker (32 EPYC cores) |
+| --- | --- | --- |
+| Unchanged clip | No change found, 16.5 s | No change found, 56 s |
+| Clip with a cube painted in | 1 thing appeared, 15 s | 1 thing appeared, 46 s |
+| Photo from the same room | found (1.0), 3.1 s | found (1.0), 40 s |
+| Photo of another place | lost (0.0), 3.3 s | lost (0.0), 39 s |
+
+Workers restarted 07:30 UTC as jobs 2219254 (GPU) and 2219255 (CPU); 2 hour cap.
+
+Draft PR 11 (`jun-22-recall`, a looks-different list for the change check) is not merged: the
+gain is modest (regions found 37 to 47 percent), its limit was tuned on the benchmark it is
+scored on, and it adds about 2 s per check.
+
+Still not done: a real room recorded with a phone or the glasses, places named in it, a rehearsal.
+Not tested anywhere: two rooms in one home that look alike, blur, night lighting, people in view.

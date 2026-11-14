@@ -41,6 +41,9 @@ DEVICE = os.environ.get("RECON_DEVICE") or None  # "cuda", "cpu", or unset to us
 N_BASELINE, N_AFTER = (int(n) for n in os.environ.get("RECON_FRAMES", "24,12").split(","))
 LONG_SIDE = int(os.environ.get("RECON_LONG_SIDE", "518"))  # model input size: smaller is faster and coarser
 N_LOCATE = int(os.environ.get("RECON_LOCATE_FRAMES", "3"))  # frames of the wearer's view used for one position fix
+# Baseline photos used for a position fix. With the appearance check, 12 reject every wrong room on
+# the PASLCD benchmark and halve the time of 24 (eval/LOCATE_LOOKALIKE_RESULTS.md).
+N_LOCATE_BASE = int(os.environ.get("RECON_LOCATE_BASELINE", min(N_BASELINE, 12)))
 LANE = "-cpu" if DEVICE == "cpu" else ""  # the CPU worker has its own queue and heartbeat
 QUEUE, BASELINES = ROOT / f"queue{LANE}", ROOT / "baselines"
 INFO = {}  # what this worker is, filled in at start and attached to every result
@@ -162,7 +165,7 @@ def where(model, job, req):
         places = []
     seconds = {}
     t0 = time.time()
-    spread = np.linspace(0, len(files) - 1, min(N_BASELINE, len(files))).round().astype(int)
+    spread = np.linspace(0, len(files) - 1, min(N_LOCATE_BASE, len(files))).round().astype(int)
     pick = sorted({int(i) for i in spread} | {p["frame"] for p in places})  # a place needs the picture it was picked in
     base = [cv2.imread(str(files[i])) for i in pick]
     new = [crop_like(f, base[0]) for f in clip_frames(job, req, N_LOCATE)]
@@ -207,7 +210,8 @@ def main():
     INFO.update({
         "device": torch.cuda.get_device_name(0) if on_gpu else f"CPU, {torch.get_num_threads()} threads",
         "on_gpu": on_gpu, "host": socket.gethostname().split(".")[0],
-        "settings": {"baseline_frames": N_BASELINE, "new_frames": N_AFTER, "long_side": LONG_SIDE},
+        "settings": {"baseline_frames": N_BASELINE, "new_frames": N_AFTER, "long_side": LONG_SIDE,
+                     "locate_baseline_frames": N_LOCATE_BASE},
     })
     (ROOT / f"worker{LANE}.json").write_text(json.dumps(INFO))
     print("worker ready", flush=True)
