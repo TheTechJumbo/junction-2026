@@ -40,6 +40,33 @@ SCORE = float(os.environ.get("RECON_ITEMS_SCORE", "0.5"))
 # is already known, so a weaker box of that name within NEAR_M of it is enough, and the lower limit
 # misses a present item far less often. It never creates a sighting.
 CONFIRM = min(SCORE, float(os.environ.get("RECON_ITEMS_CONFIRM", "0.3")))
+
+
+def per_item(text):
+    """ "keys=0.45, glasses=0.3" -> {"keys": 0.45, "glasses": 0.3}. Anything unreadable is left out."""
+    values = {}
+    for part in (text or "").split(","):
+        name, _, value = part.partition("=")
+        try:
+            values[" ".join(name.lower().split())] = float(value)
+        except ValueError:
+            continue
+    return {name: value for name, value in values.items() if name}
+
+
+# Finding more (eval/ITEMS_RESULTS.md, "Finding more"). All of it is off unless set: without these the
+# finder does exactly what it did before.
+# RECON_ITEMS_LIMITS="glasses=0.3, phone=0.425": a limit of its own for some items; the rest keep SCORE.
+LIMITS = per_item(os.environ.get("RECON_ITEMS_LIMITS"))
+# A second look at a box that scores below its item's limit but at least LOOK_FROM (0 = no second
+# looks): the detector looks again at a square crop around the box, LOOK_ZOOM box sides wide and blown
+# up to its input size. The box is accepted when its item scores at least the item's look limit there
+# (RECON_ITEMS_LOOK_LIMITS, written like LIMITS; an item without one is never accepted this way).
+# Each second look is one more pass, so there are at most LOOK_PER_ITEM per item and LOOK_MAX per picture.
+LOOK_FROM = float(os.environ.get("RECON_ITEMS_LOOK_FROM", "0"))
+LOOK_LIMITS = per_item(os.environ.get("RECON_ITEMS_LOOK_LIMITS"))
+LOOK_MAX = int(os.environ.get("RECON_ITEMS_LOOK_MAX", "6"))
+LOOK_ZOOM, LOOK_PER_ITEM, LOOK_LEAST = 4.0, 2, 64
 # Rows of square tiles across the picture's short side, looked at besides the whole picture.
 # 0 = whole picture only (1 pass), 1 = tiles as high as the picture (16:9 and 4:3: 3 passes), 2 = 2 rows.
 TILES = int(os.environ.get("RECON_ITEMS_TILES", "1"))
@@ -157,6 +184,31 @@ def merge(raw, names, limit=None, phrases=phrases_for):
     return [{"name": name, "score": round(score, 3), "box": [round(float(v), 4) for v in box]} for score, name, box in kept]
 
 
+def same_thing(box, other):
+    """Are two boxes on the same thing? They overlap well (intersection over union 0.5), or the
+    middle of `box` lies inside `other`, or the middle of `other` lies inside `box` and `box` is at
+    most 6 times its area. (The looser rule of eval/items_eval.py: a bunch of keys and one key of it.)"""
+    box, other = np.asarray(box, float), np.asarray(other, float)
+    if iou(box, other)[0][0] >= 0.5:
+        return True
+    bx, by, ox, oy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, (other[0] + other[2]) / 2, (other[1] + other[3]) / 2
+    if other[0] <= bx <= other[2] and other[1] <= by <= other[3]:
+        return True
+    area, theirs = (box[2] - box[0]) * (box[3] - box[1]), (other[2] - other[0]) * (other[3] - other[1])
+    return bool(box[0] <= ox <= box[2] and box[1] <= oy <= box[3] and area <= 6 * theirs)
+
+
+def crop_around(shape, box, zoom, least=24):
+    """A square (x, y, side) in pixels around a box (0..1): `zoom` times the box's long side, at
+    least `least` pixels, kept inside the picture."""
+    H, W = shape[:2]
+    x0, y0, x1, y1 = box[0] * W, box[1] * H, box[2] * W, box[3] * H
+    side = int(round(min(max(zoom * max(x1 - x0, y1 - y0), least), min(H, W))))
+    x = int(round(min(max((x0 + x1) / 2 - side / 2, 0), W - side)))
+    y = int(round(min(max((y0 + y1) / 2 - side / 2, 0), H - side)))
+    return x, y, side
+
+
 def best_per_name(detections):
     """At most one detection per name: the best one."""
     seen, best = set(), []
@@ -179,6 +231,7 @@ class Detector:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.tiles = TILES if tiles is None else tiles
         self.score = SCORE if score is None else score
+        self.limits, self.look_from, self.look_limits = dict(LIMITS), LOOK_FROM, dict(LOOK_LIMITS)
         self.model_id = model_id
         t0 = time.time()
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=CACHE)
@@ -189,8 +242,17 @@ class Detector:
         print(f"Item detector {model_id} loaded in {time.time() - t0:.0f} s on {self.device}", flush=True)
 
     def settings(self, names):
-        return {"model": self.model_id, "names": list(names), "score": self.score, "confirm_score": min(self.score, CONFIRM),
+        told = {"model": self.model_id, "names": list(names), "score": self.score, "confirm_score": min(self.score, CONFIRM),
                 "tiles": self.tiles, "input": self.side, "device": self.device}
+        if self.limits:
+            told["limits"] = {n: self.limit(n) for n in names}
+        if self.look_from > 0 and self.look_limits:
+            told["second_look"] = {"from": self.look_from, "limits": self.look_limits, "most": LOOK_MAX}
+        return told
+
+    def limit(self, name):
+        """The score from which a box of this item is accepted outright."""
+        return self.limits.get(name, self.score)
 
     def text(self, phrases):
         torch = self.torch
@@ -270,10 +332,60 @@ class Detector:
         self.last = {"passes": len(pieces), "seconds": round(time.time() - t0, 3), "size": [W, H]}
         return raw
 
-    def find(self, image_bgr, names, score=None, tiles=None):
-        """Every box of every name at or above the score limit, best first."""
+    def candidates(self, image_bgr, names, floor=None, tiles=None):
+        """Every box of every name, best first, each marked "accepted" or not. Accepted: it scores at
+        least its item's limit, or it scores at least look_from and a second, zoomed look agrees
+        (then it carries "second_look": the zoomed score). Boxes that are not accepted are listed
+        down to `floor`, for the look-again check; they are never sightings."""
         phrases = sorted({p for name in names for p in phrases_for(name)})
-        return merge(self.detect(image_bgr, phrases, tiles), names, self.score if score is None else score)
+        raw = self.detect(image_bgr, phrases, tiles)
+        first = dict(self.last)
+        H, W = image_bgr.shape[:2]
+        looking = self.look_from > 0
+        got, looks = [], []
+        for name in names:
+            limit = self.limit(name)
+            start = self.look_from if looking and name in self.look_limits else limit
+            for d in merge(raw, [name], min(limit, start, limit if floor is None else floor)):
+                d["accepted"] = d["score"] >= limit
+                got.append(d)
+                if not d["accepted"] and d["score"] >= start and sum(1 for other in looks if other["name"] == name) < LOOK_PER_ITEM:
+                    looks.append(d)
+        seconds = first.get("seconds", 0)
+        sure = [d for d in got if d["accepted"]]  # a thing that already has a name gets no second look under another
+        looks = [d for d in looks if not any(k["name"] != d["name"] and iou(np.array(d["box"]), np.array(k["box"]))[0][0] >= 0.6 for k in sure)]
+        looks = sorted(looks, key=lambda d: -d["score"])[:max(0, LOOK_MAX)]
+        for d in looks:  # one more pass each: the crop around the box, as large as the detector takes it
+            x, y, side = crop_around(image_bgr.shape, d["box"], LOOK_ZOOM, LOOK_LEAST)
+            again = self.detect(image_bgr[y:y + side, x:x + side], phrases_for(d["name"]), tiles=0, floor=0.1)
+            seconds += self.last["seconds"]
+            seen = 0.0
+            for boxes, scores in again.values():
+                for box, score in zip(boxes, scores):
+                    whole = (box * side + [x, y, x, y]) / [W, H, W, H]
+                    if score > seen and same_thing(whole, d["box"]):
+                        seen = float(score)
+            d["second_look"] = round(seen, 3)
+            if seen >= self.look_limits[d["name"]]:
+                d["accepted"], d["score"] = True, round(max(seen, d["score"]), 3)
+        if looks:
+            self.last = {**first, "passes": first.get("passes", 0) + len(looks), "seconds": round(seconds, 3), "second_looks": len(looks)}
+        else:
+            self.last = first
+        got.sort(key=lambda d: (-d["accepted"], -d["score"]))
+        kept = []
+        for d in got:  # one thing gets one name; a box that is not accepted never pushes an accepted one out
+            if not any(k["name"] != d["name"] and iou(np.array(d["box"]), np.array(k["box"]))[0][0] >= 0.6 for k in kept):
+                kept.append(d)
+        return kept
+
+    def find(self, image_bgr, names, score=None, tiles=None):
+        """Every accepted box of every name, best first. With `score`, plainly every box at or above
+        that one limit, with no limits per item and no second looks."""
+        if score is not None:
+            phrases = sorted({p for name in names for p in phrases_for(name)})
+            return merge(self.detect(image_bgr, phrases, tiles), names, score)
+        return [d for d in self.candidates(image_bgr, names, tiles=tiles) if d["accepted"]]
 
 
 def load(device=None, **settings):
@@ -504,8 +616,8 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
         fields["items_note"] = f"{BIG} has another shape than the newest frame, so the small frame was searched."
     if picture is None:
         picture, saw = newest, "newest frame"
-    every = detector.find(picture, names, score=min(detector.score, CONFIRM))  # down to the look-again limit
-    found = best_per_name([d for d in every if d["score"] >= detector.score])  # sightings: the full limit only
+    every = detector.candidates(picture, names, floor=min(detector.score, CONFIRM))  # down to the look-again limit
+    found = best_per_name([d for d in every if d["accepted"]])  # sightings: accepted boxes only
     room = locate.map_frame(r, base, valid)
     window = crop_window(newest.shape, like.shape)
     items, marks = place(found, r, base, q, valid, window, state, room=room)
@@ -514,7 +626,9 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
     fields["items_frame"] = {"source": saw, "width": picture.shape[1], "height": picture.shape[0], **detector.last}
     if remembered and state != "lost":  # without a fix a remembered spot cannot be found in this frame
         try:
-            rest, _ = place([d for d in every if d not in found], r, base, q, valid, window, state, room=room)
+            floor = min(detector.score, CONFIRM)  # a weaker box than that is no sign the item is still there
+            rest, _ = place([d for d in every if d not in found and (d["accepted"] or d["score"] >= floor)],
+                            r, base, q, valid, window, state, room=room)
             fields["items_checked"], left_out = check(remembered, names, items + rest, r, q, valid, window, room, picture.shape,
                                                       detector.side)
             if left_out:
