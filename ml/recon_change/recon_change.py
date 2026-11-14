@@ -261,7 +261,14 @@ def valid_mask(r, conf_pct):
     edge[:, :-1] |= jy
     kernel = np.ones((3, 3), np.uint8)
     edge = np.stack([cv2.dilate(e.astype(np.uint8), kernel) > 0 for e in edge])
-    return (r.conf > np.percentile(r.conf, conf_pct)) & (d > 0) & ~edge
+    floor = np.percentile(r.conf, conf_pct)
+    confident = r.conf > floor
+    if confident.mean() < 0.5 * (1 - conf_pct / 100):
+        # Most pixels tie at the same value: VGGT gave no usable confidence (measured on phone photos of a hall: 1.00,
+        # its lowest, nearly everywhere, at full and half precision). Then confidence decides nothing, and only the
+        # tied pixels above nothing would be kept; the depth edges and the callers' own geometry checks decide.
+        confident = r.conf >= floor
+    return confident & (d > 0) & ~edge
 
 
 def nearest_in_window(depth, size=7):

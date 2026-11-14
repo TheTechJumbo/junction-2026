@@ -32,6 +32,8 @@ export BEACON_ROOT
 export RECON_FRAMES="${RECON_FRAMES:-8,4}" RECON_LOCATE_BASELINE="${RECON_LOCATE_BASELINE:-5}"
 export RECON_BASELINE_KEEP="${RECON_BASELINE_KEEP:-16}" RECON_PICK="${RECON_PICK:-similar}"
 export RECON_PATCH_SIM="${RECON_PATCH_SIM:-0.6}" RECON_NEW_VIEW="${RECON_NEW_VIEW:-0.5}"
+# The room map in one pass: square pictures (see worker.square_up) take more memory; 12 fit the 6 GB card.
+export RECON_MAP_FRAMES="${RECON_MAP_FRAMES:-12}"
 WORKER_PATH="${PYTHONPATH:-}"  # only the worker gets the item finder's packages, not the relay
 if [ -n "${RECON_ITEMS_ENV:-}" ] && [ -d "$RECON_ITEMS_ENV/pkgs" ]; then
     ITEMS_ENV="$(cd "$RECON_ITEMS_ENV" && (pwd -W 2>/dev/null || pwd))"

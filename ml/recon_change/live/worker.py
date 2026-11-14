@@ -51,7 +51,7 @@ N_KEEP = int(os.environ.get("RECON_BASELINE_KEEP") or N_BASELINE)
 # The room map (op "map"): the zone's baseline pictures in one pass, as one Gaussian splat in the map's own axes
 # (east, north, up, in metres), built once per baseline. The live 3D page shows it and moves the wearer in it.
 MAP_FRAMES = int(os.environ.get("RECON_MAP_FRAMES", "16"))
-MAP_GAUSSIANS = 400_000
+MAP_GAUSSIANS = 800_000
 MAP_CONF_PCT = 35.0  # the least confident share of pixels left out of the map (locate itself uses 25)
 # Has the room's map seen this view? Every picture of the zone (baseline, and views added since) is kept as its DINOv2
 # patch tokens (rc.patch_tokens), centred on their own mean and normalised. A patch of a new photo is "mapped" when its
@@ -63,7 +63,7 @@ MAP_CONF_PCT = 35.0  # the least confident share of pixels left out of the map (
 PATCH_SIM = float(os.environ.get("RECON_PATCH_SIM", "0.6"))
 PICK = os.environ.get("RECON_PICK", "spread")
 NEW_VIEW = float(os.environ.get("RECON_NEW_VIEW", "0"))
-MAX_PICTURES = 48  # the most pictures a zone grows to
+MAX_PICTURES = 120  # the most pictures a zone grows to (the hall: 74 from its baseline and the app's photos)
 TOKENS = {}  # {zone: {"names": [file names], "keys": (N, P, C) centred unit tokens, "centre": (C,)}}
 
 
@@ -149,8 +149,52 @@ def set_baseline(job, req):
     for chosen in ("waypoints.json", "watch.json", "scale.json"):  # places, watched spots and the scale
         (zone / chosen).unlink(missing_ok=True)  # were all picked in the old pictures
     for i, frame in enumerate(frames):
-        cv2.imwrite(str(zone / f"{i:02d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        cv2.imwrite(str(zone / f"{i:02d}.jpg"), square_up(frame), [cv2.IMWRITE_JPEG_QUALITY, 92])
     return {"frames": len(frames)}
+
+
+def square_up(frame):
+    """A portrait picture as its middle square. VGGT takes pictures 518 wide (its own preprocessing crops a tall one to
+    its middle 518 rows); a phone held upright gives 294 x 518, which it reads far worse: on a hall, 7% of the pixels
+    kept instead of 64% for the same pictures cropped. Landscape pictures are kept as they are. Every later picture of
+    the zone and every photo of a fix is cropped like the first picture (crop_like), so all of them become square."""
+    h, w = frame.shape[:2]
+    if h <= 1.05 * w:
+        return frame
+    top = (h - w) // 2
+    return frame[top:top + w]
+
+
+def agreeing(recon, valid, tol=0.03):
+    """Per pixel: in how many other pictures of the pass the same point lands at the same depth (within tol of it).
+    The room map keeps points that two others confirm, instead of trusting VGGT's confidence (see rc.valid_mask)."""
+    import torch
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    depth = torch.as_tensor(recon.depth, dtype=torch.float32, device=dev)
+    K = torch.as_tensor(recon.K, dtype=torch.float32, device=dev)
+    E = torch.as_tensor(recon.E, dtype=torch.float32, device=dev)
+    S, H, W = depth.shape
+    v, u = torch.meshgrid(torch.arange(H, device=dev, dtype=torch.float32), torch.arange(W, device=dev, dtype=torch.float32), indexing="ij")
+    mask = torch.as_tensor(valid, device=dev)
+    count = torch.zeros((S, H, W), dtype=torch.int16, device=dev)
+    for q in range(S):
+        sel = mask[q]
+        d = depth[q][sel]
+        cam = torch.stack([(u[sel] - K[q, 0, 2]) / K[q, 0, 0] * d, (v[sel] - K[q, 1, 2]) / K[q, 1, 1] * d, d], 1)
+        world = (cam - E[q, :, 3]) @ E[q, :, :3]
+        hits = torch.zeros(len(d), dtype=torch.int16, device=dev)
+        for o in range(S):
+            if o == q:
+                continue
+            c = world @ E[o, :, :3].T + E[o, :, 3]
+            z = c[:, 2]
+            uu = K[o, 0, 0] * c[:, 0] / z.clamp(min=1e-6) + K[o, 0, 2]
+            vv = K[o, 1, 1] * c[:, 1] / z.clamp(min=1e-6) + K[o, 1, 2]
+            inside = (z > 0) & (uu >= 0) & (uu <= W - 1) & (vv >= 0) & (vv <= H - 1)
+            seen = depth[o][vv.round().long().clamp(0, H - 1), uu.round().long().clamp(0, W - 1)]
+            hits += (inside & ((seen - z).abs() < tol * z)).to(torch.int16)
+        count[q][sel] = hits
+    return count.cpu().numpy()
 
 
 def qmul(a, b):
@@ -187,6 +231,13 @@ def room_map(model, job, req):
     t0 = time.time()
     base = list(range(len(frames)))
     valid = rc.valid_mask(recon, MAP_CONF_PCT)
+    # Points two other pictures confirm (same point, same depth within 3%): on the hall's 74 views this kept 20% of the
+    # pixels, 640,000 Gaussians, where confidence kept 1%. One confirmation when two leave too little.
+    agree = agreeing(recon, valid)
+    shown = valid & (agree >= 2)
+    if shown.mean() < 0.03:
+        shown = valid & (agree >= 1)
+    seconds["agree"] = round(time.time() - t0, 2)
     slot = {f: i for i, f in enumerate(pick)}
     spots = {p["name"]: locate.spot(recon, {**p, "frame": slot[p["frame"]]}) for p in places}
     spots = {name: x for name, x in spots.items() if x is not None}
@@ -195,7 +246,7 @@ def room_map(model, job, req):
         raise RuntimeError("The room could not be rebuilt from these pictures: record the baseline again, slower and "
                            "with more of the same things in neighbouring pictures.")
     nothing = {"points": np.zeros((0, 3)), "frames": np.zeros(0, int), "pixels": np.zeros(0, int), "member": np.zeros(0, int)}
-    detail = {"after": base, "valid": valid, "appeared": nothing, "gone": nothing}
+    detail = {"after": base, "valid": shown, "appeared": nothing, "gone": nothing}
     pos, scale, rgba, quat = splat.gaussians(recon, detail, MAP_GAUSSIANS, max_frames=len(base))
     turn = np.stack([room["east"], room["north"], room["up"]])  # the pass's axes -> map axes (a proper rotation)
     pos = (pos - room["origin"]) @ turn.T * room["metres"]
@@ -217,7 +268,8 @@ def room_map(model, job, req):
             "cameras": [{"frame": int(f), "position": [round(float(v), 2) for v in c],
                          "heading_deg": round(float(np.degrees(np.arctan2(*l))), 1)} for f, c, l in zip(pick, cameras, looks)],
             "fov_deg": round(float(np.degrees(2 * np.arctan(recon.depth.shape[2] / 2 / np.median(recon.K[:, 0, 0])))), 1),
-            "median_depth_m": round(float(np.median(recon.depth[valid])) * room["metres"], 2), "seconds": seconds, **INFO}
+            "median_depth_m": round(float(np.median(recon.depth[shown])) * room["metres"], 2) if shown.any() else None,
+            "kept_share": round(float(shown.mean()), 3), "seconds": seconds, **INFO}
 
 
 def crop_like(frame, like):
