@@ -45,7 +45,7 @@ and at most 16,000,000 decoded pixels, two concurrent children, 64 returned face
 5,000 pre-NMS candidates, 5 MiB encoded output. The bundled 232,589-byte YuNet model
 must match its SHA-256 before detection. OpenCV CPU backend/target and no OpenCL;
 score threshold 0.6, NMS 0.3. Detector input is downscaled to a longest edge of
-1280, then padded to a minimum 32px per axis for tiny inputs. Returned boxes map
+1280, then padded to a minimum 64px per axis for tiny inputs. Returned boxes map
 back using each resized axis independently. Each detected box expands by 35% per
 side at the original resolution and receives
 a Gaussian blur with radius one third of the expanded maximum dimension. Full output resolution is preserved. PNG pixels outside expanded boxes remain
@@ -158,3 +158,23 @@ After installing/updating native wheels, run `python -c 'import cv2,numpy'` duri
 setup/preflight outside upload processing. macOS cold native package initialization
 may exceed even 10s (also observed by integrator); a successful warm import is not
 a future deadline guarantee. Keep request deadlines strict and reject failures.
+
+## Linux small-input stability correction
+
+The detector minimum is 64px per axis. A same-host Linux x86_64 CI comparison
+reproduced nonfinite native YuNet outputs on 32px-padded synthetic inputs:
+1/10 green 8px JPEG, 4/10 orange/navy 32x24 PNG, and 2/10 blue3x2 PNG. All 30 matched
+64px-padded cases on that SAME runner were finite and passed validation:
+https://github.com/TheTechJumbo/junction-2026/actions/runs/43566942708
+
+This is evidence of a native small-input numerical/output problem, rather than a
+transport, uvicorn interpreter, stripped environment, or nohup signal failure.
+A 32px input gives the stride-32 output head a 1x1 spatial grid; 64px gives at least
+2x2. The exact low-level OpenCV defect/CPU dispatch cause has not been established.
+The mitigation pads detector input only. Original resolution, boxes/scaling,
+expanded masks, output media/byte bounds, total deadline and all nonfinite/score/
+geometry rejection guards remain unchanged. No automatic retry or invalid-output
+acceptance was introduced. A focused real-native regression records the actual
+FaceDetectorYN input size for tiny JPEG/PNG cases. Production subprocess stress
+belongs to the integrator's Linux gate; an occasional green 32px run did not prove
+stability. The synthetic diagnostic helper retains an explicit 32/64 comparison.

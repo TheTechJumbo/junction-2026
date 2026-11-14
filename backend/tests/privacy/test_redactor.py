@@ -380,3 +380,28 @@ def test_slightly_out_of_range_score_is_identified_and_rejected(monkeypatch):
     monkeypatch.setattr(cv2.FaceDetectorYN, "create", lambda *args: Detector())
     with pytest.raises(worker.DetectorScoreError):
         worker.transform(png(Image.new("RGB", (8, 8))))
+
+
+@pytest.mark.parametrize("size,format", [
+    ((8, 8), "JPEG"), ((8, 8), "PNG"), ((32, 24), "PNG"), ((3, 2), "PNG"),
+])
+def test_actual_native_detector_uses_minimum_64_grid_for_tiny_images(monkeypatch, size, format):
+    import cv2
+
+    create = cv2.FaceDetectorYN.create
+    input_sizes = []
+
+    def record_create(*args):
+        input_sizes.append(args[2])
+        return create(*args)
+
+    monkeypatch.setattr(cv2.FaceDetectorYN, "create", record_create)
+    image = Image.new("RGB", size, "green")
+    if size == (32, 24):
+        image.paste("navy", (16, 0, 32, 24))
+    original = io.BytesIO()
+    image.save(original, format=format)
+    metadata, result = worker.transform(original.getvalue())
+    assert input_sizes == [(64, 64)]
+    assert metadata["status"] == "no_faces_detected"
+    assert decoded(result, expected_format=format).shape[:2] == (size[1], size[0])

@@ -11,6 +11,7 @@ MAX_INPUT_BYTES = 5 * 1024 * 1024
 MAX_OUTPUT_BYTES = 5 * 1024 * 1024
 MAX_PIXELS = 16_000_000
 DETECTOR_EDGE = 1280
+MIN_DETECTOR_EDGE = 64
 MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 
 
@@ -77,8 +78,12 @@ def transform(data):
     detector_width, detector_height = max(1, round(width * scale)), max(1, round(height * scale))
     detector_image = image.resize((detector_width, detector_height), Image.Resampling.LANCZOS)
     pixels = cv2.cvtColor(np.asarray(detector_image), cv2.COLOR_RGB2BGR)
-    pixels = cv2.copyMakeBorder(pixels, 0, max(0, 32-detector_height),
-                               0, max(0, 32-detector_width), cv2.BORDER_CONSTANT)
+    # A 32px input gives YuNet's stride-32 head a degenerate 1x1 spatial grid.
+    # Linux x86_64 CI reproduced nonfinite outputs at 32px, while the same host's
+    # 64px matrix stayed finite. Keep both detector axes >=64 (at least 2x2),
+    # preserving the original pixels and all nonfinite-output rejection guards.
+    pixels = cv2.copyMakeBorder(pixels, 0, max(0, MIN_DETECTOR_EDGE-detector_height),
+                               0, max(0, MIN_DETECTOR_EDGE-detector_width), cv2.BORDER_CONSTANT)
     detector = cv2.FaceDetectorYN.create(
         str(model), "", (pixels.shape[1], pixels.shape[0]), 0.6, 0.3, 5000,
         cv2.dnn.DNN_BACKEND_OPENCV, cv2.dnn.DNN_TARGET_CPU,
