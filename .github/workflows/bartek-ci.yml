@@ -62,9 +62,6 @@ jobs:
         run: |
           make setup
           .venv/bin/python -m pip check
-      - name: Diagnose native detector tiny-image behavior
-        continue-on-error: true
-        run: .venv/bin/python backend/tests/privacy/diagnose.py --repetitions 10
       - name: Python unit, lint and schema gates
         run: make check
       - name: Dashboard syntax, client and HTTP transport gates
