@@ -64,6 +64,33 @@ encrypted with a non-exportable Android Keystore key, in app-private storage wit
 backup disabled, never logged or shown. Forget saved backend deletes them; new extras
 replace them after their own successful check. Release builds persist nothing.
 
+When the SDK reports no glasses at all (after its few-second settle window), the app
+does not open Meta AI or connect by itself; use the glasses buttons when glasses are near.
+
+## Live camera to the relay
+
+The Live camera card streams the phone's back camera to the relay so the laptop can
+rebuild the room as a live Gaussian splat. Start live camera runs one request at a time:
+take the newest photo (JPEG, long side about 1280 px, quality 85), POST it to
+`{relay}/locate?zone={zone}` with the key in the `X-Key` header (never in the URL),
+wait for the reply, then take the next photo. The card shows the headline, the state,
+the round trip, frames sent and a thumbnail of the last photo sent. Errors are shown
+and retried after 2 s. It stops with Stop live camera or when the app leaves the
+screen, and keeps the screen on while running.
+
+Debug builds only (placeholders shown; relay defaults: `http://127.0.0.1:8090`, zone
+`kitchen`; add `--es relay_url ...` for another address):
+
+```sh
+adb reverse tcp:8090 tcp:8090
+adb shell am start -n com.junction.glasses/.MainActivity --es relay_key REPLACE_WITH_RELAY_KEY --es relay_zone kitchen
+```
+
+Frames go only to the configured relay and nothing is saved on the phone: photos stay
+in memory. Debug builds remember the relay address, key and zone, encrypted like the
+backend token; Forget saved backend clears them too. Release builds ignore these extras.
+Debug builds may use cleartext loopback; any other relay address must be HTTPS.
+
 ## First phone-only test
 
 1. Start the central API with `make run` from the integration checkout. Configure

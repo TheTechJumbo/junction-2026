@@ -115,6 +115,18 @@ class AutoGlassesSetupTest {
         assertEquals(Step.CONNECT, setup.at("REGISTERED", ends = 1))
     }
 
+    @Test fun withoutGlassesMetaAiIsNeverOpenedAndNothingConnects() {
+        val setup = AutoGlassesSetup()
+        repeat(3) { setup.onForeground(); assertEquals(Step.WAIT, setup.at("AVAILABLE", devices = 0)) }
+        assertEquals(Step.WAIT, setup.at("REGISTERED", devices = 0))
+        assertFalse(setup.registrationRequested)
+        assertFalse(setup.consentRequested)
+        // Glasses reported later in the same launch: the automatic steps continue.
+        assertEquals(Step.REQUEST_CONSENT, setup.at("REGISTERED", devices = 1))
+        setup.consentFinished()
+        assertEquals(Step.CONNECT, setup.at("REGISTERED", devices = 1))
+    }
+
     @Test fun disconnectButtonCancelsPendingRetry() {
         val setup = connectedSetup()
         assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", failures = 1))
@@ -137,9 +149,10 @@ class AutoGlassesSetupTest {
         settled: Boolean = true,
         foreground: Boolean = true,
         pending: Boolean = false,
+        devices: Int = 1,
     ): Step = next(
         MetaState(initialized = initialized, registration = registration, connection = connection, error = error,
-            sessionFailures = failures, sessionEnds = ends),
+            sessionFailures = failures, sessionEnds = ends, deviceCount = devices),
         foreground, pending, settled,
     )
 }

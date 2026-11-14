@@ -14,6 +14,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
+import com.junction.glasses.live.RelayClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -109,6 +110,13 @@ class AutomaticSetupActivityTest {
         assertFalse(stripped.hasExtra(DebugBackendLaunch.EXTRA_BACKEND_URL))
         assertEquals(intent.component, stripped.component)
         assertTrue(intent.hasExtra(DebugBackendLaunch.EXTRA_API_TOKEN))
+        val relay = Intent(app(), MainActivity::class.java).putExtra(DebugBackendLaunch.EXTRA_RELAY_KEY, "synthetic-relay-key")
+        assertNull(DebugBackendLaunch.read(relay, debug = false))
+        val relayParsed = DebugBackendLaunch.read(relay, debug = true)!!
+        assertTrue(relayParsed.hasRelay)
+        assertFalse(relayParsed.hasBackend)
+        assertFalse(relayParsed.toString().contains("synthetic-relay-key"))
+        assertFalse(DebugBackendLaunch.withoutExtras(relay).hasExtra(DebugBackendLaunch.EXTRA_RELAY_KEY))
     }
 
     @Test fun launchAsksForPhonePermissionsOnceAndDenialDoesNotLoop() {
@@ -156,6 +164,42 @@ class AutomaticSetupActivityTest {
         assertEquals("Bearer synthetic-new-token", server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("Authorization"))
         assertEquals(1, server.requestCount)
         assertEquals(server.url("/").toString() to "synthetic-new-token", memory.load())
+    }
+
+    @Test fun relayExtrasAreRememberedStrippedAndTheKeyIsNeverShown() {
+        MainActivity.automaticSetup = true
+        val memory = testMemory("relay")
+        MainActivity.backendMemoryOverride = memory
+        launch(Intent(app(), MainActivity::class.java)
+            .putExtra(DebugBackendLaunch.EXTRA_RELAY_KEY, "synthetic-relay-key")
+            .putExtra(DebugBackendLaunch.EXTRA_RELAY_ZONE, "kitchen"))
+        assertEquals(Triple(RelayClient.DEFAULT_URL, "synthetic-relay-key", "kitchen"), memory.loadRelay())
+        assertFalse(activity.intent.hasExtra(DebugBackendLaunch.EXTRA_RELAY_KEY))
+        assertTrue(text("liveDetails").contains("key set"))
+        assertNoVisibleText("synthetic-relay-key")
+        assertNull(field("phoneCamera").get(activity))
+        button("Forget saved backend").performClick()
+        assertNull(memory.loadRelay())
+    }
+
+    @Test fun liveCameraWithoutRelayKeyExplainsAndCreatesNoCamera() {
+        MainActivity.automaticSetup = false
+        launch(Intent(app(), MainActivity::class.java))
+        button("Start live camera").performClick()
+        assertNull(field("phoneCamera").get(activity))
+        assertNull(field("liveLoop").get(activity))
+        assertTrue(text("liveDetails").contains("No relay key"))
+    }
+
+    @Test fun liveCameraAsksForCameraPermissionBeforeCreatingAnyCamera() {
+        MainActivity.automaticSetup = false
+        launch(Intent(app(), MainActivity::class.java).putExtra(DebugBackendLaunch.EXTRA_RELAY_KEY, "synthetic-relay-key"))
+        button("Start live camera").performClick()
+        assertNull(field("phoneCamera").get(activity))
+        assertNull(field("liveLoop").get(activity))
+        assertTrue(field("pendingLiveCamera").getBoolean(activity))
+        assertEquals(listOf(Manifest.permission.CAMERA), shadowOf(activity).lastRequestedPermission.requestedPermissions.toList())
+        assertNoVisibleText("synthetic-relay-key")
     }
 
     @Test fun backendMemoryKeepsOnlyCiphertextAndNeedsTheSameKey() {

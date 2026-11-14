@@ -12,7 +12,8 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * DEBUG builds only: remembers the backend origin and session token across app restarts. Each value
+ * DEBUG builds only: remembers the backend origin and session token, and the live camera's relay
+ * address, key and zone, across app restarts. Each value
  * is sealed with AES/GCM under a non-exportable Android Keystore key (field name as associated data)
  * and stored in private preferences; app backup stays disabled. Nothing is logged. Any failure is
  * silent and simply means nothing is remembered, as in release builds.
@@ -36,6 +37,24 @@ internal class BackendMemory(
         return try { open(ORIGIN, origin) to open(TOKEN, token) } catch (_: Exception) { null }
     }
 
+    /** The live camera's relay address, key and zone; sealed like the backend values. */
+    fun saveRelay(url: String, key: String, zone: String): Boolean = try {
+        val sealedUrl = seal(RELAY_URL, url)
+        val sealedKey = seal(RELAY_KEY, key)
+        val sealedZone = seal(RELAY_ZONE, zone)
+        prefs.edit().putString(RELAY_URL, sealedUrl).putString(RELAY_KEY, sealedKey).putString(RELAY_ZONE, sealedZone).apply()
+        true
+    } catch (_: Exception) { false }
+
+    /** The remembered relay address, key and zone, or null when nothing (readable) is stored. */
+    fun loadRelay(): Triple<String, String, String>? {
+        val url = prefs.getString(RELAY_URL, null) ?: return null
+        val key = prefs.getString(RELAY_KEY, null) ?: return null
+        val zone = prefs.getString(RELAY_ZONE, null) ?: return null
+        return try { Triple(open(RELAY_URL, url), open(RELAY_KEY, key), open(RELAY_ZONE, zone)) } catch (_: Exception) { null }
+    }
+
+    /** Forgets everything remembered: backend address and token, relay address, key and zone. */
     fun forget() { prefs.edit().clear().apply() }
 
     private fun seal(field: String, value: String): String {
@@ -62,6 +81,9 @@ internal class BackendMemory(
         private const val TAG_BITS = 128
         private const val ORIGIN = "origin"
         private const val TOKEN = "token"
+        private const val RELAY_URL = "relay_url"
+        private const val RELAY_KEY = "relay_key"
+        private const val RELAY_ZONE = "relay_zone"
         private const val SEPARATOR = ":"
         private val ENCODER = Base64.getEncoder()
         private val DECODER = Base64.getDecoder()

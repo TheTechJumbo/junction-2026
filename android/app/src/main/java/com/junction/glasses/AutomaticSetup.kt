@@ -10,6 +10,7 @@ import com.junction.glasses.meta.MetaState
  * few idle minutes; that is routine, so once a session has started, every later end or failure is
  * followed by a quiet reconnect after [IDLE_BACKOFF_MS] (5 s, 10 s, then every 30 s, no cap) while in
  * the foreground. Before any session started, a failure is retried [MAX_RETRIES] times, 10 s apart.
+ * While the SDK reports no glasses at all, nothing is opened or connected automatically.
  */
 internal class AutoGlassesSetup(registrationRequested: Boolean = false, consentRequested: Boolean = false) {
     enum class Step { WAIT, REGISTER, REQUEST_CONSENT, CONNECT, RETRY_LATER }
@@ -68,6 +69,8 @@ internal class AutoGlassesSetup(registrationRequested: Boolean = false, consentR
             return Step.RETRY_LATER
         }
         if (!state.initialized || !foreground || externalFlowPending || consentRunning) return Step.WAIT
+        // No glasses reported: never open Meta AI or connect by ourselves; the glasses buttons stay manual.
+        if (state.deviceCount == 0) return Step.WAIT
         if (state.registration != REGISTERED) {
             // registrationSettled gives the SDK time to report an existing registration first.
             if (registrationRequested || !registrationSettled || state.registration in IN_PROGRESS) return Step.WAIT
@@ -94,29 +97,51 @@ internal class AutoGlassesSetup(registrationRequested: Boolean = false, consentR
     }
 }
 
-/** DEBUG-only adb launch values (see README). Never logged, persisted or shown; [toString] hides the token. */
-internal class DebugBackendLaunch private constructor(val backendUrl: String?, val apiToken: String?) {
-    override fun toString() = "DebugBackendLaunch(backendUrl=$backendUrl, apiToken=${if (apiToken == null) "absent" else "redacted"})"
+/**
+ * DEBUG-only adb launch values (see README): the backend address and token, and the live camera's
+ * relay address, key and zone. Never logged, persisted unencrypted or shown; [toString] hides secrets.
+ */
+internal class DebugBackendLaunch private constructor(
+    val backendUrl: String?,
+    val apiToken: String?,
+    val relayUrl: String?,
+    val relayKey: String?,
+    val relayZone: String?,
+) {
+    val hasBackend: Boolean get() = backendUrl != null || apiToken != null
+    val hasRelay: Boolean get() = relayUrl != null || relayKey != null || relayZone != null
+
+    override fun toString() = "DebugBackendLaunch(backendUrl=$backendUrl, apiToken=${secret(apiToken)}, " +
+        "relayUrl=$relayUrl, relayKey=${secret(relayKey)}, relayZone=$relayZone)"
 
     companion object {
         const val EXTRA_BACKEND_URL = "backend_url"
         const val EXTRA_API_TOKEN = "api_token"
+        const val EXTRA_RELAY_URL = "relay_url"
+        const val EXTRA_RELAY_KEY = "relay_key"
+        const val EXTRA_RELAY_ZONE = "relay_zone"
+        private val EXTRAS = listOf(EXTRA_BACKEND_URL, EXTRA_API_TOKEN, EXTRA_RELAY_URL, EXTRA_RELAY_KEY, EXTRA_RELAY_ZONE)
 
-        /** Null in release builds, which ignore these extras entirely, or when neither extra was sent. */
+        private fun secret(value: String?) = if (value == null) "absent" else "redacted"
+
+        /** Null in release builds, which ignore these extras entirely, or when none of them was sent. */
         fun read(intent: Intent?, debug: Boolean): DebugBackendLaunch? {
             if (!debug || intent == null) return null
             return try {
-                if (!intent.hasExtra(EXTRA_BACKEND_URL) && !intent.hasExtra(EXTRA_API_TOKEN)) null
+                if (EXTRAS.none { intent.hasExtra(it) }) null
                 else DebugBackendLaunch(
-                    intent.getStringExtra(EXTRA_BACKEND_URL)?.trim()?.takeIf { it.isNotEmpty() },
-                    intent.getStringExtra(EXTRA_API_TOKEN)?.takeIf { it.isNotBlank() },
+                    backendUrl = intent.getStringExtra(EXTRA_BACKEND_URL)?.trim()?.takeIf { it.isNotEmpty() },
+                    apiToken = intent.getStringExtra(EXTRA_API_TOKEN)?.takeIf { it.isNotBlank() },
+                    relayUrl = intent.getStringExtra(EXTRA_RELAY_URL)?.trim()?.takeIf { it.isNotEmpty() },
+                    relayKey = intent.getStringExtra(EXTRA_RELAY_KEY)?.trim()?.takeIf { it.isNotEmpty() },
+                    relayZone = intent.getStringExtra(EXTRA_RELAY_ZONE)?.trim()?.takeIf { it.isNotEmpty() },
                 )
             } catch (_: RuntimeException) { null }
         }
 
         /** A copy without the debug extras, so an Activity recreation cannot reuse them. */
         fun withoutExtras(intent: Intent): Intent = Intent(intent).apply {
-            removeExtra(EXTRA_BACKEND_URL); removeExtra(EXTRA_API_TOKEN)
+            EXTRAS.forEach { removeExtra(it) }
         }
     }
 }

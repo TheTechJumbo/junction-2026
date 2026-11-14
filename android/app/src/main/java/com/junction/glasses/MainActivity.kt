@@ -25,10 +25,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.junction.glasses.core.*
+import com.junction.glasses.live.CameraFrame
+import com.junction.glasses.live.LiveRelayLoop
+import com.junction.glasses.live.LiveSnapshot
+import com.junction.glasses.live.PhoneCamera
+import com.junction.glasses.live.RelayClient
 import com.junction.glasses.meta.MetaGlassesAdapter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
+import java.util.Locale
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -90,6 +96,17 @@ class MainActivity : ComponentActivity() {
     private var registrationSettled = false
     private var autoRetryJob: Job? = null
     private var backendInterrupted = false
+    private lateinit var liveButton: Button
+    private lateinit var liveHeadline: TextView
+    private lateinit var liveDetails: TextView
+    private lateinit var liveThumb: ImageView
+    /** Created only when the live camera is switched on; no CameraX object exists before that. */
+    private var phoneCamera: PhoneCamera? = null
+    private var liveLoop: LiveRelayLoop<CameraFrame>? = null
+    private var pendingLiveCamera = false
+    private var relayUrl = RelayClient.DEFAULT_URL
+    private var relayKey: String? = null
+    private var relayZone = RelayClient.DEFAULT_ZONE
     /** DEBUG builds with automatic setup only; release builds never persist the backend. */
     private val backendMemory: BackendMemory? by lazy {
         if (BuildConfig.DEBUG && automaticSetup) backendMemoryOverride ?: BackendMemory.androidKeystore(applicationContext) else null
@@ -102,6 +119,10 @@ class MainActivity : ComponentActivity() {
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) glasses.initialize()
         if (pendingPhoneListen) { pendingPhoneListen = false; startPhoneListening() }
+        if (pendingLiveCamera) {
+            pendingLiveCamera = false
+            if (isGranted(Manifest.permission.CAMERA)) startLiveCamera() else liveDetails.text = "Camera permission is needed for the live camera."
+        }
         updatePermissionStatus()
         autoPermissionsPending = false
         continueAutomaticSetup()
@@ -164,6 +185,20 @@ class MainActivity : ComponentActivity() {
         }
         backendChip = chip(); glassesChip = chip(); micChip = chip()
         setupStatus = note("Setting up automatically…")
+        card("Live camera")
+        note("Sends the phone's back camera to the relay one photo at a time, so the laptop can rebuild the room. Frames go only to the configured relay; nothing is saved on the phone.")
+        liveButton = button("Start live camera", primary = true) { toggleLiveCamera() }
+        liveHeadline = label("Live camera is off.", 18f).apply { setTypeface(null, Typeface.BOLD) }
+        liveDetails = label("")
+        liveThumb = ImageView(this).apply {
+            visibility = android.view.View.GONE
+            adjustViewBounds = true
+            maxHeight = dp(180)
+            contentDescription = "Last frame sent to the relay"
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(8) }
+            container.addView(this)
+        }
         card("1. Backend setup")
         note("Use the backend API_TOKEN, not an ElevenLabs key or database URL. Emulator: http://10.0.2.2:8000. USB phone: http://127.0.0.1:8000 with adb reverse.")
         endpoint = field("Backend HTTPS URL").apply {
@@ -262,7 +297,9 @@ class MainActivity : ComponentActivity() {
         } }
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) glasses.initialize()
         updatePermissionStatus()
+        backendMemory?.loadRelay()?.let { (url, key, zone) -> relayUrl = url; relayKey = key; relayZone = zone }
         if (!consumeDebugBackendExtras(apply = savedInstanceState == null)) connectRememberedBackend()
+        renderRelaySettings()
         startAutomaticSetup()
     }
     override fun onNewIntent(intent: Intent) {
@@ -278,17 +315,88 @@ class MainActivity : ComponentActivity() {
     }
     /**
      * DEBUG builds only: adb extras backend_url/api_token fill the endpoint and token fields as if typed
-     * and connect. They are removed from the Intent first; a restored Activity ([apply] false) never
-     * reuses them. Release builds ignore them entirely. Returns true when extras were present.
+     * and connect; relay_url/relay_key/relay_zone configure the live camera and are remembered,
+     * encrypted. They are removed from the Intent first; a restored Activity ([apply] false) never
+     * reuses them. Release builds ignore them entirely. Returns true when backend extras were present.
      */
     private fun consumeDebugBackendExtras(apply: Boolean): Boolean {
         val source: Intent = intent ?: return false
         val extras = DebugBackendLaunch.read(source, BuildConfig.DEBUG) ?: return false
         setIntent(DebugBackendLaunch.withoutExtras(source))
         if (!apply) return false
+        if (extras.hasRelay) applyRelaySettings(extras.relayUrl, extras.relayKey, extras.relayZone)
         extras.backendUrl?.let { endpoint.setText(it) }
         extras.apiToken?.let { connectAutomatically(it) }
-        return true
+        return extras.hasBackend
+    }
+    /** New relay settings from adb replace the remembered ones; a running live camera restarts with them. */
+    private fun applyRelaySettings(url: String?, key: String?, zone: String?) {
+        url?.let { relayUrl = it }
+        key?.let { relayKey = it }
+        zone?.let { relayZone = it }
+        relayKey?.let { backendMemory?.saveRelay(relayUrl, it, relayZone) }
+        renderRelaySettings()
+        if (liveLoop != null) { stopLiveCamera("Live camera restarting with the new relay settings."); startLiveCamera() }
+    }
+    /** The relay address and zone, and whether a key is set. The key itself is never shown. */
+    private fun renderRelaySettings() {
+        if (liveLoop != null) return
+        liveDetails.text = "Relay: $relayUrl · zone $relayZone · key ${if (relayKey.isNullOrBlank()) "not set" else "set"}."
+    }
+    private fun toggleLiveCamera() {
+        if (liveLoop != null) stopLiveCamera("Live camera is off.") else startLiveCamera()
+    }
+    /** Starts the send loop: capture the newest frame, post it, wait for the reply, repeat. */
+    private fun startLiveCamera() {
+        if (liveLoop != null) return
+        val key = relayKey
+        if (key.isNullOrBlank()) {
+            liveDetails.text = if (BuildConfig.DEBUG) "No relay key yet. Send it with adb: --es relay_key … (see README)."
+                else "The live camera needs a debug build with a relay key."
+            return
+        }
+        val client = try { RelayClient(relayUrl, key, relayZone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) {
+            liveDetails.text = "Relay address or zone not accepted. Use HTTPS (debug builds may use http://127.0.0.1) and a zone such as kitchen."
+            return
+        }
+        if (!isGranted(Manifest.permission.CAMERA)) {
+            pendingLiveCamera = true
+            permissions.launch(arrayOf(Manifest.permission.CAMERA))
+            return
+        }
+        val camera = PhoneCamera(this)
+        phoneCamera = camera
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        liveButton.text = "Stop live camera"
+        liveHeadline.text = "Live camera on · zone $relayZone"
+        liveDetails.text = "Starting the camera…"
+        liveLoop = LiveRelayLoop<CameraFrame>(
+            scope = lifecycleScope,
+            capture = { camera.capture() },
+            post = { frame -> client.locate(frame.jpeg) },
+            onUpdate = { renderLive(it) },
+        ).also { it.start() }
+    }
+    private fun stopLiveCamera(message: String) {
+        pendingLiveCamera = false
+        val wasRunning = liveLoop != null
+        liveLoop?.stop(); liveLoop = null
+        phoneCamera?.stop(); phoneCamera = null
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (!::liveButton.isInitialized || !wasRunning) return
+        liveButton.text = "Start live camera"
+        liveHeadline.text = message
+    }
+    private fun renderLive(snapshot: LiveSnapshot<CameraFrame>) {
+        if (liveLoop == null) return
+        snapshot.lastFrame?.let { liveThumb.setImageBitmap(it.thumbnail); liveThumb.visibility = android.view.View.VISIBLE }
+        val reply = snapshot.reply
+        liveHeadline.text = reply?.headline?.takeIf { it.isNotBlank() } ?: "Live camera on · waiting for the first reply…"
+        val seconds = snapshot.roundTripSeconds?.let { String.format(Locale.US, "%.1f s", it) } ?: "—"
+        val lines = mutableListOf("State: ${reply?.state ?: "—"} · round trip: $seconds · frames sent: ${snapshot.framesSent}")
+        reply?.waypoints?.take(3)?.forEach { lines += "${it.name}: ${String.format(Locale.US, "%.1f", it.distanceM)} m, ${it.bearingDeg}°" }
+        snapshot.error?.let { lines += "Error: $it Retrying in 2 s." }
+        liveDetails.text = lines.joinToString("\n")
     }
     /** DEBUG builds only: reconnect with the Keystore-encrypted backend remembered from an earlier run. */
     private fun connectRememberedBackend() {
@@ -304,7 +412,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun forgetBackend() {
         backendMemory?.forget()
-        backendStatus.text = "Backend: saved address and token forgotten on this phone. The current connection lasts until the app closes."
+        backendStatus.text = "Backend: saved address, token and relay settings forgotten on this phone. The current connection lasts until the app closes."
     }
     private fun isGranted(permission: String) = checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
     /** Automatic setup step 1: request missing phone permissions once per launch, never again if denied. */
@@ -365,6 +473,8 @@ class MainActivity : ComponentActivity() {
         val s = glasses.state.value
         val glassesStep = when {
             !s.initialized -> if (isGranted(Manifest.permission.BLUETOOTH_CONNECT)) "starting Meta SDK…" else "needs Bluetooth access."
+            s.deviceCount == 0 && registrationSettled && s.connection != AutoGlassesSetup.STARTED ->
+                "no glasses found, so Meta AI is not opened. Use the glasses buttons when glasses are nearby."
             s.registration != AutoGlassesSetup.REGISTERED ->
                 if (autoGlasses.registrationRequested) "approve this app in Meta AI." else "checking Meta AI registration…"
             autoGlasses.consentRunning -> "asking for glasses camera and microphone consent in Meta AI…"
@@ -389,6 +499,8 @@ class MainActivity : ComponentActivity() {
         when {
             !s.initialized && isGranted(Manifest.permission.BLUETOOTH_CONNECT) -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses starting")
             !s.initialized -> paintChip(glassesChip, ChipLevel.BAD, "Glasses need Bluetooth")
+            s.deviceCount == 0 && registrationSettled && s.connection != AutoGlassesSetup.STARTED ->
+                paintChip(glassesChip, ChipLevel.WAIT, "No glasses found")
             s.registration != AutoGlassesSetup.REGISTERED -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses not registered")
             s.connection == AutoGlassesSetup.STARTED -> paintChip(glassesChip, ChipLevel.GOOD, "Glasses STARTED")
             automaticSetup && autoGlasses.idleReconnect -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses idle, reconnecting")
@@ -642,6 +754,7 @@ class MainActivity : ComponentActivity() {
         cancelConnectionCheck(); cancelDiagnostic()
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
         cancelAutomaticRetry()
+        stopLiveCamera("Live camera stopped because the app left the screen.")
         if (!glasses.isExternalFlowPending) { glasses.stopListening(); glasses.suspendLifecycle() }
         super.onStop()
     }
@@ -665,6 +778,7 @@ class MainActivity : ComponentActivity() {
             token.text.isEmpty() && endpoint.text.toString().trim() == configuredOrigin) connectBackend()
     }
     override fun onDestroy() {
+        stopLiveCamera("Live camera is off.")
         recognizer?.destroy(); glasses.close(); audio.close()
         super.onDestroy()
     }
