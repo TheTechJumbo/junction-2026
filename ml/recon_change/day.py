@@ -49,6 +49,14 @@ JOIN_S = 20         # an event this close to a visit's first or last fix counts 
 REPEAT_S = 30 * 60  # the same question again within this long is one entry with a count
 ITEM_MOVED_M = 1.0  # an item seen this far from its last recorded spot is a new entry
 KEEP_DAYS = 14
+# Confidence, in percent, of a visit: how sure its fixes were, times three discounts.
+RAW_SURE = 0.95     # a raw "found" fix with no stabiliser: 453 of 453 were within 0.2 m in the walking test
+CONF = {"one_fix": 0.30,  # a visit resting on one fix loses this share; each further fix halves the loss
+        "quiet": 0.40,    # lost when the longest stretch without a fix inside the visit reaches GAP_S
+        "quiet_free_s": 15,  # a stretch this short costs nothing: two photos in a row without a fix are normal
+        "edge": 0.25}     # lost when the closest fix was right at ENTER_M (nothing lost within 70% of it)
+SPEAK_PCT = 60      # entries below this are left out of what is said to the wearer
+JOIN_EDGE = 0.8     # an event joined to a visit only through the JOIN_S slack keeps this share
 
 # Other words for a named place, used only when a place of that name is in the log.
 PLACE_WORDS = {"pill box": ("pillbox", "pills", "medication", "medicine", "tablets"),
@@ -58,13 +66,23 @@ TIMES = {2: "twice", 3: "three times", 4: "four times", 5: "five times", 6: "six
 
 
 # ----------------------------------------------------------------------------- visits
+def confidence_pct(fixes, sure, quiet_s, gap_s=GAP_S, closest=None, enter=ENTER_M):
+    """How sure a visit is, 1 to 99: the mean sureness of its fixes (0 to 1), less for few fixes, for a
+    long stretch without a fix inside it, and for a place visit whose closest fix was at the limit."""
+    support = 1 - CONF["one_fix"] * 0.5 ** (max(1, fixes) - 1)
+    free = min(CONF["quiet_free_s"], gap_s / 2)
+    steady = 1 - CONF["quiet"] * min(1.0, max(0.0, quiet_s - free) / (gap_s - free))
+    edge = 1.0 if closest is None else 1 - CONF["edge"] * min(1.0, max(0.0, (closest / enter - 0.7) / 0.3))
+    return int(round(max(1.0, min(99.0, 100 * sure * support * steady * edge))))
+
+
 def build_visits(fixes, enter=ENTER_M, leave=LEAVE_M, out_fixes=OUT_FIXES, gap_s=GAP_S):
     """Fixes in time order -> rooms, places and gaps.
 
-    A fix is {"t": seconds, "s": "found" | "unsure" | "lost", "z": zone, "w": {place: distance}}.
-    Only found fixes are used. Returns {"rooms", "places", "gaps", "last_found", "unusable_after"}:
-    a room visit is {"zone", "start", "end", "fixes", "quiet_s"}, a place visit adds "place" and
-    "closest", a gap is {"start", "end", "photos"} (photos that arrived but gave no position).
+    A fix is {"t": seconds, "s": "found" | "unsure" | "lost", "z": zone, "w": {place: distance}}, with
+    "pct" when the stabiliser gave a confidence percentage. Only found fixes are used. Returns {"rooms", "places", "gaps", "last_found", "unusable_after"}:
+    a room visit is {"zone", "start", "end", "fixes", "quiet_s", "confidence_pct"}, a place visit adds
+    "place" and "closest", a gap is {"start", "end", "photos"} (photos that arrived but gave no position).
     Every start and end is the time of a found fix, so a visit is "seen from ... to ...".
     """
     rooms, places, gaps = [], [], []
@@ -75,6 +93,7 @@ def build_visits(fixes, enter=ENTER_M, leave=LEAVE_M, out_fixes=OUT_FIXES, gap_s
             unusable += 1
             continue
         t, zone = f["t"], f.get("z") or ""
+        sure = f["pct"] / 100.0 if "pct" in f else RAW_SURE
         if last_found is not None and t - last_found > gap_s:  # nothing known in between
             if room:
                 rooms.append(room)
@@ -85,20 +104,21 @@ def build_visits(fixes, enter=ENTER_M, leave=LEAVE_M, out_fixes=OUT_FIXES, gap_s
             rooms.append(room)
             room = None
         if room is None:
-            room = {"zone": zone, "start": t, "end": t, "fixes": 0, "quiet_s": 0.0}
+            room = {"zone": zone, "start": t, "end": t, "fixes": 0, "quiet_s": 0.0, "sure": 0.0}
         room["quiet_s"] = max(room["quiet_s"], t - room["end"])
         room["end"] = t
         room["fixes"] += 1
+        room["sure"] += sure
         dist = {(zone, name): d for name, d in (f.get("w") or {}).items()}
         for key in set(near) | set(dist):
             d, visit = dist.get(key), near.get(key)
             if visit is None:
                 if d is not None and d <= enter:
                     near[key] = {"zone": zone, "place": key[1], "start": t, "end": t, "fixes": 1,
-                                 "closest": d, "quiet_s": 0.0, "far": 0}
+                                 "closest": d, "quiet_s": 0.0, "far": 0, "sure": sure}
             elif d is not None and d <= leave:
                 visit["quiet_s"] = max(visit["quiet_s"], t - visit["end"])
-                visit.update(end=t, fixes=visit["fixes"] + 1, closest=min(visit["closest"], d), far=0)
+                visit.update(end=t, fixes=visit["fixes"] + 1, closest=min(visit["closest"], d), far=0, sure=visit["sure"] + sure)
             else:
                 visit["far"] += 1
                 if visit["far"] >= out_fixes:
@@ -107,8 +127,10 @@ def build_visits(fixes, enter=ENTER_M, leave=LEAVE_M, out_fixes=OUT_FIXES, gap_s
     if room:
         rooms.append(room)
     places.extend(near.values())
-    for visit in places:
+    for visit in rooms + places:
         visit.pop("far", None)
+        visit["confidence_pct"] = confidence_pct(visit["fixes"], visit.pop("sure") / visit["fixes"], visit["quiet_s"], gap_s,
+                                                 visit.get("closest"), enter)
     places.sort(key=lambda v: (v["start"], v["place"]))
     return {"rooms": rooms, "places": places, "gaps": gaps, "last_found": last_found, "unusable_after": unusable}
 
@@ -125,8 +147,8 @@ def build_walks(visits, gaps, name, walk_s=WALK_S):
             continue
         if any(g["start"] < cur["start"] and g["end"] > prev["end"] for g in gaps):
             continue
-        walks.append({"from": prev[name], "to": cur[name], "start": prev["end"], "end": cur["start"],
-                      "zone": cur.get("zone", "")})
+        walks.append({"from": prev[name], "to": cur[name], "start": prev["end"], "end": cur["start"], "zone": cur.get("zone", ""),
+                      "confidence_pct": min(prev["confidence_pct"], cur["confidence_pct"])})
     return walks
 
 
@@ -239,13 +261,22 @@ class DayLog:
 
     # ------------------------------------------------------------------------- taking things in
     def fix(self, fix, at=None):
-        """A position fix as the relay keeps it. Lost and unsure ones are stored too (they show that
-        a photo arrived), but without a position."""
+        """A position fix as the relay keeps it. When the relay added the stabiliser's answer under
+        "stable" (track.py: "steady", "settling" or "lost", with a confidence_pct), that is what is
+        logged: steady counts as found, settling as unsure. Without it the raw fix is used. Lost and
+        unsure ones are stored too (they show that a photo arrived), but without a position."""
         t = float(at if at is not None else fix.get("at") or self.now())
-        record = {"k": "fix", "t": round(t, 1), "s": str(fix.get("state") or "lost"), "z": str(fix.get("zone") or "")}
-        if record["s"] == "found":
+        stable = fix.get("stable") if isinstance(fix.get("stable"), dict) else None
+        use = stable or fix
+        state = str(use.get("state") or "lost")
+        if stable:
+            state = {"steady": "found", "settling": "unsure"}.get(state, "lost")
+        record = {"k": "fix", "t": round(t, 1), "s": state, "z": str(fix.get("zone") or "")}
+        if stable:
+            record["st"] = 1
+        if state == "found":
             ways = {}
-            for w in fix.get("waypoints") or []:
+            for w in use.get("waypoints") or []:
                 try:
                     if math.isfinite(float(w["distance_m"])):
                         ways[str(w["name"])] = round(float(w["distance_m"]), 2)
@@ -253,9 +284,13 @@ class DayLog:
                     continue
             record["w"] = ways
             try:
-                record["p"] = [round(float(v), 2) for v in fix["position"][:2]]
+                record["p"] = [round(float(v), 2) for v in use["position"][:2]]
             except (KeyError, TypeError, ValueError):
                 pass
+            if stable and isinstance(stable.get("confidence_pct"), (int, float)):
+                record["pct"] = int(round(max(0, min(100, stable["confidence_pct"]))))
+            elif isinstance(fix.get("confidence"), (int, float)):
+                record["c"] = round(float(fix["confidence"]), 2)
         return self.add(record)
 
     def event(self, event, at=None):
@@ -379,9 +414,11 @@ class DayLog:
         places = sorted({p["place"] for p in seen["places"]} | {name for r in rows if r["k"] == "fix" for name in r.get("w") or {}})
         out = []
 
-        def entry(kind, start, end, text, based_on, **more):
+        def entry(kind, start, end, text, based_on, pct=None, **more):
+            # confidence_pct: None where no percentage is honest (a gap, an item sighting)
             out.append({"kind": kind, "start": start, "end": end, "from": self.hhmm(start), "to": self.hhmm(end),
-                        "place": more.pop("place", ""), "zone": more.pop("zone", ""), "text": text, "based_on": based_on, **more})
+                        "place": more.pop("place", ""), "zone": more.pop("zone", ""), "text": text, "based_on": based_on,
+                        "confidence_pct": pct, **more})
 
         def basis(visit, extra=""):
             n = visit["fixes"]
@@ -393,22 +430,22 @@ class DayLog:
         for room in seen["rooms"]:
             ongoing = today and now - room["end"] <= gap_s
             entry("room", room["start"], room["end"], f"{v['Sub']} {v['were']} in the {_nice(room['zone'])} {self.span(room['start'], room['end'])}.",
-                  basis(room), zone=room["zone"], ongoing=ongoing, fixes=room["fixes"])
+                  basis(room), room["confidence_pct"], zone=room["zone"], ongoing=ongoing, fixes=room["fixes"])
         for visit in seen["places"]:
             ongoing = today and now - visit["end"] <= gap_s
             entry("place", visit["start"], visit["end"], f"{v['Sub']} {v['were']} near the {visit['place']} {self.span(visit['start'], visit['end'])}.",
                   basis(visit, f", the closest {visit['closest']:.1f} m from the {visit['place']} (map metres)"),
-                  place=visit["place"], zone=visit["zone"], ongoing=ongoing, fixes=visit["fixes"])
+                  visit["confidence_pct"], place=visit["place"], zone=visit["zone"], ongoing=ongoing, fixes=visit["fixes"])
         for walk in build_walks(seen["places"], seen["gaps"], "place"):
             entry("walk", walk["start"], walk["end"],
                   f"{v['Sub']} went from the {walk['from']} to the {walk['to']} {self.between(walk['start'], walk['end'])}.",
                   f"seen near the {walk['from']} at {self.hhmm(walk['start'])}, then near the {walk['to']} at {self.hhmm(walk['end'])}",
-                  place=walk["to"], zone=walk["zone"], origin=walk["from"])
+                  walk["confidence_pct"], place=walk["to"], zone=walk["zone"], origin=walk["from"])
         for walk in build_walks(seen["rooms"], seen["gaps"], "zone"):
             entry("walk", walk["start"], walk["end"],
                   f"{v['Sub']} went from the {_nice(walk['from'])} to the {_nice(walk['to'])} {self.between(walk['start'], walk['end'])}.",
                   f"seen in the {_nice(walk['from'])} at {self.hhmm(walk['start'])}, then in the {_nice(walk['to'])} at {self.hhmm(walk['end'])}",
-                  zone=walk["to"], origin=walk["from"])
+                  walk["confidence_pct"], zone=walk["to"], origin=walk["from"])
 
         def photos(n):
             return "no photos arrived" if not n else f"{n} photo{'s' if n != 1 else ''} arrived, none gave a position"
@@ -450,7 +487,11 @@ class DayLog:
                 tail = f". {v['i_dont']} where {v['sub']} {v['were']} at that time."
             based = f"{r.get('source') or 'sensor'} event \"{r['type']}\"" + (f", confidence {r['c']}" if "c" in r and r.get("source") == "vision" else "")
             based += "; position: " + ("no found fix within %d s" % JOIN_S if how is None else f"a visit seen {self.span(visit['start'], visit['end'])}")
-            entry("event", r["t"], r["t"], words + tail, based, place=visit.get("place", "") if visit and how != "room" else "",
+            # The event itself (a sensor is taken at its word, the camera at its own confidence), times the visit it is joined to.
+            pct = 99.0 * (min(1.0, r["c"]) if "c" in r and r.get("source") == "vision" else 1.0)
+            if visit:
+                pct *= visit["confidence_pct"] / 100.0 * (1.0 if visit["start"] <= r["t"] <= visit["end"] else JOIN_EDGE)
+            entry("event", r["t"], r["t"], words + tail, based, int(round(max(1.0, pct))), place=visit.get("place", "") if visit and how != "room" else "",
                   zone=(visit or {}).get("zone") or r.get("z", ""), type=r["type"], object=thing, joined=how or "unknown")
 
         groups, newest = [], {}  # the same question again within REPEAT_S joins its group, whatever was asked in between
@@ -469,7 +510,7 @@ class DayLog:
             when = f"at {self.hhmm(g['start'])}" if g["n"] == 1 else f"{_times(g['n'])} {self.between(g['start'], g['end'])}"
             how, visit = where_at(g["start"])
             entry("question", g["start"], g["end"], f"{v['Sub']} asked {what} {when}.",
-                  f"{g['n']} question{'s' if g['n'] != 1 else ''} asked through the glasses",
+                  f"{g['n']} question{'s' if g['n'] != 1 else ''} asked through the glasses", 99,
                   place=visit["place"] if how in ("same", "place") else "", zone=visit["zone"] if visit else "", count=g["n"], topic=g["topic"] or "")
 
         by_reminder = {}
@@ -491,7 +532,7 @@ class DayLog:
             else:
                 text += " and has not been marked as done."
                 state = "due"
-            entry("reminder", due, max(due, end), text, "the relay's reminder list", place=any_state.get("place", ""), state=state)
+            entry("reminder", due, max(due, end), text, "the relay's reminder list", 99, place=any_state.get("place", ""), state=state)
 
         last_spot = {}
         for r in rows:
@@ -544,6 +585,9 @@ class DayLog:
         label = self.label(day, part, now)
         if not entries:
             return [f"I have nothing recorded for {label}." if not carer else f"Nothing is recorded for {label}."]
+        unsure = [e for e in entries if e["confidence_pct"] is not None and e["confidence_pct"] < SPEAK_PCT]
+        if not carer:  # the wearer is told only what the log is sure enough of; the carer's page shows all of it
+            entries = [e for e in entries if e not in unsure]
         kinds = lambda kind: [e for e in entries if e["kind"] == kind]  # noqa: E731
         out = []
         rooms, places, gaps = kinds("room"), kinds("place"), kinds("gap")
@@ -569,7 +613,7 @@ class DayLog:
                          f"near the {place} {_times(len(group))}, last {self.span(group[-1]['start'], group[-1]['end'])}")
         if parts:
             out.append(f"{v['Sub']} {v['were']} {_list(parts)}.")
-        if not rooms and not places and kinds("gap"):
+        if not rooms and not places and (kinds("gap") or not out and not carer and unsure):
             out.append(f"{'I' if not carer else 'The glasses'} could not tell where {v['sub']} {v['were']} {label}.")
         events = kinds("event")
         out += [e["text"] for e in events[:6 if carer else 3]]
@@ -597,6 +641,9 @@ class DayLog:
             else:
                 out.append(f"There were {len(gaps)} stretches when {'the glasses' if carer else 'I'} could not tell where "
                            f"{v['sub']} {v['were']}, the longest {when}.")
+        if carer and unsure:
+            out.append(f"{len(unsure)} of these entries {'is' if len(unsure) == 1 else 'are'} uncertain (under {SPEAK_PCT}%): "
+                       f"the timeline shows which.")
         return out
 
     def summary(self, day=None, for_="wearer", part=None, now=None):
@@ -604,9 +651,9 @@ class DayLog:
 
     # ------------------------------------------------------------------------- answers
     def names(self, day):
-        """The places and rooms a question can be about: every name in that day's and today's fixes."""
+        """The places and rooms a question can be about: every name in the fixes of that day, today and yesterday."""
         places, zones = {}, {}
-        for d in {day, self.day_of(self.now())}:
+        for d in {day, self.day_of(self.now()), self.day_of(self.now() - 86400)}:
             for r in self.records(d):
                 if r["k"] == "fix":
                     if r.get("z"):
@@ -650,11 +697,23 @@ class DayLog:
         gaps = [e for e in entries if e["kind"] == "gap"]
         where = f"near the {name}" if kind == "place" else f"in the {_nice(name)}"
         label = self.label(day, part, now)
-        reply = {"about": kind, "place": name, "entries": visits[-3:]}
+        doubtful = [e for e in visits if e["confidence_pct"] < SPEAK_PCT]
+        visits = [e for e in visits if e not in doubtful]
+        reply = {"about": kind, "place": name, "entries": (visits or doubtful)[-3:],
+                 "confidence_pct": (visits or doubtful)[-1]["confidence_pct"] if visits or doubtful else None}
+        if not visits and doubtful:  # seen, but not surely enough to say so flatly
+            when = self.span(doubtful[-1]["start"], doubtful[-1]["end"])
+            return {**reply, "answer": f"I may have seen you {where} {when}" + ("" if day == self.day_of(now) else " yesterday") + ", but I am not sure."}
         if not visits:
             unknown = (" I could not tell where you were for part of that time." if gaps else
                        "" if any(e["kind"] == "room" for e in entries) else " I have no position recorded for that time.")
-            return {**reply, "answer": f"I have not seen you {where} {label}.{unknown}"}
+            before = ""
+            if last and not part and day == self.day_of(now):  # "when was I last ...": nothing today, so look at yesterday
+                earlier = [e for e in self.timeline(self.day_of(now - 86400), "wearer", now) if e["kind"] == kind and
+                           (e["place"] if kind == "place" else e["zone"]) == name and e["confidence_pct"] >= SPEAK_PCT]
+                if earlier:
+                    before = f" Yesterday you were last {where} {self.span(earlier[-1]['start'], earlier[-1]['end'])}."
+            return {**reply, "answer": f"I have not seen you {where} {label}.{unknown}{before}"}
         newest = visits[-1]
         if last:
             if newest.get("ongoing"):
@@ -676,4 +735,4 @@ class DayLog:
         return {"day": day, "today": day == self.day_of(now), "start": lo, "end": hi, "now": now, "days": self.stored_days(),
                 "timeline": self.timeline(day, "carer", now), "summary": {"wearer": self.sentences(day, "wearer", None, now),
                                                                          "carer": self.sentences(day, "carer", None, now)},
-                "limits": {**self.limits, "walk_s": WALK_S, "join_s": JOIN_S}}
+                "limits": {**self.limits, "walk_s": WALK_S, "join_s": JOIN_S, "speak_pct": SPEAK_PCT}}

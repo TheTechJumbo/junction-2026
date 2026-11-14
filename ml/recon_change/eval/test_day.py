@@ -154,7 +154,7 @@ def main():
     walk(doubt, "09:00", "09:05", 0.5, 0.5, state="lost")
     walk(doubt, "09:05:06", "09:10", 0.5, 0.5, state="unsure")
     seen = doubt.timeline()
-    assert [e["kind"] for e in seen] == ["gap"] and seen[0]["based_on"] == "100 photos arrived, none gave a position", seen
+    assert [e["kind"] for e in seen] == ["gap"] and seen[0]["based_on"] == "101 photos arrived, none gave a position", seen
     assert doubt.summary() == "I could not tell where you were today." and doubt.answer("Did I go to the pill box today?") is None
     assert doubt.summary(for_="carer") == "The glasses could not tell where the wearer was today."
     # One found fix, then lost ones that look near: the visit is that one fix and no longer.
@@ -209,7 +209,48 @@ def main():
     # Days: yesterday can be asked for, and only keep_days files are kept.
     clock["now"] = at("09:00", "2026-11-15")
     assert again.answer("What did I do yesterday?")["answer"].startswith("You were in the kitchen from 08:10 to 08:40 and from 10:00 to 10:20.")
-    assert again.answer("When was I last in the kitchen?")["answer"] == "I have not seen you in the kitchen today. I have no position recorded for that time."
+    assert again.answer("When was I last in the kitchen?")["answer"] == ("I have not seen you in the kitchen today. I have no position "
+                                                                         "recorded for that time. Yesterday you were last in the kitchen from 10:00 to 10:20.")
+
+    # The stabiliser's answer ("stable", from track.py) is used when the relay adds it, the raw fix when it does not.
+    steady = day.DayLog(Path(tempfile.mkdtemp(prefix="day-test-")), clock=UTC, now=lambda: clock["now"])
+    way = lambda d: [{"name": "pill box", "distance_m": d, "bearing_deg": 0, "position": [0, 0, 0]}]  # noqa: E731
+    raw = fix("found", 0.5, 4.0)
+    steady.fix({**raw, "stable": {"state": "settling", "position": [1, 2, 0], "heading_deg": 0, "confidence_pct": 40, "waypoints": way(0.5)}}, at=at("12:00"))
+    assert steady.timeline(now=at("12:00")) and all(e["kind"] == "gap" for e in steady.timeline(now=at("12:00"))), "settling starts no visit"
+    for i, pct in enumerate((90, 80, 70)):
+        steady.fix({**raw, "stable": {"state": "steady", "position": [1, 2, 0], "heading_deg": 0, "confidence_pct": pct, "waypoints": way(0.9)}},
+                   at=at("12:00") + 6 * (i + 1))
+    steady.fix({**fix("lost"), "stable": {"state": "steady", "position": [1, 2, 0], "heading_deg": 0, "confidence_pct": 55, "waypoints": way(0.9)}},
+               at=at("12:00") + 24)  # the raw fix missed, the stabiliser still holds the pose, less sure
+    steady.fix({**raw, "stable": {"state": "lost", "position": None, "heading_deg": None, "confidence_pct": 0}}, at=at("12:00") + 30)
+    visit = [e for e in steady.timeline(now=at("12:01")) if e["kind"] == "place"]
+    assert len(visit) == 1 and visit[0]["fixes"] == 4 and "closest 0.9 m" in visit[0]["based_on"], visit
+    assert visit[0]["confidence_pct"] == day.confidence_pct(4, (0.9 + 0.8 + 0.7 + 0.55) / 4, 6, closest=0.9) < 74, visit[0]["confidence_pct"]
+
+    # Confidence: more fixes raise it, a hole inside the visit and a closest fix right at the limit lower it.
+    one, many = day.confidence_pct(1, 0.95, 0, closest=0.6), day.confidence_pct(20, 0.95, 6, closest=0.6)
+    assert one < day.confidence_pct(2, 0.95, 6, closest=0.6) < many <= 95, (one, many)
+    assert day.confidence_pct(20, 0.95, 60, closest=0.6) < many and day.confidence_pct(20, 0.95, 6, closest=1.5) < many
+    assert day.confidence_pct(3, 0.5, 0) < day.confidence_pct(3, 0.9, 0) and 1 <= day.confidence_pct(1, 0.0, 600, closest=9) <= 99
+    assert all(isinstance(e["confidence_pct"], int) for e in entries if e["kind"] in ("room", "place", "walk", "event", "question", "reminder"))
+    assert all(e["confidence_pct"] is None for e in entries if e["kind"] in ("gap", "item"))
+    assert day.SPEAK_PCT <= events[0]["confidence_pct"] < 99 and events[1]["confidence_pct"] == 99, [e["confidence_pct"] for e in events]
+    assert events[2]["confidence_pct"] < day.SPEAK_PCT, "a camera event is never surer than the camera said (0.6 at most)"
+    assert "camera saw the keys" not in wearer and "The camera saw the keys in a different spot at 10:05" in carer
+    # A visit the log is not sure of is left out of what is said to the wearer, and hedged when asked about.
+    weak = day.DayLog(Path(tempfile.mkdtemp(prefix="day-test-")), clock=UTC, now=lambda: clock["now"])
+    walk(weak, "08:00", "08:10", 4.0, 5.0)
+    weak.fix(fix("found", 1.5, 5.0), at=at("08:10:06"))  # one fix, right at the limit
+    walk(weak, "08:10:12", "08:20", 4.0, 5.0)
+    weak.event({"id": "v1", "type": "object_moved", "source": "vision", "ts": "2026-11-15T08:15:00+00:00", "zone": "kitchen", "object": "keys", "confidence": 0.6})
+    clock["now"] = at("08:30", "2026-11-15")
+    spoken, shown = weak.summary(now=at("08:30")), weak.summary(for_="carer", now=at("08:30"))
+    doubtful = [e for e in weak.timeline(now=at("08:30")) if e["kind"] == "place"]
+    assert len(doubtful) == 1 and doubtful[0]["confidence_pct"] < day.SPEAK_PCT, doubtful
+    assert "pill box" not in spoken and "The wearer was near the pill box at 08:10." in shown and "1 of these entries is uncertain (under 60%)" in shown, (spoken, shown)
+    assert weak.answer("Did I go to the pill box today?", now=at("08:30"))["answer"] == "I may have seen you near the pill box at 08:10, but I am not sure."
+    clock["now"] = at("09:00", "2026-11-15")
     assert all("ongoing" not in e or not e["ongoing"] for e in again.timeline(DAY)) and len([e for e in again.timeline(DAY) if e["kind"] == "gap"]) == 1
     short = day.DayLog(folder, clock=UTC, now=lambda: clock["now"], keep_days=3)
     short.fix(fix("found", 4.0, 5.0), at=clock["now"])
