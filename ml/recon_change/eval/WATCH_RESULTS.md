@@ -9,7 +9,7 @@
 - **Hardware:** Iridis, CPU cores only (`amd_student`). No GPU job was run: every number comes
   from the reconstructions the recall work saved (`recall/out/base`, `recall/out/base_inst2`).
   Final measurement: array jobs 2220659 (same lighting) and 2220660 (other lighting); close-up
-  features: 2220652; contact sheets: 2220740 to 2220742.
+  features: 2220652; contact sheets: 2220740 to 2220742; main-surface control: 2220761.
 
 ## Headline
 
@@ -64,8 +64,8 @@ Porch), each spot checked against the one query photo its change was labelled in
   Garden and Pots ("choose" scenes; `watch_explore.py` reads nothing else). The limits are the
   scores that 5% and 1% of the choose scenes' 721 seen unchanged spots exceed. The tables below
   are for the other five ("report" scenes) unless they say otherwise. I did see report-scene
-  tables during development (the first run, and when checking the gain variant below); no choice
-  was made from them.
+  tables during development (the first run, when checking the gain variant and in the
+  main-surface control, both below); no choice was made from them.
 - **Whole-room detector on the same regions.** `analyse` run on the same saved reconstructions;
   a region counts as found when 10% of it is flagged, as in `RESULTS.md`. Over all ten scenes
   this reproduces `RESULTS.md` (11/230, 128/281, 114/171) and the recall results (14/230,
@@ -270,9 +270,20 @@ seen changes caught, small / medium / large):
   weight): the same in matching lighting, 23 false alarms instead of 30 in other lighting at the
   "5%" limit, no difference at the "1%" limit. Not adopted: 7 spots, and that comparison used
   the report scenes.
-- **Taking only the main surface in the box as the spot** (not what shows past it) was neutral
-  on the numbers (small 58% to 62%, medium 92% to 88% on the choose scenes). Kept, because
-  otherwise the box lands as a long strip in other views.
+**Mixed: taking only the main surface in the box as the spot** (not the floor or wall that
+shows past it). It is in `watch.py`, first because without it the box lands as a long strip in
+other views. A control run without it (job 2220761, same lighting, weights and limits chosen
+again on the choose scenes) says:
+
+| One photo per spot | Choose scenes, fitted on four and scored on the fifth, 5% false alarms (small / medium / large, of seen) | Report scenes, caught at the "5%" limit | Report scenes, caught at the "1%" limit |
+| --- | --- | --- | --- |
+| Main surface only (in `watch.py`) | 68% / 90% / 96% | 75 + 97 + 62 = 234 of 329 | 62 + 90 + 60 = 212 |
+| Everything in the box | 67% / 98% / 98% | 72 + 100 + 66 = 238 of 329 | 41 + 88 + 64 = 193 |
+
+So it costs medium spots on the choose scenes, is level on the report scenes at the "5%" limit,
+and keeps 21 more small changes at the "1%" limit there (in the live mode 226 against 174 of
+329 at that limit). Kept. This control looked at the report scenes after the rule was already
+in; no choice was changed by it.
 
 ## Seen on the contact sheets
 
@@ -309,6 +320,8 @@ missed. I did not look at its sheet.
 - **Large unchanged spots:** only 26 matched boxes, so false alarms on large boxes are unknown.
 - **Run-to-run spread:** the random control boxes use one seed. The final numbers were computed
   once; three earlier runs of the harness with changed rules are not comparable.
+- **A "1%" limit is a thin thing:** it rests on 6 of 721 unchanged spots on the choose scenes
+  and 2 of 185 on the report scenes. Read "1%" as "between 0 and 3%".
 - **The live worker:** `watch.py` is not wired in. Speed, measured: `check` took 2.4 to 6.5 s
   for 21 to 57 spots with 24 baseline and 12 new frames on 4 CPU cores, about 0.1 s per spot.
 - **A reconstruction without patch features** (`r.feat` is None): the score then rests on colour
