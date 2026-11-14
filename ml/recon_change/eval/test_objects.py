@@ -243,6 +243,8 @@ def test_json_and_worker_side():
     m = inventory()
     again = json.loads(json.dumps(m))
     assert again == m
+    slim = objects.for_worker(m)
+    assert len(json.dumps(slim)) < len(json.dumps(m)) and {o["id"] for o in slim["objects"]} == {o["id"] for o in m["objects"]}
     m2, told = run(again, [([sight("keys", SHELF, 0, 0.5, 0.08)], [])])
     json.dumps(m2), json.dumps(told), json.dumps(objects.events(m, m2)), json.dumps(objects.labels(m2))
 

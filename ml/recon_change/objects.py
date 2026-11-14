@@ -859,7 +859,25 @@ def listing(room_map, states=("present", "moved", "missing"), now=None):
     return sorted(rows, key=lambda o: -o["confidence_pct"])
 
 
+def for_worker(room_map):
+    """The part of the map a position fix needs to look at each object's place: what the relay puts
+    in the locate request as "objects" (as it sends "remembered" today). Small: no history."""
+    keep = ("id", "label", "position", "size_m", "state", "source", "moved_from")
+    return {"objects": [{k: o[k] for k in keep if k in o} for o in room_map["objects"] if o["state"] != "unconfirmed" or o.get("source") == "inventory"]}
+
+
 # ----------------------------------------------------------------------------- in the worker (numpy, items.py)
+def find(detector, picture, limit=None, labels=None, tiles=None):
+    """Every box of the household vocabulary in one picture, with the loaded detector of items.py
+    (items.load()): one pass, whatever the number of labels. [{"name", "score", "box"}], best first,
+    down to `limit` (LIMIT_CONFIRM: the weakest box update() uses)."""
+    import items
+
+    labels = list(VOCABULARY) if labels is None else list(labels)
+    raw = detector.detect(picture, all_phrases(labels), tiles)
+    return items.merge(raw, labels, LIMIT_CONFIRM if limit is None else limit, phrases=phrases_for)
+
+
 def lift(found, r, q, valid, window, room, state="found", base=None, near=None):
     """Detections of frame q of a reconstruction -> the same, on the room map and with a size.
     found: [{"name", "score", "box"}] as items.Detector.find / items.merge give them. Placement is

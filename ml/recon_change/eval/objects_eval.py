@@ -20,6 +20,7 @@ the event sheets this script writes (before | after).
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -33,6 +34,7 @@ import objects  # noqa: E402
 import recon_change as rc  # noqa: E402
 
 T0 = 1_800_000_000.0
+SECONDS = {}  # how long the logic took, per call
 SIZES = [(50, 200, "small"), (200, 800, "medium"), (800, None, "large")]  # region sizes of eval/run_bench.py
 WINDOW = (0.0, 0.0, 1.0, 1.0)  # the detector's picture and the model's frame show the same (16:9 both)
 
@@ -160,6 +162,7 @@ def run_updates(room_map, fixes, folder, phrases, args, picture_shape, record=No
     for k, fix in enumerate(fixes):
         found = detections(folder / "det", fix.stem, phrases, args.limit_confirm)
         state = fix.info["state"]
+        t0 = time.time()
         seen = objects.lift(found, fix.r, fix.q, fix.valid, WINDOW, fix.room, state,
                             base=fix.base if fix.full and not args.no_votes else None, near=fix.near)
         checked = [] if state == "lost" else objects.visibility(room_map, fix.r, fix.q, fix.valid, WINDOW, fix.room, picture_shape)
@@ -167,10 +170,13 @@ def run_updates(room_map, fixes, folder, phrases, args, picture_shape, record=No
             c.update((verdicts or {}).get(fix.stem, {}).get(c["id"], {}))
         if record is not None:
             record.append((fix, seen, checked))
+        t1 = time.time()
         room_map, new = objects.update(room_map, seen, {"state": state, "position": fix.info["position"], "heading_deg": fix.info["heading_deg"],
                                                         "checked": checked}, now=T0 + 600 + 5 * k, limit_confirm=args.limit_confirm,
                                        limit_new=args.limit_new, report_pct=args.report_pct, use_depth=not args.no_depth, use_spot=not args.no_spot)
         told += new
+        SECONDS.setdefault("place_and_look", []).append(t1 - t0)  # objects.lift + objects.visibility (numpy, in the worker)
+        SECONDS.setdefault("update", []).append(time.time() - t1)  # objects.update (plain Python, in the relay)
     return room_map, told
 
 
@@ -204,7 +210,9 @@ def main():
     summary = {"scene": args.scene, "settings": {k: v for k, v in vars(args).items() if k not in ("dump", "out", "labels")}}
 
     # ---- 1. inventory
+    t0 = time.time()
     room_map, r, valid, room = build_inventory(folder, meta, args.limit_inventory, args.fine)
+    summary["seconds_inventory_logic"] = round(time.time() - t0, 2)  # reading the saved boxes, placing, fusing, counting clear looks
     objs = room_map["objects"]
     shown = [o for o in objs if o["state"] == "present"]
     summary["inventory"] = {"boxes": room_map["boxes"], "placed": room_map["sightings"], "objects": len(shown),
@@ -404,6 +412,8 @@ def main():
                     table.setdefault(key, {"right": 0, "duplicate": 0, "wrong": 0})[v] += 1
         summary["inventory"]["by_eye"] = table
         print("inventory by eye, per confidence:", json.dumps(table))
+    summary["seconds_per_fix_logic"] = {k: round(float(np.median(v)), 4) for k, v in SECONDS.items()}
+    print(f"logic alone: inventory {summary['seconds_inventory_logic']} s; per fix {summary['seconds_per_fix_logic']} s (median)")
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     (out / "after_map.json").write_text(json.dumps(after_map))
     (out / "held_map.json").write_text(json.dumps(held_map))
