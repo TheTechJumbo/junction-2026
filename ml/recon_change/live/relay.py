@@ -1184,9 +1184,16 @@ def main():
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets a phone on the same network reach the relay")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--token", default=secrets.token_urlsafe(9), help="access key; a random one is made if not given")
+    ap.add_argument("--local", metavar="FOLDER", help="no cluster: the gateway runs on this machine and keeps its files in "
+                    "FOLDER; start live/worker.py here too, with BEACON_ROOT set to the same folder (see run_local.sh)")
     args = ap.parse_args()
-    link = Link(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-                 "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, REMOTE])
+    if args.local:  # everything on this machine: the same gateway code, started here instead of over SSH
+        Path(args.local).mkdir(parents=True, exist_ok=True)
+        os.environ["BEACON_ROOT"] = str(Path(args.local).resolve())
+        link = Link([sys.executable, "-u", str(HERE / "gateway.py")])
+    else:
+        link = Link(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                     "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, REMOTE])
     evidence_dir = Path(tempfile.gettempdir()) / "beacon-evidence"
     evidence_dir.mkdir(exist_ok=True)
     event_api, api_token = os.environ.get("EVENT_API_URL"), os.environ.get("EVENT_API_TOKEN")

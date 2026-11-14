@@ -61,7 +61,10 @@ TYPICAL_M = float(os.environ.get("RECON_TYPICAL_M", locate.TYPICAL_M))
 # look into another room, takes about 5 s longer.
 N_LOCATE_RETRY = int(os.environ.get("RECON_LOCATE_RETRY", "0"))
 LANE = "-cpu" if DEVICE == "cpu" else ""  # the CPU worker has its own queue and heartbeat
-QUEUE, BASELINES = ROOT / f"queue{LANE}", ROOT / "baselines"
+# Where the queue, the baselines and the heartbeat live: next to the code on the cluster, or the folder in
+# BEACON_ROOT when the worker and the gateway run on a laptop (the gateway reads the same setting).
+DATA = Path(os.environ.get("BEACON_ROOT") or ROOT)
+QUEUE, BASELINES = DATA / f"queue{LANE}", DATA / "baselines"
 ITEMS = items.wanted()  # RECON_ITEMS: small things to look for in every position fix; empty = off
 ITEM_DETECTOR = {}  # {"model": the loaded detector} or {"error": why it could not be loaded}
 INFO = {}  # what this worker is, filled in at start and attached to every result
@@ -319,7 +322,7 @@ def where(model, job, req):
 def main():
     QUEUE.mkdir(exist_ok=True)
     BASELINES.mkdir(exist_ok=True)
-    stop, alive = ROOT / f"STOP{LANE}", ROOT / f"worker{LANE}.alive"
+    stop, alive = DATA / f"STOP{LANE}", DATA / f"worker{LANE}.alive"
     stop.unlink(missing_ok=True)
     import torch
     if DEVICE == "cpu":
@@ -340,7 +343,7 @@ def main():
             ITEM_DETECTOR["error"] = f"{type(error).__name__}: {error}"[:300]
             INFO["settings"]["items"] = {"model": items.MODEL_ID, "names": ITEMS, "error": ITEM_DETECTOR["error"]}
             print(f"Item detector NOT loaded: {traceback.format_exc()}", flush=True)
-    (ROOT / f"worker{LANE}.json").write_text(json.dumps(INFO))
+    (DATA / f"worker{LANE}.json").write_text(json.dumps(INFO))
     print("worker ready", flush=True)
     while not stop.exists():
         alive.touch()  # heartbeat: the gateway reads this file's age, and reports "offline" when it goes stale

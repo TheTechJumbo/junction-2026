@@ -23,6 +23,7 @@ same (DINOv2 patch features, which VGGT computes anyway) within reach of it.
 """
 import argparse
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,9 +115,14 @@ def load_model(model_id="facebook/VGGT-1B", device=None):
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     t0 = time.time()
-    model = VGGT.from_pretrained(model_id).to(device).eval()
+    model = VGGT.from_pretrained(model_id)
+    # A graphics card with less than 10 GB (a laptop's) cannot hold the weights at full size next to the
+    # work of a pass: keep them at half size there (2.4 GB instead of 4.8). RECON_HALF=1 or 0 overrides.
+    wish = os.environ.get("RECON_HALF", "")
+    half = device == "cuda" and (wish == "1" or (wish != "0" and torch.cuda.get_device_properties(0).total_memory < 10e9))
+    model = (model.half() if half else model).to(device).eval()
     name = torch.cuda.get_device_name(0) if device == "cuda" else f"CPU, {torch.get_num_threads()} threads"
-    print(f"VGGT loaded in {time.time() - t0:.0f} s on {name}", flush=True)
+    print(f"VGGT loaded in {time.time() - t0:.0f} s on {name}{', weights at half size' if half else ''}", flush=True)
     return model
 
 
@@ -146,7 +152,7 @@ def reconstruct(model, frames_bgr, long_side=518):
                     pred = model(images)
             else:
                 pred = model(images)  # plain float32 on a CPU
-            E, K = pose_encoding_to_extri_intri(pred["pose_enc"], images.shape[-2:])
+            E, K = pose_encoding_to_extri_intri(pred["pose_enc"].float(), images.shape[-2:])
     finally:
         hook.remove()
     if on_gpu:
