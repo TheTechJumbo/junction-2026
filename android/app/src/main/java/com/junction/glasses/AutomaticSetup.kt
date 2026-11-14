@@ -6,14 +6,14 @@ import com.junction.glasses.meta.MetaState
 /**
  * Decides the automatic glasses steps for one app launch from the adapter's state. It never polls
  * Meta AI: the registration, consent and glasses-app hand-offs happen at most once per launch, and a
- * connection is attempted at launch and once per return to the foreground. The glasses end a session
- * after a few idle minutes; that is routine, so once a session has started, every later idle end or
- * failure is followed by a quiet reconnect after [IDLE_BACKOFF_MS] (5 s, 10 s, then every 30 s, no cap)
- * while in the foreground. Before any session started, a failure is retried [MAX_RETRIES] times, 10 s
- * apart. A session the glasses drop within seconds of starting is retried [MAX_DROPS] times, then left
- * to the user, so it can never loop. A session refused because the glasses lack this app's Developer
- * Mode glasses app opens Meta AI's install page once per launch instead of retrying (no glasses reset
- * is needed); after returning, it reconnects and retries [MAX_BLOCK_RETRIES] times while Meta AI installs.
+ * connection is attempted at launch and once per return to the foreground. While in the foreground,
+ * these reconnect by themselves after [IDLE_BACKOFF_MS] (5 s, 10 s, then every 30 s, no cap): an idle
+ * end (the glasses end a session after a few idle minutes), glasses that are not awake (off, folded, in
+ * the case), a session dropped within seconds of starting (the backoff grows with each drop in a row),
+ * and, once a session has started, any other failure. Before any session started, other failures are
+ * retried [MAX_RETRIES] times, 10 s apart. A session refused because the glasses lack this app's
+ * Developer Mode glasses app never loops: it opens Meta AI's install page once per launch (no glasses
+ * reset needed), then reconnects on return and re-checks [MAX_BLOCK_RETRIES] times while Meta AI installs.
  * While the SDK reports no glasses at all, nothing is opened or connected automatically.
  */
 internal class AutoGlassesSetup(
@@ -33,8 +33,11 @@ internal class AutoGlassesSetup(
     /** The latest refusal that needs the user (a [com.junction.glasses.meta.SessionOutcome] name); cleared by a started session. */
     var blockedBy: String? = null
         private set
-    /** Sessions kept dropping right after starting; no automatic reconnect until the next return to the foreground. */
-    var dropsExhausted = false
+    /** Sessions dropped right after starting, in a row; reset by an idle end, Connect or the foreground. */
+    var dropStreak = 0
+        private set
+    /** The last attempt found the glasses not awake (off, folded, in the case); reconnecting by itself. */
+    var asleep = false
         private set
     var consentRunning = false
         private set
@@ -57,8 +60,8 @@ internal class AutoGlassesSetup(
     private var failuresSeen = -1
     private var endsSeen = -1
     private var dropsSeen = -1
+    private var asleepSeen = -1
     private var blocksSeen = -1
-    private var dropStreak = 0
     private var blockRetries = 0
     /** A Meta AI page to open as soon as the app is in the foreground with no other hand-off running. */
     private var pageToOpen: Step? = null
@@ -66,29 +69,37 @@ internal class AutoGlassesSetup(
     /** Each return to the foreground may reconnect once, with a fresh retry budget. */
     fun onForeground() {
         connectWanted = true; retryPending = false; retriesUsed = 0; idleAttempts = 0
-        dropStreak = 0; dropsExhausted = false; blockRetries = 0
+        dropStreak = 0; blockRetries = 0
     }
     fun consentFinished() { consentRunning = false }
     fun retryDue() { if (retryPending) { retryPending = false; connectWanted = true } }
     /** The user chose Disconnect: no automatic reconnect until the next return to the foreground. */
-    fun userDisconnected() { connectWanted = false; retryPending = false; idleReconnect = false }
+    fun userDisconnected() { connectWanted = false; retryPending = false; idleReconnect = false; asleep = false }
+    /** The user tapped Connect / reconnect, which connects by itself: fresh budgets, no pending retry, no refusal. */
+    fun userReconnected() {
+        connectWanted = false; retryPending = false; retriesUsed = 0; idleAttempts = 0
+        dropStreak = 0; blockRetries = 0; blockedBy = null; asleep = false; idleReconnect = false
+    }
 
     fun next(state: MetaState, foreground: Boolean, externalFlowPending: Boolean, registrationSettled: Boolean): Step {
         val newFailure = failuresSeen >= 0 && state.sessionFailures > failuresSeen
         val newEnd = endsSeen >= 0 && state.sessionEnds > endsSeen
         val newDrop = dropsSeen >= 0 && state.sessionDrops > dropsSeen
+        val newAsleep = asleepSeen >= 0 && state.sessionAsleep > asleepSeen
         val newBlock = blocksSeen >= 0 && state.sessionBlocks > blocksSeen
         failuresSeen = state.sessionFailures
         endsSeen = state.sessionEnds
         dropsSeen = state.sessionDrops
+        asleepSeen = state.sessionAsleep
         blocksSeen = state.sessionBlocks
         if (state.connection == STARTED) {
-            keepAlive = true; idleReconnect = false; retriesUsed = 0; idleAttempts = 0; lastFailure = null; blockedBy = null
+            keepAlive = true; idleReconnect = false; retriesUsed = 0; idleAttempts = 0; lastFailure = null
+            blockedBy = null; asleep = false
         }
-        if (newFailure || newDrop || newBlock) lastFailure = state.error
+        if (newFailure || newDrop || newAsleep || newBlock) lastFailure = state.error
         if (newBlock) {
             // Retrying cannot fix this: open Meta AI's page once, and never feed the quiet reconnect loop.
-            blockedBy = state.blocker; idleReconnect = false; retryPending = false; connectWanted = false
+            blockedBy = state.blocker; idleReconnect = false; asleep = false; retryPending = false; connectWanted = false
             val page = when (state.blocker) {
                 GLASSES_APP_UPDATE -> Step.OPEN_GLASSES_APP_UPDATE
                 FIRMWARE_UPDATE -> Step.OPEN_FIRMWARE_UPDATE
@@ -101,13 +112,21 @@ internal class AutoGlassesSetup(
                 return Step.RETRY_LATER
             }
         } else if (newDrop) {
-            idleReconnect = false; retryPending = false; connectWanted = false
+            // Drops reach STARTED, which resets the idle backoff, so they keep their own count.
+            idleReconnect = false; asleep = false; connectWanted = false
             dropStreak++
-            if (dropStreak > MAX_DROPS) dropsExhausted = true
-            else { retryDelayMs = FAILURE_RETRY_MS; retryPending = true; return Step.RETRY_LATER }
+            retryDelayMs = IDLE_BACKOFF_MS[minOf(dropStreak - 1, IDLE_BACKOFF_MS.size - 1)]
+            retryPending = true
+            return Step.RETRY_LATER
+        } else if (newAsleep) {
+            idleReconnect = false; asleep = true
+            retryDelayMs = IDLE_BACKOFF_MS[minOf(idleAttempts, IDLE_BACKOFF_MS.size - 1)]
+            idleAttempts++
+            retryPending = true; connectWanted = false
+            return Step.RETRY_LATER
         } else if (newEnd || (newFailure && keepAlive)) {
             if (newEnd) dropStreak = 0
-            keepAlive = true; idleReconnect = true
+            keepAlive = true; idleReconnect = true; asleep = false
             retryDelayMs = IDLE_BACKOFF_MS[minOf(idleAttempts, IDLE_BACKOFF_MS.size - 1)]
             idleAttempts++
             retryPending = true; connectWanted = false
@@ -142,8 +161,8 @@ internal class AutoGlassesSetup(
         const val MAX_RETRIES = 3
         const val FAILURE_RETRY_MS = 10_000L
         val IDLE_BACKOFF_MS = longArrayOf(5_000L, 10_000L, 30_000L)
-        /** Instant drops retried before giving up until the next return to the foreground. */
-        const val MAX_DROPS = 3
+        /** Drops in a row after which the card suggests reinstalling the glasses app in Meta AI. */
+        const val DROP_HINT_AFTER = 3
         /** Reconnects after returning from Meta AI's glasses app page, while its install finishes. */
         const val MAX_BLOCK_RETRIES = 2
         const val BLOCK_RETRY_MS = 15_000L

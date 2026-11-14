@@ -57,6 +57,8 @@ data class MetaState(
     val sessionEnds: Int = 0,
     /** Counts sessions the glasses ended within [GlassesSessions.STABLE_MS] of starting, or refused outright. */
     val sessionDrops: Int = 0,
+    /** Counts sessions that failed because the glasses were asleep: off, folded, in the case or unreachable. */
+    val sessionAsleep: Int = 0,
     /** Counts sessions refused for a reason retrying cannot fix; [blocker] names the latest one. */
     val sessionBlocks: Int = 0,
     /** A [SessionOutcome] name that needs the user (for example GLASSES_APP_UPDATE); cleared when a session starts. */
@@ -72,7 +74,12 @@ internal enum class SessionOutcome {
     IDLE_END,
     /** The glasses ended or refused the session within [GlassesSessions.STABLE_MS] of starting. */
     DROPPED,
-    /** The session timed out, could not be created, or a running one failed. */
+    /**
+     * The glasses were not awake: taken off, folded, in the case or out of reach (START_ERROR_DEVICE_UNAVAILABLE,
+     * seen on RB Meta 0076 from 23:17 to 23:20 while they were off), or they never answered.
+     */
+    ASLEEP,
+    /** The session could not be created, or a running one failed. */
     FAILED,
     /**
      * DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED: the glasses lack this app's Developer Mode glasses app
@@ -95,6 +102,10 @@ internal object GlassesSessions {
     /** Errors that describe one capability or a soft warning; the session itself keeps running. */
     private val NOT_FATAL = setOf("DWA_OUT_OF_STU_RANGE", "CAPABILITY_ALREADY_ADDED", "CAPABILITY_NOT_FOUND", "CAPABILITY_DENIED")
     private val ROUTINE_END = setOf("SESSION_ENDED_BY_DEVICE", "SESSION_IDLE")
+    /** The glasses are off, folded, in the case or out of reach; the SDK may also name it *_UNAVAILABLE. */
+    private val NOT_AWAKE = setOf("DEVICE_DISCONNECTED", "NO_ELIGIBLE_DEVICE")
+    /** What the session start timeout records: the glasses never answered. */
+    const val NO_ANSWER = "NO_ANSWER"
 
     fun endsSession(error: String): Boolean = error !in NOT_FATAL
 
@@ -103,9 +114,10 @@ internal object GlassesSessions {
      * how long it was STARTED (null when it never started), [compatibility] the device's DeviceCompatibility.
      */
     fun classify(error: String?, startedForMs: Long?, compatibility: String? = null): SessionOutcome = when {
-        error == "DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED" -> SessionOutcome.GLASSES_APP_UPDATE
+        error != null && "DAT_APP" in error -> SessionOutcome.GLASSES_APP_UPDATE
         error == "INSUFFICIENT_SDK_VERSION" || compatibility == "SDK_UPDATE_REQUIRED" -> SessionOutcome.SDK_UPDATE
         compatibility == "DEVICE_UPDATE_REQUIRED" -> SessionOutcome.FIRMWARE_UPDATE
+        error != null && (error in NOT_AWAKE || error == NO_ANSWER || error.endsWith("UNAVAILABLE")) -> SessionOutcome.ASLEEP
         startedForMs == null -> if (error == null || error in ROUTINE_END) SessionOutcome.DROPPED else SessionOutcome.FAILED
         startedForMs < STABLE_MS -> SessionOutcome.DROPPED
         error == null || error in ROUTINE_END -> SessionOutcome.IDLE_END
@@ -113,15 +125,17 @@ internal object GlassesSessions {
     }
 
     fun message(outcome: SessionOutcome, error: String?, description: String?, startedForMs: Long?): String {
-        val reason = listOfNotNull(description?.takeIf { it.isNotBlank() }, error?.takeIf { it != description })
+        val reason = listOfNotNull(description?.takeIf { it.isNotBlank() }, error?.takeIf { it != description && it != NO_ANSWER })
             .joinToString(" · ").ifEmpty { "no reason given" }
         return when (outcome) {
-            SessionOutcome.GLASSES_APP_UPDATE -> "The glasses are missing this app's Developer Mode glasses app, or it is out of date " +
-                "($error). Glasses firmware updates do not install it. Meta AI installs it in a few seconds: " +
-                "tap Install glasses app in Meta AI. No reset needed."
+            SessionOutcome.GLASSES_APP_UPDATE -> "Enable Developer Mode for these glasses in Meta AI, then tap the glasses " +
+                "(App info → Developer mode → the glasses row): Meta AI installs this app's glasses app in a few seconds. " +
+                "Firmware updates do not install it, and no glasses reset is needed ($error)."
             SessionOutcome.FIRMWARE_UPDATE -> "The glasses firmware is too old for this app. Update the glasses in Meta AI."
             SessionOutcome.SDK_UPDATE -> "These glasses need a newer build of this app: its Meta SDK is too old ($reason)."
             SessionOutcome.IDLE_END -> "Glasses ended the idle session. They reconnect when needed."
+            SessionOutcome.ASLEEP -> "Glasses not awake: unfold or put them on, or open Meta AI. Reconnecting automatically" +
+                (if (error == NO_ANSWER) " (no answer in 20 s)." else " ($reason).")
             SessionOutcome.DROPPED -> if (startedForMs == null) "Glasses refused the session before it started: $reason."
                 else "Glasses dropped the session ${startedForMs / 1000} s after it started: $reason."
             SessionOutcome.FAILED -> "Glasses session failed: $reason."
@@ -177,16 +191,25 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     /** Records how a session ended, with the time, so the card says why the glasses dropped. */
     private fun record(outcome: SessionOutcome, message: String) {
         val text = "${LocalTime.now().format(CLOCK)} · $message"
+        lastFailedEndAt = if (outcome == SessionOutcome.IDLE_END) null else SystemClock.elapsedRealtime()
         mutableState.update {
             when (outcome) {
                 SessionOutcome.IDLE_END -> it.copy(error = text, sessionEnds = it.sessionEnds + 1)
                 SessionOutcome.DROPPED -> it.copy(error = text, sessionDrops = it.sessionDrops + 1)
+                SessionOutcome.ASLEEP -> it.copy(error = text, sessionAsleep = it.sessionAsleep + 1)
                 SessionOutcome.FAILED -> it.copy(error = text, sessionFailures = it.sessionFailures + 1)
                 else -> it.copy(error = text, sessionBlocks = it.sessionBlocks + 1, blocker = outcome.name)
             }
         }
     }
     private fun sessionFailed(message: String) = record(SessionOutcome.FAILED, message)
+    /**
+     * When the last session failed, dropped or was refused (elapsedRealtime); null after an idle end or a
+     * start. On-demand connects (camera, listening, the live camera's retries) wait [ON_DEMAND_GAP_MS] after
+     * it, so a caller retrying every 2 s cannot override the automatic reconnect pacing or a refusal.
+     */
+    private var lastFailedEndAt: Long? = null
+    private var reconnecting: Job? = null
     private var sessionStarted = false
     /** elapsedRealtime when the current session reached STARTED; null before that. */
     private var startedAt: Long? = null
@@ -246,7 +269,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
                     mutableState.update { it.copy(connection = status.name) }
                     if (status != DeviceSessionState.STOPPED) sessionActive = true
                     if (status == DeviceSessionState.STARTED && startedAt == null) {
-                        sessionStarted = true; startedAt = SystemClock.elapsedRealtime()
+                        sessionStarted = true; startedAt = SystemClock.elapsedRealtime(); lastFailedEndAt = null
                         mutableState.update { it.copy(blocker = null) }
                     }
                     if (status == DeviceSessionState.STARTED && state.value.displayEnabled && display == null) attachDisplay(connected, listeners)
@@ -267,7 +290,8 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
                 delay(20_000)
                 if (!sessionStarted && session === connected) {
                     Log.i(TAG, "start timed out")
-                    sessionFailed("Glasses connection timed out. Put on the glasses and retry."); disconnect()
+                    record(SessionOutcome.ASLEEP, GlassesSessions.message(SessionOutcome.ASLEEP, GlassesSessions.NO_ANSWER, null, null))
+                    disconnect()
                 }
             }
         }.onFailure { _, _ -> sessionFailed("Cannot create glasses session. Check pairing and SDK/device compatibility.") }
@@ -305,6 +329,36 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         catch (_: Exception) { metaAiPagePending = false; fail("Could not open Meta AI. In Meta AI open App info → Developer mode and tap the glasses.") }
     }
 
+    /**
+     * The Connect / reconnect button: drops any stale or stuck session and the recorded refusal, then
+     * starts a fresh session, never adding one on top of an old one. Taps in a row restart it once.
+     */
+    fun reconnect() {
+        Log.i(TAG, "manual reconnect")
+        reconnecting?.cancel()
+        val hadSession = session != null
+        disconnect()
+        lastFailedEndAt = null
+        mutableState.update { it.copy(blocker = null) }
+        reconnecting = scope.launch {
+            // Give the SDK a moment to release the old session before asking for a new one.
+            if (hadSession) delay(RECONNECT_GAP_MS)
+            connect()
+        }
+    }
+
+    /** False for a while after a failed, dropped or refused session, and while a refusal needs the user. */
+    private fun onDemandConnectAllowed(): Boolean {
+        if (state.value.blocker != null) return false
+        val failedAt = lastFailedEndAt ?: return true
+        return SystemClock.elapsedRealtime() - failedAt >= ON_DEMAND_GAP_MS
+    }
+
+    /** The message for an on-demand feature that found no session, keeping a recorded reason visible. */
+    private fun notConnected(feature: String) {
+        if (lastFailedEndAt == null && state.value.blocker == null) fail("Connect glasses before $feature.")
+    }
+
     /** Opens Meta AI's glasses firmware update page (DeviceCompatibility DEVICE_UPDATE_REQUIRED). */
     fun openFirmwareUpdate() {
         if (!state.value.initialized) { fail("Initialize glasses first."); return }
@@ -323,6 +377,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
      */
     suspend fun ensureStarted(timeoutMs: Long = 20_000): Boolean {
         if (session != null && state.value.connection == "STARTED") return true
+        if (session == null && !onDemandConnectAllowed()) return false
         connect()
         if (session == null) return false
         val reached = withTimeoutOrNull(timeoutMs) {
@@ -419,7 +474,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         try {
             // Connect on demand: the glasses end idle sessions by themselves.
             val connected = (if (ensureStarted()) session else null)
-                ?: run { fail("Connect glasses before starting the camera."); return@runCommand }
+                ?: run { notConnected("starting the camera"); return@runCommand }
             if (generation != cameraGeneration) return@runCommand
             if (!permission(Permission.CAMERA)) { fail("Glasses camera permission was not granted."); return@runCommand }
             if (session !== connected || generation != cameraGeneration) return@runCommand
@@ -510,7 +565,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         try {
             // Connect on demand: the glasses end idle sessions by themselves.
             val connected = (if (ensureStarted()) session else null)
-                ?: run { fail("Connect glasses before listening."); return@runCommand }
+                ?: run { notConnected("listening"); return@runCommand }
             if (generation != listenGeneration || !listeningRequested) return@runCommand
             if (!permission(Permission.MICROPHONE)) { fail("Glasses microphone permission was not granted."); return@runCommand }
             if (session !== connected || generation != listenGeneration || !listeningRequested) return@runCommand
@@ -579,6 +634,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     }
 
     fun disconnect() {
+        reconnecting?.cancel(); reconnecting = null
         stopGrace?.cancel(); stopGrace = null
         cameraDeadline?.cancel(); cameraDeadline = null
         listeningRequested = false; motionRequested = false; listenGeneration++; cameraGeneration++
@@ -598,6 +654,8 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         /** Logcat tag for session states, SDK error names and outcomes. No audio, images, tokens or addresses. */
         const val TAG = "GlassesSession"
         const val STOP_GRACE_MS = 750L
+        const val RECONNECT_GAP_MS = 500L
+        const val ON_DEMAND_GAP_MS = 10_000L
         val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
         /** The constant's name for SDK enums (DeviceSessionError, DeviceCompatibility); toString otherwise. */
         fun enumName(value: Any?): String = (value as? Enum<*>)?.name ?: value.toString()

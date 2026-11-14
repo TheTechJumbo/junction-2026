@@ -179,41 +179,72 @@ class AutoGlassesSetupTest {
         assertFalse(sdk.glassesAppPageOpened)
     }
 
-    @Test fun instantDropsRetryThreeTimesThenStopEvenAfterASessionWorked() {
+    @Test fun instantDropsKeepReconnectingWithAGrowingBackoffThatStartedDoesNotReset() {
         val setup = connectedSetup()
-        // A session that worked earlier makes later failures retry forever; drops must still stop.
-        assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STARTED"))
-        for (drops in 1..AutoGlassesSetup.MAX_DROPS) {
+        val delays = mutableListOf<Long>()
+        for (drops in 1..5) {
+            // Each dropped session reached STARTED for a moment first.
+            assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STARTED", drops = drops - 1))
             assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = drops, error = "dropped"))
-            assertEquals(AutoGlassesSetup.FAILURE_RETRY_MS, setup.retryDelayMs)
+            delays += setup.retryDelayMs
             assertFalse(setup.idleReconnect)
+            assertEquals(drops, setup.dropStreak)
             setup.retryDue()
             assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = drops))
-            assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STARTED", drops = drops))
         }
-        assertEquals(Step.WAIT, setup.at("REGISTERED", drops = 4, error = "dropped"))
-        assertTrue(setup.dropsExhausted)
+        assertEquals(listOf(5_000L, 10_000L, 30_000L, 30_000L, 30_000L), delays)
         assertEquals("dropped", setup.lastFailure)
+        // A session that ran and then ended idle proves the glasses work again.
+        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = 5, ends = 1))
+        assertEquals(0, setup.dropStreak)
         setup.retryDue()
-        assertEquals(Step.WAIT, setup.at("REGISTERED", drops = 4))
-        setup.onForeground()
-        assertFalse(setup.dropsExhausted)
-        assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = 4))
+        assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = 5, ends = 1))
+        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = 6, ends = 1))
+        assertEquals(5_000L, setup.retryDelayMs)
     }
 
-    @Test fun anIdleEndAfterAWorkingSessionResetsTheDropCount() {
+    @Test fun glassesNotAwakeReconnectAutomaticallyWithBackoffAndNoCap() {
+        // 23:17 to 23:20 on RB Meta 0076: taken off, then START_ERROR_DEVICE_UNAVAILABLE on every connect.
         val setup = connectedSetup()
-        repeat(AutoGlassesSetup.MAX_DROPS) { index ->
-            assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = index + 1, ends = index))
+        val delays = mutableListOf<Long>()
+        for (asleep in 1..6) {
+            assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", asleep = asleep, error = "not awake"))
+            assertTrue(setup.asleep)
+            delays += setup.retryDelayMs
             setup.retryDue()
-            assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = index + 1, ends = index))
-            // That session then ran for minutes and ended idle.
-            assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = index + 1, ends = index + 1))
-            setup.retryDue()
-            assertEquals(Step.CONNECT, setup.at("REGISTERED", drops = index + 1, ends = index + 1))
+            assertEquals(Step.CONNECT, setup.at("REGISTERED", asleep = asleep))
         }
-        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", drops = 4, ends = 3))
-        assertFalse(setup.dropsExhausted)
+        assertEquals(listOf(5_000L, 10_000L, 30_000L, 30_000L, 30_000L, 30_000L), delays)
+        // Put back on: the next attempt starts, and the backoff starts over.
+        assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "STARTED", asleep = 6))
+        assertFalse(setup.asleep)
+        assertNull(setup.lastFailure)
+        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", asleep = 7))
+        assertEquals(5_000L, setup.retryDelayMs)
+    }
+
+    @Test fun glassesNotAwakeWaitForTheForegroundToReconnect() {
+        val setup = connectedSetup()
+        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", asleep = 1, foreground = false))
+        setup.retryDue()
+        assertEquals(Step.WAIT, setup.at("REGISTERED", asleep = 1, foreground = false))
+        assertEquals(Step.CONNECT, setup.at("REGISTERED", asleep = 1))
+    }
+
+    @Test fun connectButtonStartsCleanWithoutAPendingRetryOrRefusal() {
+        val setup = connectedSetup()
+        assertEquals(Step.OPEN_GLASSES_APP_UPDATE, setup.at("REGISTERED", blocks = 1, blocker = GLASSES_APP))
+        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", blocks = 1, drops = 1))
+        setup.userReconnected()
+        assertNull(setup.blockedBy)
+        assertFalse(setup.retryPending || setup.asleep)
+        assertEquals(0, setup.dropStreak)
+        // The button connects by itself; the automatic steps add no second session.
+        assertEquals(Step.WAIT, setup.at("REGISTERED", connection = "CONNECTING", blocks = 1, drops = 1))
+        assertEquals(Step.WAIT, setup.at("REGISTERED", blocks = 1, drops = 1))
+        // Its outcome is handled like any other: here the glasses are asleep.
+        assertEquals(Step.RETRY_LATER, setup.at("REGISTERED", blocks = 1, drops = 1, asleep = 1))
+        assertEquals(5_000L, setup.retryDelayMs)
     }
 
     @Test fun aStoppingSessionIsNotReconnectedOverItsOutcomeDecides() {
@@ -249,12 +280,13 @@ class AutoGlassesSetupTest {
         pending: Boolean = false,
         devices: Int = 1,
         drops: Int = 0,
+        asleep: Int = 0,
         blocks: Int = 0,
         blocker: String? = null,
     ): Step = next(
         MetaState(initialized = initialized, registration = registration, connection = connection, error = error,
             sessionFailures = failures, sessionEnds = ends, deviceCount = devices,
-            sessionDrops = drops, sessionBlocks = blocks, blocker = blocker),
+            sessionDrops = drops, sessionAsleep = asleep, sessionBlocks = blocks, blocker = blocker),
         foreground, pending, settled,
     )
 

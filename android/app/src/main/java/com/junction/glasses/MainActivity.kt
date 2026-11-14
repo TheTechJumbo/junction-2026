@@ -281,7 +281,10 @@ class MainActivity : ComponentActivity() {
         deviceStatus = label("Not initialized. Enable Developer Mode in Meta AI and pair the glasses.")
         button("Enable glasses access") { permissions.launch(PHONE_PERMISSIONS) }
         button("Register with Meta AI") { glasses.register() }
-        button("Connect / reconnect glasses", primary = true) { glasses.connect() }
+        button("Connect / reconnect glasses", primary = true) {
+            // Always a clean start: drop any stale session and pending retry, then connect once.
+            cancelAutomaticRetry(); autoGlasses.userReconnected(); glasses.reconnect()
+        }
         button("Install glasses app in Meta AI") { glasses.openGlassesAppUpdate() }
         note("If the glasses connect and drop at once, Meta AI may need to install this app's Developer Mode glasses app. Glasses firmware updates do not include it, and no glasses reset is needed.")
         diagnosticStatus = label("Hardware tests: not run. A successful SDK call still needs confirmation on the glasses.")
@@ -628,11 +631,12 @@ class MainActivity : ComponentActivity() {
             autoGlasses.consentRunning -> "asking for glasses camera and microphone consent in Meta AI…"
             s.connection == AutoGlassesSetup.STARTED -> "connected."
             autoGlasses.blockedBy == AutoGlassesSetup.GLASSES_APP_UPDATE ->
-                "the glasses need this app's Developer Mode glasses app. Install it in Meta AI (opened once automatically; tap Install glasses app in Meta AI to open it again), then come back. No glasses reset needed."
+                "enable Developer Mode for these glasses in Meta AI, then tap the glasses to install this app's glasses app (Meta AI was opened once automatically; Install glasses app in Meta AI opens it again). Then come back. No glasses reset needed."
             autoGlasses.blockedBy == AutoGlassesSetup.FIRMWARE_UPDATE -> "the glasses firmware is too old for this app. Update it in Meta AI, then tap Connect / reconnect glasses."
             autoGlasses.blockedBy == AutoGlassesSetup.SDK_UPDATE -> "these glasses need a newer build of this app (Meta SDK too old)."
-            autoGlasses.dropsExhausted ->
-                "the glasses dropped the session right after it started ${AutoGlassesSetup.MAX_DROPS + 1} times, so automatic reconnects stopped. Try Install glasses app in Meta AI, then Connect / reconnect glasses."
+            autoGlasses.asleep -> "Glasses not awake: unfold or put them on, or open Meta AI. Reconnecting automatically."
+            autoGlasses.dropStreak > 0 -> "the glasses dropped the session right after it started (${autoGlasses.dropStreak} in a row). Reconnecting automatically." +
+                (if (autoGlasses.dropStreak >= AutoGlassesSetup.DROP_HINT_AFTER) " If it keeps happening, tap Install glasses app in Meta AI." else "")
             autoGlasses.idleReconnect -> "Glasses idle, reconnecting… (the glasses end idle sessions; this is normal)"
             autoGlasses.retryPending -> "Waiting for glasses: put them on / unfold them. Retry ${autoGlasses.retriesUsed} of ${AutoGlassesSetup.MAX_RETRIES} in a few seconds."
             s.connection != "DISCONNECTED" -> "connecting (${s.connection}). Waiting for glasses: put them on / unfold them."
@@ -659,7 +663,8 @@ class MainActivity : ComponentActivity() {
             s.connection == AutoGlassesSetup.STARTED -> paintChip(glassesChip, ChipLevel.GOOD, "Glasses STARTED")
             s.blocker == AutoGlassesSetup.GLASSES_APP_UPDATE -> paintChip(glassesChip, ChipLevel.BAD, "Glasses app missing")
             s.blocker != null -> paintChip(glassesChip, ChipLevel.BAD, "Glasses need update")
-            automaticSetup && autoGlasses.dropsExhausted -> paintChip(glassesChip, ChipLevel.BAD, "Glasses keep dropping")
+            automaticSetup && autoGlasses.asleep -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses asleep")
+            automaticSetup && autoGlasses.dropStreak >= AutoGlassesSetup.DROP_HINT_AFTER -> paintChip(glassesChip, ChipLevel.BAD, "Glasses keep dropping")
             automaticSetup && autoGlasses.idleReconnect -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses idle, reconnecting")
             s.connection == "DISCONNECTED" && !autoGlasses.retryPending -> paintChip(glassesChip, ChipLevel.BAD, "Glasses DISCONNECTED")
             else -> paintChip(glassesChip, ChipLevel.WAIT, "Glasses ${s.connection}")

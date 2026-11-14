@@ -14,15 +14,29 @@ class GlassesSessionsTest {
         }
         val text = GlassesSessions.message(SessionOutcome.GLASSES_APP_UPDATE, "DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED",
             "Your glasses need an update.", 0L)
-        assertTrue(text, text.contains("Developer Mode glasses app"))
-        assertTrue(text, text.contains("No reset needed"))
+        assertTrue(text, text.startsWith("Enable Developer Mode for these glasses in Meta AI, then tap the glasses"))
+        assertTrue(text, text.contains("no glasses reset is needed"))
         assertFalse("not an idle end", text.contains("idle", ignoreCase = true))
+    }
+
+    @Test fun glassesThatAreOffFoldedOrSilentAreAsleepAndNeverDrops() {
+        // 23:17 to 23:20: START_ERROR_DEVICE_UNAVAILABLE on every connect while the glasses were off.
+        for (name in listOf("DEVICE_UNAVAILABLE", "DWA_UNAVAILABLE", "DEVICE_DISCONNECTED", "NO_ELIGIBLE_DEVICE", GlassesSessions.NO_ANSWER)) {
+            for (startedFor in listOf(null, 300L, 600_000L)) {
+                assertEquals("$name after $startedFor", SessionOutcome.ASLEEP, GlassesSessions.classify(name, startedFor))
+            }
+        }
+        assertFalse(SessionOutcome.ASLEEP.needsUser)
+        assertEquals("Glasses not awake: unfold or put them on, or open Meta AI. Reconnecting automatically (no answer in 20 s).",
+            GlassesSessions.message(SessionOutcome.ASLEEP, GlassesSessions.NO_ANSWER, null, null))
+        assertEquals("Glasses not awake: unfold or put them on, or open Meta AI. Reconnecting automatically (DEVICE_UNAVAILABLE).",
+            GlassesSessions.message(SessionOutcome.ASLEEP, "DEVICE_UNAVAILABLE", null, null))
     }
 
     @Test fun sessionsEndedWithinSecondsAreDropsNotIdleEnds() {
         assertEquals(SessionOutcome.DROPPED, GlassesSessions.classify("SESSION_ENDED_BY_DEVICE", 300L))
         assertEquals(SessionOutcome.DROPPED, GlassesSessions.classify(null, GlassesSessions.STABLE_MS - 1))
-        assertEquals(SessionOutcome.DROPPED, GlassesSessions.classify("DEVICE_DISCONNECTED", 2_000L))
+        assertEquals(SessionOutcome.DROPPED, GlassesSessions.classify("UNEXPECTED_ERROR", 2_000L))
         // Ended before STARTED with no specific reason: the glasses refused it.
         assertEquals(SessionOutcome.DROPPED, GlassesSessions.classify("SESSION_ENDED_BY_DEVICE", null))
         assertEquals(SessionOutcome.DROPPED, GlassesSessions.classify(null, null))
@@ -39,7 +53,7 @@ class GlassesSessionsTest {
         assertEquals(SessionOutcome.IDLE_END, GlassesSessions.classify(null, GlassesSessions.STABLE_MS))
         assertFalse(SessionOutcome.IDLE_END.needsUser)
         // Any other error after a long session is a failure the reconnect loop handles.
-        assertEquals(SessionOutcome.FAILED, GlassesSessions.classify("DEVICE_DISCONNECTED", minutes))
+        assertEquals(SessionOutcome.FAILED, GlassesSessions.classify("UNEXPECTED_ERROR", minutes))
         assertEquals(SessionOutcome.FAILED, GlassesSessions.classify("THERMAL_CRITICAL", null))
     }
 
