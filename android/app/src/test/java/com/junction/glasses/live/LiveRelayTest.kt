@@ -1,8 +1,10 @@
 package com.junction.glasses.live
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import okhttp3.mockwebserver.MockResponse
@@ -87,10 +89,126 @@ class LiveRelayTest {
         }
     }
 
+    @Test fun repliesAreFollowedByTheNextRequestWithoutAnyDelay() {
+        runBlocking {
+            var now = 0L
+            val step = 80_000_000L // the relay's quick match: 80 ms
+            val captureTimes = mutableListOf<Long>()
+            val replyTimes = mutableListOf<Long>()
+            val pauses = mutableListOf<Long>()
+            val updates = mutableListOf<LiveSnapshot<Int>>()
+            val done = CompletableDeferred<Unit>()
+            val total = 150 // 12 s of replies, more than the 10 s rate window
+            val loop = LiveRelayLoop<Int>(this, capture = { captureTimes += now; captureTimes.size }, post = {
+                now += step
+                replyTimes += now
+                if (replyTimes.size > total) { done.complete(Unit); awaitCancellation() }
+                found
+            }, onUpdate = { updates += it }, pause = { pauses += it }, clock = { now })
+            loop.start()
+            done.await()
+            loop.stop()
+            assertTrue(pauses.isEmpty())
+            // Every capture after the first happens at the very moment of the previous reply.
+            assertEquals(replyTimes.take(total), captureTimes.drop(1).take(total))
+            val last = updates.last { it.reply != null }
+            assertEquals(0.08, last.roundTripSeconds!!, 1e-9)
+            assertEquals(12.5, last.framesPerSecond!!, 1e-9)
+            assertEquals(12.5, updates.first { it.reply != null }.framesPerSecond!!, 1e-9)
+        }
+    }
+
+    @Test fun framesOfferedWhileNobodyWaitsAreDroppedSoNothingQueues() {
+        runBlocking {
+            var now = 0L
+            val slot = FrameSlot<Int> { now }
+            assertNull(slot.wantedSince())
+            repeat(100) { assertFalse(slot.offer(it)) }
+            now = 42L
+            val taken = async { slot.take() }
+            yield()
+            assertEquals(42L, slot.wantedSince())
+            assertTrue(slot.offer(100))
+            assertFalse(slot.offer(101))
+            assertEquals(100, taken.await())
+            assertNull(slot.wantedSince())
+            val cancelled = launch { slot.take() }
+            yield()
+            assertNotNull(slot.wantedSince())
+            cancelled.cancel()
+            yield()
+            assertNull(slot.wantedSince())
+            val failing = async { runCatching { slot.take() } }
+            yield()
+            slot.fail(CameraFailure("A camera frame could not be read."))
+            assertEquals("A camera frame could not be read.", failing.await().exceptionOrNull()?.message)
+        }
+    }
+
+    @Test fun theLoopOnlySendsFramesTheCameraDeliveredAfterEachReply() {
+        runBlocking {
+            val slot = FrameSlot<Int>()
+            var camera = 0
+            val posted = mutableListOf<Int>()
+            val done = CompletableDeferred<Unit>()
+            val loop = LiveRelayLoop<Int>(this, capture = { slot.take() }, post = { frame ->
+                posted += frame
+                repeat(5) { slot.offer(++camera) } // delivered while the request is in flight: dropped
+                if (posted.size == 3) { done.complete(Unit); awaitCancellation() }
+                found
+            }, onUpdate = {})
+            loop.start()
+            while (!done.isCompleted) {
+                yield()
+                slot.offer(++camera) // the camera keeps delivering frames
+            }
+            loop.stop()
+            assertEquals(listOf(1, 7, 13), posted)
+        }
+    }
+
+    @Test fun shakyFramesWaitForASteadierOneButNeverMoreThanOneSecond() {
+        val ms = 1_000_000L
+        val slot = FrameSlot<Int> { 1_000 * ms }
+        val picker = FramePicker(slot, SteadyGate())
+        assertFalse(picker.wants(1_000 * ms)) // nobody waits: not even worth encoding
+        runBlocking {
+            val taken = async { slot.take() }
+            yield()
+            assertTrue(picker.wants(1_000 * ms)) // no gyroscope readings: never blocks
+            val gate = SteadyGate()
+            val shaky = FramePicker(slot, gate)
+            for (t in 1_000L..1_500L step 10L) gate.record(t * ms, 2.0f, 0.5f, 0f) // turning at about 2 rad/s
+            assertFalse(shaky.wants(1_500 * ms))
+            for (t in 1_510L..1_990L step 10L) gate.record(t * ms, 2.0f, 0.5f, 0f)
+            assertFalse(shaky.wants(1_990 * ms))
+            assertEquals(2, shaky.shakySkipped)
+            gate.record(2_000 * ms, 2.0f, 0.5f, 0f)
+            assertTrue(shaky.wants(2_000 * ms)) // waited 1 s: send anyway
+            for (t in 2_010L..2_200L step 10L) gate.record(t * ms, 0.3f, 0f, 0.2f) // held still
+            assertTrue(shaky.wants(2_200 * ms))
+            assertEquals(2, shaky.shakySkipped)
+            assertTrue(slot.offer(7))
+            assertEquals(7, taken.await())
+        }
+    }
+
+    @Test fun quickMatchIsSummarisedIncludingMissingFields() {
+        fun quick(json: String) = LocateReply.parse("""{"ok":true,"state":"found","headline":"h","waypoints":[],"quick":$json}""").quick
+        assertEquals("quick match 0.87 · turned 12°", quick("""{"similarity":0.873,"turn_deg":12.4,"skipped":false}""")?.summary())
+        assertEquals("skipped (repeat)", quick("""{"similarity":0.2,"turn_deg":3,"skipped":true}""")?.summary())
+        assertEquals("quick match 0.50", quick("""{"similarity":0.5}""")?.summary())
+        assertEquals(QuickMatch(null, null, false), quick("{}"))
+        assertNull(quick("{}")?.summary())
+        assertNull(quick("\"not an object\""))
+        assertNull(LocateReply.parse("""{"ok":true,"state":"found","headline":"h","waypoints":[]}""").quick)
+    }
+
     @Test fun unexpectedErrorsAreNamedWithoutTheirMessage() {
         assertEquals("Camera or connection error (IllegalStateException).",
             LiveRelayLoop.describe(IllegalStateException("details that are not shown")))
         assertEquals("Relay unreachable.", LiveRelayLoop.describe(RelayFailure("Relay unreachable.")))
+        assertEquals("No camera frame for 5 s.", LiveRelayLoop.describe(CameraFailure("No camera frame for 5 s.")))
     }
 
     @Test fun replyIsParsedForTheScreen() {

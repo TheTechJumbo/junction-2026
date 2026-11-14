@@ -20,6 +20,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -28,8 +29,29 @@ import kotlin.math.roundToInt
 /** A named place in the room, seen from the wearer's position (0 degrees ahead, + to the right). */
 internal data class Waypoint(val name: String, val distanceM: Double, val bearingDeg: Int)
 
+/**
+ * The relay's quick match against the room map: how similar the photo was, how far the view turned,
+ * and whether the photo was skipped (blurred, dark or unrecognised: the last answer is repeated).
+ */
+internal data class QuickMatch(val similarity: Double?, val turnDeg: Double?, val skipped: Boolean) {
+    /** "quick match 0.87 · turned 12°", "skipped (repeat)", or null when there is nothing to show. */
+    fun summary(): String? {
+        if (skipped) return "skipped (repeat)"
+        val parts = listOfNotNull(
+            similarity?.let { "quick match " + String.format(Locale.US, "%.2f", it) },
+            turnDeg?.let { "turned ${it.roundToInt()}°" },
+        )
+        return if (parts.isEmpty()) null else parts.joinToString(" · ")
+    }
+}
+
 /** The part of a relay /locate reply the phone shows. */
-internal data class LocateReply(val state: String, val headline: String, val waypoints: List<Waypoint>) {
+internal data class LocateReply(
+    val state: String,
+    val headline: String,
+    val waypoints: List<Waypoint>,
+    val quick: QuickMatch? = null,
+) {
     companion object {
         private const val MAX_WAYPOINTS = 20
 
@@ -43,10 +65,14 @@ internal data class LocateReply(val state: String, val headline: String, val way
             }
             val waypoints = root.get("waypoints")?.takeIf { it.isJsonArray }?.asJsonArray
                 ?.mapNotNull { waypoint(it) }?.take(MAX_WAYPOINTS) ?: emptyList()
+            val quick = root.get("quick")?.takeIf { it.isJsonObject }?.asJsonObject?.let { match ->
+                QuickMatch(match.number("similarity"), match.number("turn_deg"), match.flag("skipped") ?: false)
+            }
             return LocateReply(
                 state = root.text("state")?.take(32) ?: "unknown",
                 headline = root.text("headline")?.take(300) ?: "",
                 waypoints = waypoints,
+                quick = quick,
             )
         }
 
@@ -69,11 +95,17 @@ internal data class LocateReply(val state: String, val headline: String, val way
 
         private fun JsonObject.number(key: String): Double? =
             get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asDouble?.takeIf { it.isFinite() }
+
+        private fun JsonObject.flag(key: String): Boolean? =
+            get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
     }
 }
 
 /** A relay or network failure, worded for the screen. Never contains the key. */
 internal class RelayFailure(message: String) : IOException(message)
+
+/** A camera problem, worded for the screen. */
+internal class CameraFailure(message: String) : Exception(message)
 
 /**
  * Posts one JPEG to `{relay}/locate?zone={zone}`. The key goes only in the X-Key header, never in the
@@ -145,13 +177,16 @@ internal data class LiveSnapshot<F>(
     val lastFrame: F? = null,
     val reply: LocateReply? = null,
     val roundTripSeconds: Double? = null,
+    /** Replies per second over the last 10 s (or since the start, if shorter). */
+    val framesPerSecond: Double? = null,
     val error: String? = null,
 )
 
 /**
- * The live camera loop, with one request in flight at a time: capture the newest frame, post it, wait
- * for the reply, then capture the next one. A failed capture or post is shown and retried after
- * [retryDelayMs]. Runs in the caller's scope until [stop].
+ * The live camera loop, back to back with one request in flight: capture the newest frame, post
+ * it, and as soon as the reply arrives capture and post the next one, with no delay and no queue.
+ * A failed capture or post is shown and retried after [retryDelayMs]. Runs in the caller's scope
+ * until [stop]. [clock] is in nanoseconds.
  */
 internal class LiveRelayLoop<F>(
     private val scope: CoroutineScope,
@@ -169,14 +204,21 @@ internal class LiveRelayLoop<F>(
         if (running) return
         job = scope.launch {
             var snapshot = LiveSnapshot<F>()
+            val startedAt = clock()
+            val replyTimes = ArrayDeque<Long>()
             while (isActive) {
                 try {
                     val frame = capture()
                     snapshot = snapshot.copy(framesSent = snapshot.framesSent + 1, lastFrame = frame)
                     onUpdate(snapshot)
-                    val started = clock()
+                    val sentAt = clock()
                     val reply = post(frame)
-                    snapshot = snapshot.copy(reply = reply, roundTripSeconds = (clock() - started) / 1e9, error = null)
+                    val repliedAt = clock()
+                    replyTimes.addLast(repliedAt)
+                    while (replyTimes.first() <= repliedAt - RATE_WINDOW_NS) replyTimes.removeFirst()
+                    val span = minOf(RATE_WINDOW_NS, repliedAt - startedAt).coerceAtLeast(1L)
+                    snapshot = snapshot.copy(reply = reply, roundTripSeconds = (repliedAt - sentAt) / 1e9,
+                        framesPerSecond = replyTimes.size * 1e9 / span, error = null)
                     onUpdate(snapshot)
                 } catch (e: CancellationException) {
                     throw e
@@ -193,6 +235,8 @@ internal class LiveRelayLoop<F>(
 
     companion object {
         const val RETRY_DELAY_MS = 2_000L
-        fun describe(e: Exception): String = (e as? RelayFailure)?.message ?: "Camera or connection error (${e.javaClass.simpleName})."
+        const val RATE_WINDOW_NS = 10_000_000_000L
+        fun describe(e: Exception): String = (e as? RelayFailure)?.message ?: (e as? CameraFailure)?.message
+            ?: "Camera or connection error (${e.javaClass.simpleName})."
     }
 }

@@ -389,11 +389,15 @@ class MainActivity : ComponentActivity() {
     }
     private fun renderLive(snapshot: LiveSnapshot<CameraFrame>) {
         if (liveLoop == null) return
-        snapshot.lastFrame?.let { liveThumb.setImageBitmap(it.thumbnail); liveThumb.visibility = android.view.View.VISIBLE }
+        // The camera makes a thumbnail at most twice a second; other frames leave the picture as it is.
+        snapshot.lastFrame?.thumbnail?.let { liveThumb.setImageBitmap(it); liveThumb.visibility = android.view.View.VISIBLE }
         val reply = snapshot.reply
         liveHeadline.text = reply?.headline?.takeIf { it.isNotBlank() } ?: "Live camera on · waiting for the first reply…"
-        val seconds = snapshot.roundTripSeconds?.let { String.format(Locale.US, "%.1f s", it) } ?: "—"
-        val lines = mutableListOf("State: ${reply?.state ?: "—"} · round trip: $seconds · frames sent: ${snapshot.framesSent}")
+        val seconds = snapshot.roundTripSeconds?.let { String.format(Locale.US, "%.2f s", it) } ?: "—"
+        val rate = snapshot.framesPerSecond?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
+        val lines = mutableListOf(listOfNotNull("State: ${reply?.state ?: "—"}", reply?.quick?.summary()).joinToString(" · "))
+        lines += "Round trip $seconds · $rate frames/s (last 10 s) · frames sent ${snapshot.framesSent}" +
+            " · shaky skipped ${snapshot.lastFrame?.shakySkipped ?: 0}"
         reply?.waypoints?.take(3)?.forEach { lines += "${it.name}: ${String.format(Locale.US, "%.1f", it.distanceM)} m, ${it.bearingDeg}°" }
         snapshot.error?.let { lines += "Error: $it Retrying in 2 s." }
         liveDetails.text = lines.joinToString("\n")

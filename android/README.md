@@ -70,13 +70,18 @@ does not open Meta AI or connect by itself; use the glasses buttons when glasses
 ## Live camera to the relay
 
 The Live camera card streams the phone's back camera to the relay so the laptop can
-rebuild the room as a live Gaussian splat. Start live camera runs one request at a time:
-take the newest photo (JPEG, long side about 1280 px, quality 85), POST it to
-`{relay}/locate?zone={zone}` with the key in the `X-Key` header (never in the URL),
-wait for the reply, then take the next photo. The card shows the headline, the state,
-the round trip, frames sent and a thumbnail of the last photo sent. Errors are shown
-and retried after 2 s. It stops with Stop live camera or when the app leaves the
-screen, and keeps the screen on while running.
+rebuild the room as a live Gaussian splat. Start live camera runs back to back with one
+request in flight: the newest camera frame (CameraX ImageAnalysis, keep-only-latest,
+about 1280x960) becomes an upright JPEG (quality 80, long side 960 px), is POSTed to
+`{relay}/locate?zone={zone}` with the key in the `X-Key` header (never in the URL), and
+as soon as the reply arrives the next newest frame goes out. No old frame is queued and
+no delay is added. While the gyroscope shows fast turning (over 1.5 rad/s in the last
+150 ms) frames are skipped and counted, for at most 1 s. The card shows the headline,
+the state, the relay's quick match ("quick match 0.87 · turned 12°" or "skipped
+(repeat)"), the round trip, frames per second over the last 10 s, frames sent, shaky
+frames skipped and a thumbnail (refreshed at most twice a second). Errors are shown and
+retried after 2 s. It stops with Stop live camera or when the app leaves the screen,
+and keeps the screen on while running.
 
 Debug builds only (placeholders shown; relay defaults: `http://127.0.0.1:8090`, zone
 `kitchen`; add `--es relay_url ...` for another address):
