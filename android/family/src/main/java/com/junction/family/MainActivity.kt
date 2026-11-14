@@ -49,7 +49,9 @@ class MainActivity : ComponentActivity() {
     }
     private val assets by lazy {
         WebViewAssetLoader.Builder()
-            .addPathHandler("/dashboard/", WebViewAssetLoader.AssetsPathHandler(this)).build()
+            // Mounted at "/" so /dashboard/x maps to assets/dashboard/x; only /dashboard/ paths are
+            // ever passed to it (see shouldInterceptRequest), everything else goes to ApiProxy.
+            .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this)).build()
     }
     // The page can change colour with the real sky (and with the chosen look), so the system bars
     // follow it: read the page background now and then, only while the app is in front.
@@ -121,6 +123,7 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView() = WebView(this).apply {
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true) // chrome://inspect, debug builds only
         setBackgroundColor(NIGHT)
         settings.apply {
             javaScriptEnabled = true // the dashboard is a JavaScript app
