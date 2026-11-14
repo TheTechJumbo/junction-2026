@@ -120,6 +120,12 @@ jobs:
           if missing or skipped:
               raise SystemExit(f"Required integration coverage missing: {sorted(missing)}; skips: {len(skipped)}")
           PY
+      - name: Isolated API diagnostics on failure
+        if: failure()
+        run: |
+          if test -f "$RUNNER_TEMP/bartek-api.log"; then
+            tail -100 "$RUNNER_TEMP/bartek-api.log"
+          fi
       - name: Stop isolated API
         if: always()
         run: |
