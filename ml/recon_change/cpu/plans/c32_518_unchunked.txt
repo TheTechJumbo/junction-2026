@@ -1,0 +1,1 @@
+--clips cpu/clips/after.mp4 cpu/clips/after_box.mp4 --frames 24+12 --long-side 518 --attn-chunk-mb 0

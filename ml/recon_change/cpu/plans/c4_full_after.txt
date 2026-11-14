@@ -1,0 +1,1 @@
+--clips cpu/clips/after.mp4 --frames 24+12 --long-side 518
