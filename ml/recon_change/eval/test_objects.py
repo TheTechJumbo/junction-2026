@@ -25,7 +25,7 @@ T0 = 1_800_000_000.0
 SHELF, TABLE, SINK = [1.0, 2.0, 0.9], [-1.5, 0.5, 0.7], [2.5, -1.0, 0.9]
 
 
-def sight(name, at, view, score=0.45, size=0.12, jitter=0.04, rng=random.Random(1), **more):
+def sight(name, at, view, score=0.55, size=0.12, jitter=0.04, rng=random.Random(1), **more):
     return {"name": name, "score": score, "position": [v + rng.uniform(-jitter, jitter) for v in at], "size_m": size, "view": view,
             "box": [0.4, 0.4, 0.5, 0.5], **more}
 
@@ -33,9 +33,9 @@ def sight(name, at, view, score=0.45, size=0.12, jitter=0.04, rng=random.Random(
 def inventory():
     """Keys on the shelf (5 photos), a cup on the table (4), a second cup by the sink (4, and in the
     same photos as the first), the table cup called "glass" in two more photos, one weak phone box."""
-    s = [sight("keys", SHELF, v, 0.5, 0.08) for v in range(5)]
-    s += [sight("cup", TABLE, v, 0.4) for v in range(4)]
-    s += [sight("cup", SINK, v, 0.4) for v in range(4)]
+    s = [sight("keys", SHELF, v, 0.6, 0.08) for v in range(5)]
+    s += [sight("cup", TABLE, v, 0.5) for v in range(4)]
+    s += [sight("cup", SINK, v, 0.5) for v in range(4)]
     s += [sight("glass", TABLE, v, 0.3) for v in (5, 6)]
     s += [sight("phone", [0.0, -2.0, 0.5], 3, 0.22)]
     s += [{"name": "wallet", "score": 0.9, "position": None, "size_m": None, "view": 0}]  # not placed: ignored
@@ -165,9 +165,9 @@ def test_move_and_new():
     for k in range(4):
         m4, told = objects.update(m4, [sight("book", [0.0, 1.0, 0.8], 0, 0.5, 0.25, baseline=empty)], fix(0), now=T0 + 60 + k)
     assert not objects.diary(m4, unconfirmed=True) and not by_label(m4, "book")
-    # a weak new thing where the baseline already showed a surface: held back, not reported
+    # a new thing where the baseline already showed a surface (the inventory may just have missed it): held back, not reported
     there = {"agree": 5, "free": 0, "seen": 6}
-    m5, told = run(m, [([sight("book", [0.0, 1.0, 0.8], 0, 0.32, 0.25, baseline=there)], []) for _ in range(3)])
+    m5, told = run(m, [([sight("book", [0.0, 1.0, 0.8], 0, 0.5, 0.25, baseline=there)], []) for _ in range(3)])
     waiting = objects.diary(m5, unconfirmed=True)
     assert not told and [(e["kind"], e["status"]) for e in waiting] == [("object_appeared", "unconfirmed")], waiting
     print("ok move is one event:", event["text"], event["confidence_pct"], "| held back:", waiting[0]["confidence_pct"])
@@ -175,8 +175,11 @@ def test_move_and_new():
 
 def test_confidence():
     # rises as more photos agree
-    pcts = [objects.fuse([sight("cup", TABLE, v, 0.4) for v in range(n)], now=T0)["objects"][0]["confidence_pct"] for n in (1, 2, 3, 5)]
+    pcts = [objects.fuse([sight("cup", TABLE, v, 0.55) for v in range(n)], now=T0)["objects"][0]["confidence_pct"] for n in (1, 2, 3, 5)]
     assert pcts == sorted(pcts) and pcts[0] < objects.SHOW_PCT <= pcts[2], pcts
+    # but agreement cannot make a weak name sure: twenty photos of a 0.3 box stay below the line
+    weak = objects.fuse([sight("cup", TABLE, v, 0.3) for v in range(20)], now=T0)["objects"][0]
+    assert weak["state"] == "unconfirmed" and weak["views"] == 20 and weak["confidence_pct"] < 50, weak
     m = inventory()
     cup = by_label(m, "cup")[0]
     # falls with time, and is never below "do not know" for that reason alone
@@ -190,7 +193,7 @@ def test_confidence():
     two = next(o for o in m2["objects"] if o["id"] == cup["id"])
     assert two["confidence_pct"] > one["confidence_pct"] and two["missed"] == 0
     # a "gone" about an object the map was not sure of is held back
-    weak = objects.fuse([sight("vase", SINK, v, 0.33) for v in range(3)], now=T0)
+    weak = objects.fuse([sight("vase", SINK, v, 0.47) for v in range(3)], now=T0)
     vase = weak["objects"][0]
     assert vase["state"] == "present" and vase["confidence_pct"] < 75, vase
     told = []

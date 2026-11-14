@@ -205,13 +205,19 @@ COLOURS = {"present": (255, 90, 200), "moved": (255, 150, 40), "missing": (235, 
 #   rises      each sighting from another photo or standpoint adds HIT x (score / STRONG), between
 #              0.3 and 1.5 of HIT. In updates the second sighting in a row counts double: two looks
 #              that agree are worth more than twice one look.
+#   ceiling    agreement cannot make a weak name sure: a box the detector gives 0.3 in twenty photos
+#              is the same doubtful name twenty times (seen on the tuning scene: pictures on a
+#              television found as "laptop" in all 24 photos). So the belief never goes above what
+#              the object's three best scores allow (CEILING: mean of the three best -> most it can be).
 #   falls      a clear look without it (in view, not blocked, big enough) from another standpoint
 #              takes MISS away, the second in a row twice MISS, from the third on three times: one
 #              look never flips an object, three in a row do. A look where the depth still shows a
 #              surface at the object's place counts SURFACE_STAYS of that (the detector missing a
 #              thing that is there is the common case); one where the camera now sees clearly
-#              farther counts SEES_FARTHER of it. In the inventory, each photo that had a clear
-#              look and no box takes INVENTORY_MISS away.
+#              farther counts SEES_FARTHER of it. When the watched-spot check (watch.py) has
+#              looked at the place, its verdict is used instead of the depth (SPOT_SAME,
+#              SPOT_CHANGED). In the inventory, each photo that had a clear look and no box takes
+#              INVENTORY_MISS away.
 #   time       the belief shrinks towards "do not know" (50 %) with a half-life of HALF_LIFE_S
 #              without a look. Not measured: the test data has no clock.
 #   bounded    between -BELIEF_MAX and BELIEF_MAX (5 % .. 95 %), so nothing is ever beyond recall.
@@ -220,7 +226,13 @@ COLOURS = {"present": (255, 90, 200), "moved": (255, 150, 40), "missing": (235, 
 # map is that it is NOT at its place. Events carry their own confidence_pct (see update) and are
 # only reported from REPORT_PCT on; below that they wait in the map as "unconfirmed".
 PRIOR, HIT, MISS, INVENTORY_MISS = -1.5, 1.2, 0.75, 0.1
+CEILING = [(0.25, 0.30), (0.35, 0.45), (0.45, 0.65), (0.55, 0.85), (0.62, 0.95)]  # mean of the 3 best scores -> highest confidence
 SURFACE_STAYS, SEES_FARTHER = 0.5, 1.3
+# With the watched-spot check (watch.py, when the worker has it): the object's place compared with the
+# baseline picture of it. "same" makes a miss by the detector count SPOT_SAME of a miss, "changed"
+# SPOT_CHANGED, and a "changed" place counts as a look without the object even when the object is too
+# small in the picture for the detector to be trusted.
+SPOT_SAME, SPOT_CHANGED = 0.25, 1.3
 BELIEF_MAX = 3.0
 HALF_LIFE_S = 24 * 3600.0
 SHOW_PCT, GONE_PCT, REPORT_PCT = 60, 25, 70
@@ -257,6 +269,19 @@ def _bound(belief):
     return round(max(-BELIEF_MAX, min(BELIEF_MAX, belief)), 3)
 
 
+def _ceiling(top_scores):
+    """The highest belief the object's best boxes allow (see CEILING)."""
+    if not top_scores:
+        return BELIEF_MAX
+    top = sum(top_scores) / len(top_scores)
+    (x0, y0), (x1, y1) = CEILING[0], CEILING[-1]
+    most = y0 if top <= x0 else y1
+    for (xa, ya), (xb, yb) in zip(CEILING, CEILING[1:]):
+        if xa <= top <= xb:
+            most = ya + (yb - ya) * (top - xa) / (xb - xa)
+    return math.log(most / (1 - most))
+
+
 def confidence_pct(obj, now=None):
     """0..100: how sure the map is of what it says about this object. For "present", "moved" and
     "unconfirmed": that it is at its place. For "missing": that it is not. With `now`, the time
@@ -275,7 +300,7 @@ def _aged(obj, now):
 
 
 def _stamp(obj):
-    obj["belief"] = _bound(obj["belief"])
+    obj["belief"] = _bound(min(obj["belief"], _ceiling(obj.get("top_scores"))))
     obj["confidence_pct"] = confidence_pct(obj)
 
 
@@ -329,19 +354,22 @@ def fuse(sightings, now=None, limit=None):
         best["members"].append(s)
         refresh(best)
 
-    def join(same_label, share):
-        """Put together clusters at the same place that share no photo."""
+    def join(same_label, share, inside=False):
+        """Put together clusters at the same place that share no photo. inside: also when they do
+        share photos, if the centre of one lies well inside the other (the detector boxed a part
+        and the whole, or gave one thing two names with different boxes)."""
         done = False
         while not done:
             done = True
             for i, a in enumerate(clusters):
                 for b in clusters[i + 1:]:
-                    if (a["label"] == b["label"]) != same_label or a["views"] & b["views"]:
+                    if (a["label"] == b["label"]) != same_label or (a["views"] & b["views"] and not inside):
                         continue
                     small, big = sorted([a["size_m"], b["size_m"]])
                     if not same_label and big > 2.0 * max(small, 1e-3):
                         continue  # a cup on a table is not the table
-                    if math.dist(a["position"], b["position"]) <= share * _reach(big if same_label else small):
+                    within = share * (big if same_label else small) if inside else share * _reach(big if same_label else small)
+                    if math.dist(a["position"], b["position"]) <= within:
                         a["members"] += b["members"]
                         refresh(a)
                         clusters.remove(b)
@@ -352,6 +380,8 @@ def fuse(sightings, now=None, limit=None):
 
     join(True, 0.6)  # the order of the boxes can split one thing in two
     join(False, 0.6)  # "cup" in one photo, "glass" in the next: one thing, two names
+    join(True, 0.5, inside=True)  # a box of the whole sofa and a box of its left half
+    join(False, 0.5, inside=True)  # "tablet" on the screen and "laptop" on the whole device
 
     room_map = new_map()
     for c in sorted(clusters, key=lambda c: -sum(m["score"] for m in c["members"])):
@@ -360,12 +390,15 @@ def fuse(sightings, now=None, limit=None):
             names[m["name"]] = names.get(m["name"], 0.0) + m["score"]
         label = max(names, key=names.get)
         best = max(c["members"], key=lambda m: m["score"])
+        per_view = {}
+        for m in c["members"]:  # one vote per photo: its best box of this thing
+            per_view[m["view"]] = max(per_view.get(m["view"], 0.0), float(m["score"]))
         obj = _add(room_map, label=label, names={k: round(v, 2) for k, v in sorted(names.items(), key=lambda kv: -kv[1])},
                    position=_round(c["position"]), size_m=round(float(c["size_m"]), 3), views=len(c["views"]),
                    evidence=round(sum(m["score"] for m in c["members"]), 2), best_score=round(float(best["score"]), 2),
                    crop=best.get("crop"), best_view=best["view"], best_box=best.get("box"), first_seen=now, last_seen=now,
-                   source="inventory", belief=PRIOR + sum(_gain(m["score"]) for m in c["members"]), belief_at=now,
-                   hits_in_row=0, missed=0, seen_from=[])
+                   source="inventory", belief=PRIOR + sum(_gain(v) for v in per_view.values()), belief_at=now,
+                   top_scores=[round(v, 3) for v in sorted(per_view.values(), reverse=True)[:3]], hits_in_row=0, missed=0, seen_from=[])
         _grade(obj)
     return room_map
 
@@ -415,7 +448,7 @@ def _event_confidence(event, obj):
     return int(round(100 * p * (1.0 if event.get("returned") else obj.get("fresh", WAS_UNKNOWN))))
 
 
-def update(room_map, detections, fix, now=None, limit_confirm=None, limit_new=None, report_pct=None, use_depth=True):
+def update(room_map, detections, fix, now=None, limit_confirm=None, limit_new=None, report_pct=None, use_depth=True, use_spot=True):
     """Fold one position fix into the map. Returns (new map, events newly reported by this fix);
     the map given is not changed.
     detections  what the detector found in the newest frame, on the room map (lift, or the worker's
@@ -423,9 +456,10 @@ def update(room_map, detections, fix, now=None, limit_confirm=None, limit_new=No
                 "crop", optional "baseline": {"agree", "free"}}]
     fix         {"state": "found" | "unsure" | "lost", "position": [east, north, ...], "heading_deg",
                  "checked": [{"id", "in_view", "blocked", "close_enough", "pixel", "depth_gap_m",
-                 "distance_m"}]}: where the wearer stood, and for each object of the map whether this
-                frame had a clear look at its place (visibility, or the worker's "objects_checked").
-                Objects not in "checked" are taken as not looked at.
+                 "distance_m", optional "spot": "same" | "changed" | "not_seen"}]}: where the wearer
+                stood, and for each object of the map whether this frame had a clear look at its
+                place (visibility, or the worker's "objects_checked"; "spot" is the watched-spot
+                verdict when watch.py is there). Objects not in "checked" are taken as not looked at.
     Events: object_moved ("from", "to"), object_gone ("from"), object_appeared ("to"), each with
     "evidence", "confidence_pct" and "text". Every event is kept in map["events"] with a "status":
     "unconfirmed" while its confidence is below report_pct (REPORT_PCT), "reported" from then on,
@@ -507,6 +541,7 @@ def update(room_map, detections, fix, now=None, limit_confirm=None, limit_new=No
             if _elsewhere(obj.get("seen_from", []), here):  # the same standpoint again adds nothing
                 obj["seen_from"] = (obj.get("seen_from", []) + [here])[-6:]
                 obj["hits_in_row"] = obj.get("hits_in_row", 0) + 1
+                obj["top_scores"] = sorted(obj.get("top_scores", []) + [round(float(d["score"]), 3)], reverse=True)[:3]
                 obj["belief"] += _gain(d["score"]) * min(obj["hits_in_row"], 2)
                 obj["evidence"] = round(obj.get("evidence", 0.0) + float(d["score"]), 2)
                 obj["views"] = obj.get("views", 0) + 1
@@ -518,20 +553,25 @@ def update(room_map, detections, fix, now=None, limit_confirm=None, limit_new=No
         if obj["id"] in occupied or was == "unconfirmed":
             _stamp(obj)
             continue
-        look = looks.get(obj["id"])
-        if look and look.get("in_view") and look.get("close_enough") and not look.get("blocked"):
+        look = looks.get(obj["id"]) or {}
+        # the watched-spot verdict compares with the baseline picture, so it only speaks for a thing still at its inventory place
+        spot = look.get("spot") if use_spot and obj.get("source") == "inventory" and not obj.get("moved_from") else None
+        clear = look.get("in_view") and look.get("close_enough") and not look.get("blocked")
+        if clear or spot == "changed":
             if _elsewhere([obj["missed_from"]] if obj.get("missed_from") else [], here):
                 if not obj.get("missed"):
                     obj["sure_before"] = round(_p(obj["belief"]), 3)  # how sure it was real before this run of misses
                 obj.update(missed=obj.get("missed", 0) + 1, missed_from=here, missed_at=now, hits_in_row=0)
-                weight, depth_says = 1.0, "unknown"
+                weight, says = 1.0, "no other evidence"
                 gap = look.get("depth_gap_m")
-                if use_depth and gap is not None:
+                if spot in ("same", "changed"):
+                    weight, says = (SPOT_SAME, "the place looks as in the baseline") if spot == "same" else (SPOT_CHANGED, "the place looks different")
+                elif use_depth and gap is not None:
                     tolerance = max(0.05, 0.04 * float(look.get("distance_m") or 0.0))
-                    weight, depth_says = (SEES_FARTHER, "sees farther") if gap > tolerance else (SURFACE_STAYS, "a surface is still there")
+                    weight, says = (SEES_FARTHER, "sees farther") if gap > tolerance else (SURFACE_STAYS, "a surface is still there")
                 obj["belief"] -= MISS * min(obj["missed"], 3) * weight
-                obj["missed_looks"] = (obj.get("missed_looks", []) + [{"time": now, "from": here, "size_px": look.get("size_px"),
-                                                                        "depth_gap_m": gap, "depth": depth_says}])[-6:]
+                obj["missed_looks"] = (obj.get("missed_looks", []) + [{"time": now, "from": here, "size_px": look.get("size_px"), "depth_gap_m": gap,
+                                                                        "spot": spot, "spot_score": look.get("spot_score"), "says": says}])[-6:]
                 _stamp(obj)
                 if was != "missing" and obj["missed"] >= 2 and obj["confidence_pct"] <= GONE_PCT:
                     vanished.append(obj)
@@ -544,7 +584,8 @@ def update(room_map, detections, fix, now=None, limit_confirm=None, limit_new=No
         obj = _add(room_map, label=d["name"], names={d["name"]: round(float(d["score"]), 2)}, position=_round(d["position"]),
                    size_m=round(float(d.get("size_m") or 0.1), 3), views=1, evidence=round(float(d["score"]), 2),
                    best_score=round(float(d["score"]), 2), crop=d.get("crop"), first_seen=now, last_seen=now, state="unconfirmed",
-                   source="update", belief=PRIOR + _gain(d["score"]), belief_at=now, hits_in_row=1, missed=0, seen_from=[here])
+                   source="update", belief=PRIOR + _gain(d["score"]), belief_at=now, hits_in_row=1, missed=0, seen_from=[here],
+                   top_scores=[round(float(d["score"]), 3)])
         _note_baseline(obj, d)
         _stamp(obj)
 
@@ -561,6 +602,7 @@ def update(room_map, detections, fix, now=None, limit_confirm=None, limit_new=No
         old_place = old.get("sure_before", _p(old["belief"])) * (1 - _p(old["belief"]))
         old.update(position=new["position"], size_m=new["size_m"], state="moved", moved_from=was, moved_at=now, last_seen=new["last_seen"],
                    missed=0, seen_from=new.get("seen_from", []), crop_now=new.get("crop_now") or new.get("crop"), belief=new["belief"],
+                   top_scores=new.get("top_scores", []),
                    hits_in_row=new.get("hits_in_row", 0))
         for key in ("missed_from", "gone_event", "appeared_event"):
             old.pop(key, None)
@@ -635,6 +677,9 @@ def update(room_map, detections, fix, now=None, limit_confirm=None, limit_new=No
         if obj.get(key) != event["id"] or (event["kind"] != "object_gone" and obj["state"] == "missing"):
             continue  # an older event of this object: its numbers are history
         event["confidence_pct"] = _event_confidence(event, obj)
+        if event["kind"] == "object_appeared" and not event.get("returned") and any(
+                same_thing(obj, o) and o.get("missed") and o["state"] in ("present", "moved") for o in objects):
+            continue  # a thing of that name was just not found at its place: this may be its new place, so wait for that to settle
         if event["status"] == "unconfirmed" and event["confidence_pct"] >= report_pct:
             event.update(status="reported", reported_at=now)
             reported.append(event)
@@ -887,15 +932,49 @@ def visibility(room_map, r, q, valid, window, room, picture_shape, input_side=96
     return out
 
 
-def observe(found, room_map, r, base, q, valid, window, state, picture_shape, room=None, input_side=960):
+def spots(room_map, r, base, valid, room, min_px=6.0):
+    """The map's inventory objects as watched spots for watch.check: for each one that is still at
+    its inventory place, a box around that place in the baseline frame of this pass that sees it
+    largest. [{"name": the object's id, "frame", "box": [u0, v0, u1, v1] in 0..1}]."""
+    H, W = r.depth.shape[1:]
+    wanted = {o["id"] for o in room_map["objects"] if o.get("source") == "inventory" and not o.get("moved_from") and o["state"] in ("present", "missing")}
+    best = {}
+    for j in base:
+        for f in visibility(room_map, r, j, valid, (0.0, 0.0, 1.0, 1.0), room, (H, W), input_side=max(H, W), close_px=0):
+            if f["id"] in wanted and f["in_view"] and not f["blocked"] and f["size_px"] and f["size_px"] > best.get(f["id"], (0,))[0]:
+                best[f["id"]] = (f["size_px"], j, f["pixel"])
+    out = []
+    for oid, (size_px, j, (u, v)) in best.items():
+        half = max(min_px, 0.5 * size_px)
+        out.append({"name": oid, "frame": int(j), "box": [max(0.0, u - half / W), max(0.0, v - half / H), min(1.0, u + half / W), min(1.0, v + half / H)]})
+    return out
+
+
+def watched(room_map, r, base, q, valid, room, watcher):
+    """The watched-spot verdict (watch.py, passed in as `watcher`) for each inventory object's place
+    in frame q: {object id: {"spot": "same" | "changed" | "not_seen", "spot_score"}}. Needs the
+    reconstruction's patch features (Recon.feat); without them, or without the module, nothing."""
+    if watcher is None or r.feat is None:
+        return {}
+    asked = spots(room_map, r, base, valid, room)
+    return {a["name"]: {"spot": a["state"], "spot_score": a["score"]} for a in watcher.check(r, list(base), [q], asked)} if asked else {}
+
+
+def observe(found, room_map, r, base, q, valid, window, state, picture_shape, room=None, input_side=960, watcher=None):
     """Everything update() needs from one position fix, computed where the reconstruction is (the
     worker): {"objects_seen": detections on the map, "objects_checked": the look at each known
-    object's place}. found: every box of the newest frame down to LIMIT_CONFIRM."""
+    object's place}. found: every box of the newest frame down to LIMIT_CONFIRM.
+    watcher: the watch module (branch jun-22-watch-spots), if the worker has it: each checked
+    object then also carries the watched-spot verdict for its place ("spot", "spot_score")."""
     import locate
 
     room = locate.map_frame(r, base, valid) if room is None else room
     seen = lift(found, r, q, valid, window, room, state, base=base)
     checked = [] if state == "lost" or not room_map else visibility(room_map, r, q, valid, window, room, picture_shape, input_side)
+    if checked and watcher is not None:
+        verdicts = watched(room_map, r, base, q, valid, room, watcher)
+        for c in checked:
+            c.update(verdicts.get(c["id"], {}))
     return {"objects_seen": seen, "objects_checked": checked}
 
 
