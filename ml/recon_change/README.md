@@ -89,6 +89,18 @@ curl -X POST --data-binary @after.mp4 "http://127.0.0.1:8090/check?zone=kitchen&
 `evidence_url`), picture links and timings. `GET /status` says whether the worker is running.
 Set `EVENT_API_URL` before starting the relay to have events POSTed to the event API.
 
+**Dashboard:** `http://127.0.0.1:8090/dashboard?k=KEY` lists every check with its before/now
+pictures, a 3D view, where the time went, which worker ran it, and the repo's pull requests.
+
+**3D view without training:** each check also writes `scene.splat`, Gaussians built straight
+from the reconstruction on a CPU in about 0.05 s (`splat.py`), with what appeared in green and
+what is gone as red ghosts. `live/viewer.html` shows it in the browser.
+
+**CPU worker:** `sbatch iridis/worker_cpu.slurm` starts the same worker on CPU cores only, with
+its own queue. Send a check to it with `&device=cpu`. On 16 AMD EPYC cores, 12+6 frames at
+294 px take 30 to 40 s, but that setting is too coarse and the check comes back as unreliable;
+the right setting is still being measured (`RECON_FRAMES`, `RECON_LONG_SIDE`).
+
 - The video stays on the laptop: the relay picks the sharp frames with OpenCV and sends only
   those (about 1 MB) to Iridis.
 - Baselines are kept on scratch, so they survive a worker restart.
