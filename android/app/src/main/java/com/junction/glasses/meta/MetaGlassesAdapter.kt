@@ -38,6 +38,8 @@ data class MetaState(
     val initialized: Boolean = false,
     val registration: String = "UNAVAILABLE",
     val deviceCount: Int = 0,
+    val cameraPermission: String = "UNKNOWN",
+    val microphonePermission: String = "UNKNOWN",
     val connection: String = "DISCONNECTED",
     val camera: String = "STOPPED",
     val display: String = "UNAVAILABLE",
@@ -73,7 +75,8 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     private var motionHandle: Motion? = null
     private var registrationPending = false
     val isExternalFlowPending: Boolean get() = registrationPending || permissionResult != null
-    fun onResume() { registrationPending = false }
+    fun onResume() { registrationPending = false; refreshPermissions() }
+    private var permissionRefresh: Job? = null
     fun suspendLifecycle() { if (!isExternalFlowPending) disconnect() }
     private var permissionResult: CompletableDeferred<PermissionStatus>? = null
     private var cameraStarting = false
@@ -97,6 +100,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         if (state.value.initialized) return
         Wearables.initialize(activity).onSuccess {
             mutableState.update { it.copy(initialized = true, error = null) }
+            refreshPermissions()
             runCommand { Wearables.registrationState.collect { value -> mutableState.update { it.copy(registration = value.name) } } }
             runCommand { Wearables.devices.collect { value -> mutableState.update { it.copy(deviceCount = value.size) } } }
             runCommand { Wearables.registrationErrorStream.collect { fail("Meta registration failed. Check Meta AI and developer mode.") } }
@@ -147,14 +151,49 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         }.onFailure { _, _ -> mutableState.update { it.copy(display = "UNAVAILABLE") } }
     }
 
+    private fun recordPermission(permission: Permission, status: PermissionStatus?) {
+        val label = when (status) {
+            PermissionStatus.Granted -> "GRANTED"
+            PermissionStatus.Denied -> "DENIED"
+            else -> "UNKNOWN"
+        }
+        mutableState.update {
+            when (permission) {
+                Permission.CAMERA -> it.copy(cameraPermission = label)
+                Permission.MICROPHONE -> it.copy(microphonePermission = label)
+                else -> it
+            }
+        }
+    }
+
+    /** Read-only consent status; never launches a Meta permission dialog. */
+    fun refreshPermissions() {
+        if (!state.value.initialized) return
+        permissionRefresh?.cancel()
+        permissionRefresh = scope.launch {
+            for (permission in listOf(Permission.CAMERA, Permission.MICROPHONE)) {
+                val status = try {
+                    Wearables.checkPermissionStatus(permission).getOrNull()
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null }
+                ensureActive()
+                recordPermission(permission, status)
+            }
+        }
+    }
+
     private suspend fun permission(permission: Permission): Boolean {
-        if (Wearables.checkPermissionStatus(permission).getOrDefault(PermissionStatus.Denied) == PermissionStatus.Granted) return true
+        val existing = Wearables.checkPermissionStatus(permission).getOrNull()
+        recordPermission(permission, existing)
+        if (existing == PermissionStatus.Granted) return true
         if (permissionResult != null) { fail("Complete the pending glasses permission request first."); return false }
         val result = CompletableDeferred<PermissionStatus>()
         permissionResult = result
         return try {
             permissionLauncher.launch(permission)
-            withTimeoutOrNull(60_000) { result.await() } == PermissionStatus.Granted
+            val status = withTimeoutOrNull(60_000) { result.await() }
+            recordPermission(permission, status)
+            status == PermissionStatus.Granted
         } finally { if (permissionResult === result) permissionResult = null }
     }
 
@@ -169,6 +208,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
             if (session !== connected || generation != cameraGeneration) return@runCommand
             connected.addCamera(StreamConfiguration(videoQuality = VideoQuality.MEDIUM, frameRate = 15)).onSuccess { added ->
                 camera = added
+                mutableState.update { it.copy(error = null) }
                 val collectorJob = SupervisorJob(sessionJob)
                 cameraCollectors = collectorJob
                 val collectors = CoroutineScope(scope.coroutineContext + collectorJob)
@@ -236,7 +276,8 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
                     }
                 }
             }.onFailure { _, _ -> mutableState.update { it.copy(speech = "UNAVAILABLE", error = "Glasses speech is unavailable. Use the phone microphone.") } }
-            speech?.start()?.onFailure { _, _ -> fail("Glasses speech could not start. Use the phone microphone.") }
+            speech?.start()?.onSuccess { mutableState.update { it.copy(error = null) } }
+                ?.onFailure { _, _ -> fail("Glasses speech could not start. Use the phone microphone.") }
         } finally { speechStarting = false }
     }
     fun stopListening() {
@@ -254,6 +295,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
             ?: run { fail("Connect glasses before enabling motion."); return }
         connected.addMotion(MotionConfiguration(samplingRate = MotionSamplingRate.HZ_5)).onSuccess { added ->
             motionHandle = added
+            mutableState.update { it.copy(error = null) }
             sessionScope?.launch { added.state.collect { status -> mutableState.update { it.copy(motion = status.name) } } }
             sessionScope?.launch { added.errors.collect { error -> if (error != null) fail("Glasses motion unavailable: ${error.description}") } }
             sessionScope?.launch { added.samples.collect { sample ->
