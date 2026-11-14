@@ -1,3 +1,9 @@
+# Current implementation entry point
+
+JUN-19 supersedes the historical product plan below. For Bartek’s current foundation,
+start with [docs/FOUNDATION.md](docs/FOUNDATION.md), [contracts/API.md](contracts/API.md)
+and [docs/DECISIONS.md](docs/DECISIONS.md). This is scaffolding, not a working application.
+
 # junction-2026
 
 **A safety net for people with memory problems, and for the families who look out for them.**

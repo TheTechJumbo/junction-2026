@@ -1,2 +1,12 @@
 .coord/
 __pycache__/
+
+.venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.data/
+*.sqlite*

@@ -1,0 +1,42 @@
+[
+  {
+    "id": "synthetic-pills-open",
+    "type": "pillbox_open",
+    "source": "sensor",
+    "ts": "2026-11-14T08:00:00+02:00",
+    "zone": "kitchen",
+    "object": "pillbox",
+    "evidence_url": null,
+    "confidence": 1
+  },
+  {
+    "id": "synthetic-pills-repeat",
+    "type": "pillbox_open",
+    "source": "sensor",
+    "ts": "2026-11-14T08:40:00+02:00",
+    "zone": "kitchen",
+    "object": "pillbox",
+    "evidence_url": null,
+    "confidence": 1
+  },
+  {
+    "id": "synthetic-night-door",
+    "type": "door_open",
+    "source": "sensor",
+    "ts": "2026-11-14T03:10:00+02:00",
+    "zone": "entrance",
+    "object": "front_door",
+    "evidence_url": null,
+    "confidence": 1
+  },
+  {
+    "id": "synthetic-vision",
+    "type": "object_gone",
+    "source": "vision",
+    "ts": "2026-11-14T09:00:00+02:00",
+    "zone": "kitchen",
+    "object": null,
+    "evidence_url": null,
+    "confidence": 0.6
+  }
+]
