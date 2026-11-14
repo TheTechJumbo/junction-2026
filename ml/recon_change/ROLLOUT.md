@@ -95,3 +95,22 @@ Implementation reviewed by Astra; Terra implemented and tested in isolated branc
 - `git diff --check`: passed.
 
 The dependency/build environment is local to this Mac. The positive full model-cache preflight, Linux/CUDA installation, GPU correctness, actual service start/rollback and live HTTP performance have not been run. Seb must complete those gates on the chosen host. PR #37's missing-helper behavior is incorporated with a narrower exception handler; its unrelated dependency import failures remain visible.
+
+## Merge verification and fresh performance run
+
+On 2026-11-14, review against main found no unresolved conflicts or blocking diff findings. Fresh `make check` passed 470 tests (12 deselected), lint and schema checks. Seven rollout tests and the local HTTP benchmark scenarios passed. `test_rust.py` passed with Rust enabled; synthetic, watched-spot, location and all four relay-flow tests passed with Rust enabled and with `RECON_FAST=0`. The Rust-only equivalence script intentionally refuses to run with Rust disabled; fallback behavior was validated by the normal scene/flow tests instead.
+
+Fresh performance command, macOS 27.0.1 ARM64, 8 logical CPUs, Python 3.12.13, NumPy 2.5.4:
+
+```sh
+RAYON_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 /tmp/junction-rollout-venv/bin/python bench_rust.py --sizes 294x518 --threads 4 --repeat 3
+```
+
+24 before + 12 after synthetic frames, median of three analysis calls per mode in separate fresh processes:
+
+| Look-alike | NumPy | First Rust stage (PR20) | All Rust | NumPy/all-Rust ratio | Estimated extra peak RSS NumPy / PR20 / all Rust | Same result summary |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| Off | 5.85 s | 0.99 s | 0.83 s | 7.0x | 180 / 176 / 173 MB | Yes |
+| On | 7.58 s | 1.39 s | 0.91 s | 8.4x | 477 / 482 / 251 MB | Yes |
+
+The enabled case reduced analysis latency by approximately 88% and estimated extra peak RSS by 47%. Values are rounded; ratios are the benchmark's output from unrounded medians. Result summaries match; the separate numerical-equivalence suite validates the arrays. This measures local analysis only, excluding VGGT, network/queue time and GPU work. It compares Rust and NumPy engines, not an old versus new VGGT checkpoint. Extra peak RSS is an estimate as described above. No new target-host or live GPU validation is claimed.
