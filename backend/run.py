@@ -8,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app import create_app
 
+GEMINI_ENV = ("GEMINI_API_KEY", "GEMINI_MODEL")
+
 NAVIGATION_ENV = (
     "VISION_RELAY_URL", "VISION_RELAY_KEY", "VISION_RELAY_ZONE",
     "NAVIGATION_MAX_AGE_SECONDS", "NAVIGATION_MIN_CONFIDENCE",
@@ -46,13 +48,35 @@ def navigation_from_env(environ=None):
         raise ValueError("Invalid cached navigation configuration; check the five settings") from None
 
 
+def gemini_from_env(environ=None):
+    """Explicit key and model enable only open questions; construction is offline."""
+    environ = os.environ if environ is None else environ
+    api_key, model = (environ.get(name, "") for name in GEMINI_ENV)
+    if not api_key.strip() and not model.strip():
+        return None
+    if not api_key.strip() or not model.strip():
+        raise ValueError("Open-question Gemini requires both GEMINI_API_KEY and GEMINI_MODEL")
+
+    from backend.answer_engine.adapters import GeminiOpenAdapter
+
+    try:
+        if (not api_key.isascii()
+                or any(character.isspace() or not character.isprintable() for character in api_key)):
+            raise ValueError()
+        return GeminiOpenAdapter(api_key=api_key, model=model)
+    except (TypeError, ValueError):
+        raise ValueError("Invalid open-question Gemini configuration; check GEMINI_API_KEY and GEMINI_MODEL") from None
+
+
 def create_application():
     navigation = navigation_from_env()
-    if navigation is None:
+    open_questions = gemini_from_env()
+    if navigation is None and open_questions is None:
         app = create_app()
     else:
         from backend.answer_engine import RulesAnswerEngine
-        app = create_app(engine=RulesAnswerEngine(navigation_adapter=navigation))
+        app = create_app(engine=RulesAnswerEngine(navigation_adapter=navigation,
+                                                 open_adapter=open_questions))
 
     @app.middleware("http")
     async def private_responses(request, call_next):
