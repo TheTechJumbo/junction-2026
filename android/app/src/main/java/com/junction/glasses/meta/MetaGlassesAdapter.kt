@@ -42,7 +42,8 @@ data class MetaState(
     val microphonePermission: String = "UNKNOWN",
     val connection: String = "DISCONNECTED",
     val camera: String = "STOPPED",
-    val display: String = "UNAVAILABLE",
+    val display: String = "NOT_REQUIRED",
+    val displayEnabled: Boolean = false,
     val speech: String = "STOPPED",
     val motion: String = "STOPPED",
     val error: String? = null,
@@ -67,6 +68,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     private var session: DeviceSession? = null
     private var sessionJob: Job? = null
     private var sessionScope: CoroutineScope? = null
+    private var cameraDeadline: Job? = null
     private var camera: Camera? = null
     private var display: Display? = null
     private var speech: Speech? = null
@@ -128,7 +130,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
             listeners.launch {
                 connected.state.collect { status ->
                     mutableState.update { it.copy(connection = status.name) }
-                    if (status == DeviceSessionState.STARTED && display == null) attachDisplay(connected, listeners)
+                    if (status == DeviceSessionState.STARTED && state.value.displayEnabled && display == null) attachDisplay(connected, listeners)
                     if (status == DeviceSessionState.STOPPED) disconnect()
                 }
             }
@@ -139,6 +141,14 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
                 if (state.value.connection != "STARTED") { fail("Glasses connection timed out. Put on the glasses and retry."); disconnect() }
             }
         }.onFailure { _, _ -> fail("Cannot create glasses session. Check pairing and SDK/device compatibility.") }
+    }
+
+    /** Audio-first by default. Changing mode tears down the old hardware session. */
+    fun setDisplayEnabled(enabled: Boolean) {
+        if (state.value.displayEnabled == enabled) return
+        disconnect()
+        mutableState.update { it.copy(displayEnabled = enabled,
+            display = if (enabled) "UNAVAILABLE" else "NOT_REQUIRED", error = null) }
     }
 
     private fun attachDisplay(connected: DeviceSession, listeners: CoroutineScope) {
@@ -214,12 +224,18 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
                 val collectors = CoroutineScope(scope.coroutineContext + collectorJob)
                 collectors.launch { added.stream.state.collect { status -> mutableState.update { it.copy(camera = status.name) } } }
                 collectors.launch { added.stream.errorStream.collect { fail("Glasses camera failed: ${it.description}") } }
+                cameraDeadline?.cancel()
+                cameraDeadline = scope.launch {
+                    delay(60_000)
+                    if (camera === added) stopCamera()
+                }
                 added.stream.start().onFailure { _, _ -> fail("Glasses camera could not start.") }
             }.onFailure { _, _ -> fail("Camera is unavailable on this glasses session.") }
         } finally { cameraStarting = false }
     }
 
     fun stopCamera() {
+        cameraDeadline?.cancel(); cameraDeadline = null
         cameraGeneration++
         cameraCollectors?.cancel(); cameraCollectors = null
         camera?.stop(); session?.removeCamera(); camera = null
@@ -231,6 +247,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         capturePhotoInternal()
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { fail("Photo capture unavailable. Reconnect and retry."); null }
+    finally { stopCamera() }
 
     private suspend fun capturePhotoInternal(): ByteArray? {
         val active = camera ?: run { fail("Start the glasses camera first."); return null }
@@ -314,6 +331,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     catch (_: Exception) { fail("Display unavailable. Read the answer on the phone."); false }
 
     private suspend fun showAnswerInternal(text: String): Boolean {
+        if (!state.value.displayEnabled) return false
         val panel = display ?: return false
         if (panel.state.value != DisplayState.STARTED) return false
         return withTimeoutOrNull(5_000) {
@@ -325,6 +343,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     }
 
     fun disconnect() {
+        cameraDeadline?.cancel(); cameraDeadline = null
         listeningRequested = false; motionRequested = false; listenGeneration++; cameraGeneration++
         permissionResult?.cancel(); permissionResult = null
         sessionJob?.cancel(); sessionJob = null; sessionScope = null
@@ -334,7 +353,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         speechCollectors = null; cameraCollectors = null
         speech = null; motionHandle = null; camera = null; display = null
         mutableMotion.value = null
-        mutableState.update { it.copy(connection = "DISCONNECTED", camera = "STOPPED", display = "UNAVAILABLE", speech = "STOPPED", motion = "STOPPED") }
+        mutableState.update { it.copy(connection = "DISCONNECTED", camera = "STOPPED", display = if (it.displayEnabled) "UNAVAILABLE" else "NOT_REQUIRED", speech = "STOPPED", motion = "STOPPED") }
     }
     fun close() { disconnect(); job.cancel(); permissionLauncher.unregister() }
 }

@@ -28,6 +28,9 @@ class AssembledBackendTest {
         assumeTrue("Explicit isolated integration server required", !origin.isNullOrBlank() && !token.isNullOrBlank())
         val client = HttpBackendClient(origin!!, token!!, true)
         assertTrue("Authenticated connection probe failed", await<Unit> { client.checkConnection(it) }.isSuccess)
+        val directions = await<Answer> { client.ask("Where is the bathroom?", it) }.getOrThrow()
+        assertTrue("Unconfigured navigation must not invent directions", directions.text.contains("do not have a reliable current location"))
+        assertTrue(directions.evidence.isEmpty())
         val id = "android-integration-${UUID.randomUUID()}"
         val event = JsonObject().apply {
             addProperty("id", id); addProperty("type", "pillbox_open"); addProperty("source", "sensor")

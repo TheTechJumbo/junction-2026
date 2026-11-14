@@ -53,6 +53,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var token: EditText
     private lateinit var connectButton: Button
     private var shownAnswer: String? = null
+    private var lastQuestion: String? = null
+    private lateinit var displayTestButton: Button
     private var pendingPhoneListen = false
     private var recognitionGeneration = 0L
     private var displayJob: Job? = null
@@ -89,6 +91,7 @@ class MainActivity : ComponentActivity() {
             text = title; setOnClickListener { action() }; column.addView(this)
         }
         label("Memory with receipts", 26f)
+        label("Gen 2 glasses: spoken answers, with records on your phone. No glasses display required.")
         label("Recorded observations, not confirmation that medication was taken.")
         label("1. Backend setup", 22f)
         label("Use the backend API_TOKEN, not an ElevenLabs key or database URL. Emulator: http://10.0.2.2:8000. USB phone: http://127.0.0.1:8000 with adb reverse.")
@@ -112,8 +115,20 @@ class MainActivity : ComponentActivity() {
             if (controller == null) { status.text = "Connect the backend first." }
             else { stopTurn(); glasses.startListening() }
         }
-        button("Stop") { cancelConnectionCheck(); stopTurn(); status.text = "Stopped." }
-        button("Replay answer") { cancelDiagnostic(); stopRecognition(); glasses.stopListening(); controller?.replay() }
+        button("Stop") { cancelConnectionCheck(); stopTurn(); glasses.stopCamera(); glasses.stopMotion(); status.text = "Stopped." }
+        button("Replay answer") {
+            cancelDiagnostic(); stopRecognition(); glasses.stopListening()
+            val previous = lastQuestion
+            if (previous != null && isNavigationQuestion(previous)) submit(previous) else controller?.replay()
+        }
+        button("Ask for directions") {
+            AlertDialog.Builder(this).setTitle("Get a spoken location estimate")
+                .setItems(arrayOf("Where am I?", "Where is the pill box?", "Where is the bathroom?", "Where is the front door?")) { _, index ->
+                    val request = listOf("Where am I?", "Where is the pill box?", "Where is the bathroom?", "Where is the front door?")[index]
+                    question.setText(request); submit(request)
+                }.show()
+        }
+        label("Directions use the backend’s latest location estimate. Replay re-checks direction requests. No continuous guidance or obstacle detection.")
         answerView = label("Your answer will appear here.", 22f)
         evidenceView = label("")
         label("3. Glasses setup and tests", 22f)
@@ -126,12 +141,23 @@ class MainActivity : ComponentActivity() {
         button("Register with Meta AI") { glasses.register() }
         button("Connect / reconnect glasses") { glasses.connect() }
         diagnosticStatus = label("Hardware tests: not run. A successful SDK call still needs confirmation on the glasses.")
-        button("Test display") { testDisplay() }
+        val displayOption = CheckBox(this).apply {
+            text = "Optional: I am using display glasses"
+            isChecked = false
+            setOnCheckedChangeListener { _, enabled ->
+                stopTurn(); glasses.setDisplayEnabled(enabled); shownAnswer = null
+                displayTestButton.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
+                diagnosticStatus.text = "Glasses mode changed. Reconnect glasses; audio and phone answers remain available."
+            }
+        }
+        column.addView(displayOption)
+        displayTestButton = button("Test display") { testDisplay() }.apply { visibility = android.view.View.GONE }
         button("Test audio") {
             if (controller == null) status.text = "Connect the backend first to test provider speech and phone fallback."
-            else { stopTurn(); controller?.testAudio() }
+            else { stopTurn(); lastQuestion = null; controller?.testAudio() }
         }
         label("Audio uses Android’s selected media output. Confirm you hear it and check the phone’s Bluetooth media route.")
+        label("Camera is off until requested. Each capture stops it; an unused camera session stops after 60 seconds. Start it again for another photo.")
         button("Start glasses camera") { glasses.startCamera() }
         button("Capture and attach supporting photo") { attachPhoto() }
         button("Stop glasses camera") { glasses.stopCamera() }
@@ -150,7 +176,7 @@ class MainActivity : ComponentActivity() {
             }
         })
         lifecycleScope.launch { glasses.state.collect { s ->
-            deviceStatus.text = "Registration: ${s.registration}\nDevices: ${s.deviceCount} · ${s.connection}\nCamera: ${s.camera} · Display: ${s.display}\nSpeech: ${s.speech} · Motion: ${s.motion}\nGlasses consent — Camera: ${s.cameraPermission}; microphone: ${s.microphonePermission}" + (s.error?.let { "\n$it" } ?: "")
+            deviceStatus.text = "Registration: ${s.registration}\nDevices: ${s.deviceCount} · ${s.connection}\nCamera: ${s.camera} · ${displayDescription(s.display)}\nSpeech: ${s.speech} · Motion: ${s.motion}\nGlasses consent — Camera: ${s.cameraPermission}; microphone: ${s.microphonePermission}" + (s.error?.let { "\n$it" } ?: "")
         } }
         lifecycleScope.launch { glasses.motion.collect { reading ->
             motionStatus.text = reading?.let { "Glasses acceleration: %.2f, %.2f, %.2f".format(it.x, it.y, it.z) }
@@ -173,7 +199,7 @@ class MainActivity : ComponentActivity() {
         cancelConnectionCheck()
         controller = null
         evidenceClient = null
-        latestEvidence = emptyList(); shownAnswer = null
+        latestEvidence = emptyList(); shownAnswer = null; lastQuestion = null
         answerView.text = "Your answer will appear here."; evidenceView.text = ""
         val origin = endpoint.text.toString().trim()
         try {
@@ -216,7 +242,17 @@ class MainActivity : ComponentActivity() {
         fun granted(permission: String) = if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) "allowed" else "not allowed"
         permissionStatus.text = "Phone permissions — Bluetooth: ${granted(Manifest.permission.BLUETOOTH_CONNECT)}; microphone: ${granted(Manifest.permission.RECORD_AUDIO)}; camera: ${granted(Manifest.permission.CAMERA)}. Glasses camera/microphone consent is requested separately when used."
     }
+    private fun displayDescription(value: String): String = when (value) {
+        "NOT_REQUIRED" -> "Display: not needed (Gen 2 audio mode)"
+        "UNSUPPORTED" -> "No display on these glasses; spoken answers remain available"
+        else -> "Optional display: $value"
+    }
+    private fun isNavigationQuestion(value: String) = Regex("\\b(where|directions?|navigate|navigation)\\b|\\bhow (?:do i |can i )?get\\b", RegexOption.IGNORE_CASE).containsMatchIn(value)
     private fun testDisplay() {
+        if (!glasses.state.value.displayEnabled) {
+            diagnosticStatus.text = "Gen 2 audio mode: no display test needed. Use Test audio."
+            return
+        }
         stopTurn()
         diagnosticStatus.text = "Display: sending test…"
         diagnosticJob = lifecycleScope.launch {
@@ -240,6 +276,7 @@ class MainActivity : ComponentActivity() {
         cancelDiagnostic()
         stopRecognition(); glasses.stopListening()
         if (controller == null) { status.text = "Connect the backend first."; return }
+        lastQuestion = text
         controller?.submit(text)
     }
     private fun renderTurn(turn: TurnState) {
@@ -271,7 +308,7 @@ class MainActivity : ComponentActivity() {
             latestEvidence = answer.evidence
             answerView.text = answer.text
             evidenceView.text = answer.evidence.joinToString("\n") { "${it.type} · ${it.ts} · ${it.zone}" }
-            if (shownAnswer != answer.text && turn.phase != TurnPhase.CANCELLED) {
+            if (glasses.state.value.displayEnabled && shownAnswer != answer.text && turn.phase != TurnPhase.CANCELLED) {
                 shownAnswer = answer.text
                 displayJob?.cancel()
                 displayJob = lifecycleScope.launch { glasses.showAnswer(answer.text) }

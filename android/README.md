@@ -124,3 +124,23 @@ component states remain visible separately from question results.
 
 Physical pairing, Meta consent, wearer visibility and Bluetooth routing still require
 real glasses. Emulator checks cannot establish these.
+
+## Gen 2 audio-first setup
+
+Gen 2 is the default mode. No display component is created or required, and Test
+Display is hidden. Answers and evidence remain visible on the phone and spoken
+through Android's selected media route. For display-equipped devices, explicitly
+select “Optional: I am using display glasses”, then reconnect. Unsupported display
+capability does not block audio, questions or camera use.
+
+Ask for directions offers supported destinations through the existing /ask endpoint.
+The backend's configured navigation adapter enforces confidence/freshness and returns
+short location estimates; missing/stale/unconfigured navigation returns uncertainty.
+Replaying a direction question requests a fresh estimate instead of replaying an old
+bearing. This is on-demand orientation, not continuous turn-by-turn route guidance,
+obstacle avoidance or a new model integration.
+
+Camera remains explicit: start it before capture. Every capture attempt stops the
+camera, and a session with no capture stops after 60 seconds. Stop also ends camera
+and motion. No automatic image sampling or background recording is introduced.
+Battery life and Gen 2 SDK microphone/camera support still require physical tests.

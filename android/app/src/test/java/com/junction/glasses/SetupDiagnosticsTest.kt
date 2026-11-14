@@ -6,7 +6,9 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
-import com.junction.glasses.core.Observation
+import com.junction.glasses.core.*
+import com.junction.glasses.meta.MetaGlassesAdapter
+import android.widget.CheckBox
 import kotlinx.coroutines.Job
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -84,7 +86,7 @@ class SetupDiagnosticsTest {
     }
     @Test fun missingGlassesTestsExplainNextStepAndNeverClaimSuccess() {
         button("Test display").performClick(); drain()
-        assertTrue(text("diagnosticStatus").contains("test not sent"))
+        assertTrue(text("diagnosticStatus").contains("no display test needed"))
         button("Test camera — capture and discard").performClick(); drain()
         assertTrue(text("diagnosticStatus").contains("no photo captured"))
         assertTrue(text("permissionStatus").contains("not allowed"))
@@ -105,6 +107,36 @@ class SetupDiagnosticsTest {
         button("Ask").performClick()
         assertTrue(pending.isCancelled)
         assertTrue(text("diagnosticStatus").contains("cancelled"))
+    }
+    @Test fun gen2DefaultsToAudioWithOptionalDisplayExplicitlyEnabled() {
+        val adapter = field("glasses").get(activity) as MetaGlassesAdapter
+        assertFalse(adapter.state.value.displayEnabled)
+        assertEquals("NOT_REQUIRED", adapter.state.value.display)
+        assertEquals(View.GONE, button("Test display").visibility)
+        val option = descendants(activity.window.decorView).filterIsInstance<CheckBox>().first()
+        option.isChecked = true; drain()
+        assertTrue(adapter.state.value.displayEnabled)
+        assertEquals(View.VISIBLE, button("Test display").visibility)
+        option.isChecked = false; drain()
+        assertEquals("NOT_REQUIRED", adapter.state.value.display)
+        assertEquals(View.GONE, button("Test display").visibility)
+    }
+    @Test fun repeatingDirectionsRequestsFreshEstimateInsteadOfOldAudio() {
+        val questions = mutableListOf<String>()
+        val backend = object : BackendClient {
+            override fun ask(question: String, callback: (Result<Answer>) -> Unit): Cancelable {
+                questions += question; return Cancelable {}
+            }
+            override fun speak(text: String, callback: (Result<ByteArray>) -> Unit): Cancelable = error("No old direction audio expected")
+        }
+        val audio = object : AudioOutput {
+            override fun playMp3(bytes: ByteArray, onComplete: (Result<Unit>) -> Unit): Cancelable = error("No audio expected")
+            override fun speakFallback(text: String, onComplete: (Result<Unit>) -> Unit): Cancelable = error("No audio expected")
+        }
+        field("controller").set(activity, VoiceTurnController(backend, audio, { it() }, {}))
+        (field("question").get(activity) as EditText).setText("Where is the bathroom?")
+        button("Ask").performClick(); button("Replay answer").performClick()
+        assertEquals(listOf("Where is the bathroom?", "Where is the bathroom?"), questions)
     }
     private fun page() = MockResponse().setHeader("Content-Type", "application/json")
         .setBody("""{"events":[],"next_cursor":null}""")
