@@ -1,66 +1,18 @@
 # Daylight family dashboard
 
-Buildless HTML/CSS/ES modules; no dependency installation or external assets required.
-Use Node 18+ for `npm --prefix dashboard run check`. Foundation gates remain `make setup`
-and `make check` from the repository root.
+Buildless HTML, CSS and ES modules with no dependencies. `npm --prefix dashboard run check` runs
+the syntax checks and Node tests (Node 18+).
 
-## Serve with the API
-
-Serve this directory at `/dashboard/` on the **same origin** as the API. Mount `/timeline`,
-`/summary`, and local evidence paths at the origin root. Open `/dashboard/`, click Connect,
-and enter the configured API bearer token. It exists only in JavaScript memory for this
-tab and is cleared on reload/disconnect. Never embed credentials in HTML, source, URLs,
-logs, or browser storage. All authenticated requests use the single `ApiClient`.
-A server/reverse proxy should disable access logging of Authorization headers and serve
-these files with no-store caching for private household sessions.
-
-For UI-only preview: `python3 -m http.server 8087 --bind 127.0.0.1 --directory dashboard`.
-Open http://127.0.0.1:8087 and explicitly choose **Explore synthetic demo**. Fixture mode
-is visibly marked and never used as an API error fallback. It has a fixed example day;
-leave demo to select a live day. This static server does not implement the API.
-
-Timeline and summary load together on date selection/Refresh. Europe/Helsinki is fixed
-for day and clock display. The dashboard displays backend alerts, question counts and
-sensor statuses without implementing their rules. Missing observations do not imply
-medication ingestion, locking, safety, or normality. Image evidence is fetched with
-Authorization only from the same origin; redirects, query parameters, URL credentials,
-unsupported media, and external URLs are rejected. Browser blob URLs are revoked when
-the evidence dialog closes, the day changes or the session ends.
-
-## Looks and the time of day
-
-The page follows the real day in Helsinki: a live clock, sunrise and sunset (`day.js`, worked
-out locally with no network), a "now" line on the rhythm-of-the-day strip, and a hero scene that
-moves with the sun. It reads as calm, quiet or "something to notice" from the backend's alerts
-only; it applies no care rules of its own.
-
-There are several looks to choose from with **Look**. Each one is a folder in `themes/` with its
-own SVG artwork, fonts and stylesheet; `themes/README.md` explains how to make one. `base.css`
-holds only resets and accessibility rules.
-
-Preview options in the address: `?demo` opens the example day, `?theme=<id>` picks a look,
-`?at=HH:MM` previews the scene at another time of day, and `?nosw` skips the offline cache.
-None of them carry credentials.
-
-## Install as an app
-
-The dashboard installs as a phone or desktop app with its own icon that opens full-screen
-(`manifest.json`, `icons/`). Browsers only allow this over HTTPS, or on `127.0.0.1`/`localhost`
-for testing on the same machine.
-
-- Android (Chrome): open `/dashboard/`, then **Install app** in the toolbar or *Add to home screen*.
-- iPhone (Safari): Share, then *Add to Home Screen*.
-- Desktop (Chrome/Edge): the install icon in the address bar, or **Install app**.
-
-`sw.js` caches only the app's own files, so the installed app opens offline and shows its
-offline message. It never caches API responses, evidence images, fixtures, or any request
-that carries the token. The token is still kept in memory only, so the app asks for it each
-time it is opened.
-
-## Browser checks
-
-Check wide and 390px layouts, keyboard focus, native date picker, Connect dialog submit /
-Escape, explicit demo label, refresh, empty API arrays, API/network errors, offline banner,
-unknown/offline sensors, and evidence success/404/unsupported URL. Inspect Network for
-Bearer headers and absence of token URLs. No automatic live polling is implemented.
-Actual backend integration must be verified after route wiring by the integrator.
+- **Serve** at `/dashboard/` on the same origin as the API (`backend/run.py` does). Connect asks
+  for the API bearer token, which lives only in memory for that tab; never put it in HTML, URLs,
+  logs or storage. All requests go through `ApiClient` in `client.js`. Evidence images are fetched
+  same-origin only; redirects, query strings and external URLs are refused.
+- **Preview** without the API: `python3 -m http.server 8087 --directory dashboard`, then choose
+  **Explore synthetic demo**. URL options: `?demo` (example day), `?demo=calm`, `?theme=<id>`,
+  `?at=HH:MM` (scene at another time), `?nosw` (skip the offline cache).
+- **Day and looks:** times are Europe/Helsinki; `day.js` works out sunrise and sunset locally. The
+  mood comes only from backend alerts; the page applies no care rules and a missing observation
+  means nothing was recorded, not that nothing happened. Looks live in `themes/` (see its README).
+- **Install:** `manifest.json` and `icons/` make it installable over HTTPS or on localhost.
+  `sw.js` caches only the app's own files, never API responses, evidence or anything with the token.
+  The Android app in `android/family` packages this folder.
