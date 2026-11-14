@@ -1,7 +1,7 @@
 # Ayman's demo kit — synthetic rehearsal
 
 This kit demonstrates local storage now. It does not claim sensor wiring, medication
-confirmation, door locking, working local VGGT or recorded fallback clips. A lid opening
+confirmation, door locking, a validated room-change pipeline or recorded fallback clips. A lid opening
 alone is not proof pills were swallowed; a door opening/closing is not proof it was locked.
 Ed owns the pitch; this is a staging and recording guide.
 
@@ -34,9 +34,12 @@ Ed owns the pitch; this is a staging and recording guide.
 7. Turn off upstream internet while retaining local connectivity; repeat storage steps.
    Do not disconnect USB power to simulate network failure. Power-cycle persistence is a
    separate check after a clean shutdown, not a substitute for network testing.
-8. Vision: state that VGGT is currently blocked by RAM/runtime limits. Use no remotely
-   processed household clip as evidence of on-board execution. Only add the live object
-   move or Gaussian splat after local model validation passes.
+8. Vision: the bounded four-thread VGGT experiment completed two public frames in
+   136 seconds median and three in 200 seconds on UNO Q. Nine frames timed out under
+   the 600-second limit in the earlier two-thread test. These results establish
+   execution, not geometry or room-change accuracy. See [JUN-31 results](../../unoq/quant/JUN31_RESULTS.md).
+   Use no remotely processed household clip as evidence of on-board execution. Only add
+   the live object move or Gaussian splat after local model validation passes.
 
 ## Fallback recording checklist
 
@@ -50,7 +53,7 @@ still to be filmed, not supplied by this kit:
 | 03-restart | Restart and retrieve | Same committed data after restart |
 | 04-app-answer | Phone/glasses question and actual answer | Only once app integration works; supported event semantics |
 | 05-night-door | Simulated door event and real dashboard response | Simulation clearly labelled; only once alert integration works |
-| 06-room-change | Public/demo room, object moved | Only if local VGGT works; show actual timings and output |
+| 06-room-change | Public/demo room, object moved | Only after room-change validation; show actual timings and output |
 
 Record with a phone camera/screen recorder into a **local, unsynced** folder. Avoid bystanders,
 notifications, account details, tokens and real personal data. Export MP4/H.264 with audio,
