@@ -78,96 +78,126 @@
   #workerLog { max-height: 260px; overflow-y: auto; }
   #workerLog b { color: var(--green); font-weight: 400; } #workerLog i { color: var(--red); font-style: normal; }
   .bar.mem { background: var(--violet); }
+  /* readable at a glance (JUN-26): larger type, the 3D view and the position first, the rest folded away */
+  html, body { font-size: 15px; }
+  h1 { font-size: 18px; letter-spacing: .12em; }
+  h2 { font-size: 13px; }
+  header nav { margin-left: auto; display: flex; gap: 16px; }
+  .meta { font-size: 13px; }
+  .room { font-size: 14px; color: var(--ink); flex-direction: row; align-items: center; gap: 8px; }
+  .hero { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 900px) { .hero { grid-template-columns: minmax(0, 1fr); } }
+  .hero iframe { height: min(62vh, 620px); }
+  .hero .headline { font-size: 26px; }
+  #fixPlaces li { font-size: 15px; color: var(--ink); }
+  .facts { gap: 8px; }
+  .facts li { font-size: 14px; color: var(--ink); }
+  .facts b { font-weight: 600; }
+  details.more { border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  details.more > summary { cursor: pointer; padding: 12px 14px; font-weight: 600; color: var(--dim); letter-spacing: .04em; }
+  details.more[open] > summary { border-bottom: 1px solid var(--line); }
+  details.more > .livegrid, details.more > main { padding: 14px; }
+  details.more main { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 14px; }
+  @media (max-width: 720px) { details.more main { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
 <body>
 <header>
-  <h1>BEACON <span style="font-weight:400;color:var(--dim)">vision dashboard</span></h1>
+  <h1>BEACON</h1>
   <span class="pill" id="gpu">GPU worker: checking…</span>
   <span class="pill" id="cpu">CPU worker: checking…</span>
   <span class="pill" id="places"></span>
-  <span style="margin-left:auto;display:flex;gap:14px"><a id="daylog">Day log</a><a id="placesLink">Places and position</a><a id="hud">Glasses display</a><a id="phone">Phone page</a></span>
+  <nav><a id="daylog">Day log</a><a id="placesLink">Places</a><a id="hud">Glasses display</a><a id="phone">Phone page</a></nav>
 </header>
 <section id="live" aria-label="Every stage, live">
   <div class="livebar">
-    <h2>Live: every stage</h2>
-    <label class="meta">Room <select id="liveZone"><option value="">the newest fix's</option></select></label>
+    <label class="room">Room <select id="liveZone"><option value="">newest</option></select></label>
     <span class="meta" id="liveNote" role="status"></span>
   </div>
-  <div class="livegrid">
+  <div class="hero">
     <div class="card">
-      <h2>Camera: the newest photos received</h2>
-      <div class="frame" id="frameBox"><img id="frameImg" alt="The newest photo that reached the relay"></div>
-      <div class="meta" id="frameNote">No photo has reached /locate yet.</div>
-      <div class="strip" id="frameStrip" aria-label="Earlier photos"></div>
+      <h2 id="splatTitle">3D view</h2>
+      <iframe id="splatFrame" title="3D view of the room" loading="lazy" hidden></iframe>
+      <div class="empty" id="splatNote">No 3D view of this room yet. Record the room, or send photos from the phone.</div>
     </div>
     <div class="card">
-      <h2>Position fix and the way to each place</h2>
-      <div class="headline" id="fixHead">No position fix yet</div>
+      <h2>Where the wearer is</h2>
+      <div class="headline" id="fixHead">No position yet</div>
       <div class="fixrow">
         <canvas id="fixMap" width="360" height="300" aria-label="Floor plan seen from above: the wearer in blue, the places in amber"></canvas>
         <div class="arrow"><svg id="arrow" viewBox="-50 -50 100 100" aria-hidden="true"><path d="M0,-44 L30,4 L11,4 L11,40 L-11,40 L-11,4 L-30,4 Z" fill="var(--amber)"/></svg><div id="arrowText"></div></div>
       </div>
-      <div class="meta" id="fixNote"></div>
       <ul id="fixPlaces"></ul>
+      <div class="meta" id="fixNote"></div>
+    </div>
+  </div>
+  <div class="livegrid">
+    <div class="card">
+      <h2>Camera</h2>
+      <div class="frame" id="frameBox"><img id="frameImg" alt="The newest photo that reached the relay"></div>
+      <div class="meta" id="frameNote">No photo yet.</div>
+      <div class="strip" id="frameStrip" aria-label="Earlier photos"></div>
     </div>
     <div class="card">
-      <h2 id="splatTitle">3D map</h2>
-      <iframe id="splatFrame" title="3D view of the room" loading="lazy" hidden></iframe>
-      <div class="empty" id="splatNote">No 3D file yet: it is built with a fix asked with &amp;view=1, or with a change check.</div>
-      <h2>Baseline pictures and the named places</h2>
-      <div class="strip" id="baseStrip"><span class="empty">No baseline for this room yet.</span></div>
-    </div>
-    <div class="card">
-      <h2>Recording (POST /recording)</h2>
+      <h2>Recording</h2>
       <div class="meta" id="recNote">No recording of this room yet.</div>
-      <ul id="recFacts"></ul>
+      <ul id="recFacts" class="facts"></ul>
     </div>
     <div class="card">
-      <h2>Moved while the camera stood still (cheap gate)</h2>
-      <ul id="gateList"><li class="empty">Nothing yet.</li></ul>
-      <div class="meta" id="gateCounts"></div>
-    </div>
-    <div class="card wide">
-      <h2>Worker: what each job took, and the most GPU memory it held</h2>
-      <div class="meta" id="workerHead"></div>
-      <div class="bars" id="jobBars"></div>
-      <pre id="workerLog">Loading…</pre>
+      <h2>Room pictures and places</h2>
+      <div class="strip" id="baseStrip"><span class="empty">No pictures of this room yet.</span></div>
     </div>
   </div>
+  <details class="more">
+    <summary>Changes noticed</summary>
+    <div class="livegrid">
+      <div class="card">
+        <h2>Moved while the camera stood still</h2>
+        <ul id="gateList"><li class="empty">Nothing yet.</li></ul>
+        <div class="meta" id="gateCounts"></div>
+      </div>
+    </div>
+    <main>
+      <div class="col">
+        <div class="card">
+          <h2>Run a change check</h2>
+          <div class="row">
+            <label>Room <input type="text" id="zone" value="kitchen" size="10" autocomplete="off"></label>
+            <label>Run on <select id="device"><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
+          </div>
+          <label>Video <input type="file" id="file" accept="video/*,.zip"></label>
+          <div class="row">
+            <button id="runBaseline">Set as baseline</button>
+            <button id="runCheck">Check for changes</button>
+          </div>
+          <div class="meta" id="runNote" role="status"></div>
+        </div>
+        <div class="card">
+          <h2>Checks</h2>
+          <ul id="checks"><li class="empty" style="cursor:default">No checks yet.</li></ul>
+        </div>
+      </div>
+      <div class="col" id="detail">
+        <div class="card"><div class="empty">Pick a check to see what was found.</div></div>
+      </div>
+    </main>
+  </details>
+  <details class="more">
+    <summary>System: worker, timings, pull requests</summary>
+    <div class="livegrid">
+      <div class="card wide">
+        <h2>Worker: time and GPU memory per job</h2>
+        <div class="meta" id="workerHead"></div>
+        <div class="bars" id="jobBars"></div>
+        <pre id="workerLog">Loading…</pre>
+      </div>
+      <div class="card wide" id="work">
+        <h2>Pull requests</h2>
+        <ul id="prs"><li class="empty">Loading…</li></ul>
+      </div>
+    </div>
+  </details>
 </section>
-<main>
-  <div class="col">
-    <div class="card">
-      <h2>Run a check</h2>
-      <div class="row">
-        <label>Place <input type="text" id="zone" value="kitchen" size="10" autocomplete="off"></label>
-        <label>Run on <select id="device"><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
-      </div>
-      <label>Video <input type="file" id="file" accept="video/*,.zip"></label>
-      <div class="row">
-        <button id="runBaseline">Set as baseline</button>
-        <button id="runCheck">Check for changes</button>
-      </div>
-      <div class="meta" id="runNote" role="status"></div>
-    </div>
-    <div class="card">
-      <h2>Checks</h2>
-      <ul id="checks"><li class="empty" style="cursor:default">No checks yet. Run one here or from the phone page.</li></ul>
-    </div>
-  </div>
-
-  <div class="col" id="detail">
-    <div class="card"><div class="empty">Pick a check on the left to see what the vision stage found.</div></div>
-  </div>
-
-  <div class="col" id="work">
-    <div class="card">
-      <h2>Work: pull requests</h2>
-      <ul id="prs"><li class="empty">Loading…</li></ul>
-    </div>
-  </div>
-</main>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -451,7 +481,7 @@ async function refreshLive() {
   if (zone) refreshBaseline(zone);
   if (fix && live.splat !== 'live:' + zone) {  // the live 3D page: the room map, and the wearer moving in it
     live.splat = 'live:' + zone;
-    $('splatTitle').replaceChildren(`Room map of "${zone}", the wearer moving in it: blue cone, places yellow · `,
+    $('splatTitle').replaceChildren(`3D view of "${zone}" · `,
       el('a', { href: withKey(`/viewer?live=${encodeURIComponent(zone)}`), target: '_blank', rel: 'noopener', textContent: 'full screen' }));
     $('splatFrame').hidden = false; $('splatNote').hidden = true;
     $('splatFrame').src = withKey(`/viewer?live=${encodeURIComponent(zone)}`);
@@ -495,15 +525,21 @@ async function refreshRecording() {  // the room's newest recording: chunks, fra
   if (!live.zone) return;
   const r = await getOr(`/recording?zone=${encodeURIComponent(live.zone)}`);
   if (!r || !r.ok) { $('recNote').textContent = `No recording of "${live.zone}" yet.`; $('recFacts').replaceChildren(); return; }
-  const tr = r.training || {}, t = (s) => s ? new Date(s * 1000).toLocaleTimeString() : '–';
-  $('recNote').textContent = `session ${r.session} · ${r.final ? 'ended' : 'recording'} · last chunk ${t(r.last_chunk_at)} (${r.age_s} s ago)`;
-  $('recFacts').replaceChildren(...[
-    `${r.frames} frames in ${r.chunks} chunks` + ((r.missing || []).length ? ` · missing chunks ${r.missing.join(', ')}` : ''),
-    `room map: ${r.map_state}, updated ${r.map_updates || 0} times (last at ${t(r.map_at)}, ${r.map_keyframes || '–'} keyframes)` + (r.map_error ? ` · ${r.map_error}` : ''),
-    `training on Iridis: ${tr.state || 'none'}` + (tr.job ? ` · job ${tr.job}` : '') + (tr.started_at ? ` · started ${t(tr.started_at)}` : '')
-      + (tr.state === 'done' ? ` · ${tr.psnr} dB, ${tr.keyframes} keyframes, ${(tr.gaussians || 0).toLocaleString('en-US')} Gaussians` : '')
-      + (tr.error ? ` · ${tr.error}` : ''),
-  ].map(text => el('li', { className: 'meta', textContent: text })));
+  const tr = r.training || {}, t = (s) => s ? new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '–';
+  const words = { running: 'working…', done: 'done', failed: 'failed', none: 'not yet' };
+  $('recNote').textContent = r.final ? `Finished at ${t(r.last_chunk_at)}` : `Recording now · last frames ${r.age_s} s ago`;
+  const fact = (label, ...rest) => el('li', {}, el('b', { textContent: label + ': ' }), ...rest);
+  const items = [
+    fact('Frames', `${(r.frames || 0).toLocaleString('en-US')}` + ((r.missing || []).length ? ` (missing parts ${r.missing.join(', ')})` : '')),
+    fact('Quick 3D map', `${words[r.map_state] || r.map_state}` + (r.map_updates ? `, updated ${r.map_updates}×` : '') + (r.map_error ? ` (${r.map_error})` : '')),
+    fact('Trained 3D (Iridis)', `${words[tr.state] || tr.state || 'not yet'}` + (tr.state === 'done' ? ` · ${tr.psnr} dB from ${tr.keyframes} pictures` : '')
+      + (tr.state === 'running' && tr.started_at ? ` since ${t(tr.started_at)}` : '') + (tr.error ? ` (${tr.error})` : '')),
+  ];
+  if (tr.state === 'done' && tr.splat) {
+    items.push(fact('Watch', el('a', { href: withKey(tr.splat.replace('trained.splat', 'flythrough.webm')), target: '_blank', rel: 'noopener', textContent: 'fly-through video' }),
+      ' · ', el('a', { href: withKey(`/viewer?live=${encodeURIComponent(live.zone)}`), target: '_blank', rel: 'noopener', textContent: '3D full screen' })));
+  }
+  $('recFacts').replaceChildren(...items);
 }
 $('liveZone').onchange = () => { refreshLive(); refreshGate(); refreshRecording(); };
 // ---------------------------------------------------------------- end of the live section

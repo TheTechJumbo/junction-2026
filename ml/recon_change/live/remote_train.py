@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path
 
 DEFAULT_ROOT = "/scratch/$USER/junction-recon"
-BRING = ["summary.json", "trained.splat", "untrained.splat", "cameras.npz"]
+BRING = ["summary.json", "trained.splat", "untrained.splat", "cameras.npz", "flythrough.mp4", "views.json", "depths.bin"]
 WAIT_S = 75 * 60  # the job's own limit is an hour
 
 
@@ -50,6 +50,27 @@ def _scp(host, sources, target, cwd, timeout=900):
 def _fetch(host, source, cwd, timeout=600):
     return subprocess.run(["scp", "-q", "-o", "BatchMode=yes", f"{host}:{source}", "."], cwd=cwd, capture_output=True,
                           timeout=timeout).returncode == 0
+
+
+def to_webm(path):
+    """The fly-through as WebM (VP8), which browsers play: the cluster's OpenCV has no H.264 encoder and writes MPEG-4
+    Part 2, which they do not. Returns the new file, or None without OpenCV here."""
+    try:
+        import cv2
+    except ImportError:
+        return None
+    cap = cv2.VideoCapture(str(path))
+    size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    target = Path(path).with_suffix(".webm")
+    writer = cv2.VideoWriter(str(target), cv2.VideoWriter_fourcc(*"VP80"), cap.get(cv2.CAP_PROP_FPS) or 24, size)
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        writer.write(frame)
+    writer.release()
+    cap.release()
+    return target if target.exists() and target.stat().st_size else None
 
 
 def train(source, name, out, host=None, root=None, launch=None, steps=7000, keyframes=96, log=print, remote_frames=None):
@@ -101,6 +122,14 @@ def train(source, name, out, host=None, root=None, launch=None, steps=7000, keyf
         _fetch(host, f"{data}/out/{f}", cwd=out)
     (out / "renders").mkdir(exist_ok=True)
     _fetch(host, f"{data}/out/renders/*.jpg", cwd=out / "renders")
+    if (out / "flythrough.mp4").exists():
+        to_webm(out / "flythrough.mp4")
+    if (out / "views.json").exists():  # the keyframes' photos for the playback, next to views.json as kfNNN.jpg
+        (out / "keyframes").mkdir(exist_ok=True)
+        _fetch(host, f"{data}/out/keyframes/*.jpg", cwd=out / "keyframes")
+        for f in sorted((out / "keyframes").glob("*.jpg")):
+            f.replace(out / f"kf{f.name}")
+        (out / "keyframes").rmdir()
     try:
         summary = json.loads((out / "summary.json").read_text())
     except (OSError, ValueError):
@@ -122,5 +151,7 @@ if __name__ == "__main__":
     ap.add_argument("--launch", choices=("slurm", "direct"))
     ap.add_argument("--steps", type=int, default=7000)
     ap.add_argument("--keyframes", type=int, default=96)
+    ap.add_argument("--remote-frames", help="the frames are already on the GPU machine, in this folder there (source is ignored)")
     args = ap.parse_args()
-    print(json.dumps(train(args.source, args.name, args.out, args.host, args.root, args.launch, args.steps, args.keyframes), indent=1))
+    print(json.dumps(train(args.source, args.name, args.out, args.host, args.root, args.launch, args.steps, args.keyframes,
+                           remote_frames=args.remote_frames), indent=1))

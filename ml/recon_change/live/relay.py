@@ -494,6 +494,40 @@ REPO = "TheTechJumbo/junction-2026"
 
 REC_MAP_EVERY = 60         # a recording's room map is built again after this many new frames
 REC_TRAIN_EVERY_S = 600    # and a splat trained on Iridis this often while it runs (and when it ends)
+REC_VIDEO_MAX = 4 << 30    # a whole video sent as one chunk (the glasses: about 110 MB a minute) may be this big
+REC_VIDEO_FPS = 15         # frames a second taken from such a video (?fps=1..30)
+REC_PART_FRAMES = 120      # and sent on to the gateway in parts of this many frames
+
+
+def video_parts(path, fps, start_ms):
+    """A video file as zips of frames NNNNNN_<ms>.jpg (upright, long side 960, like the app's), REC_PART_FRAMES each."""
+    cap = cv2.VideoCapture(str(path))
+    rate = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    step, n, kept, part = max(1, round(rate / fps)), 0, 0, None
+    parts = []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if n % step == 0:
+            scale = 960 / max(frame.shape[:2])
+            if scale < 1:
+                frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            if part is None:
+                buffer = io.BytesIO()
+                part = zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED)
+            part.writestr(f"{kept:06d}_{start_ms + int(1000 * n / rate)}.jpg", cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes())
+            kept += 1
+            if kept % REC_PART_FRAMES == 0:
+                part.close()
+                parts.append(buffer.getvalue())
+                part = None
+        n += 1
+    cap.release()
+    if part is not None:
+        part.close()
+        parts.append(buffer.getvalue())
+    return parts, n
 SESSION_NAME = r"[A-Za-z0-9_-]{1,64}"
 AUTO_SPLATS_KEPT = 12  # with --splat-every-fix, only the newest few of those 3D files stay on disk (each about 4 MB)
 
@@ -1007,7 +1041,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 got = {"state": "failed", "error": f"{type(err).__name__}: {err}"[:300]}
             summary = got.get("summary") or {}
             with rec_lock:
-                tr = recs[zone]["training"]
+                current = recs.get(zone) or {}
+                # a newer session may have started meanwhile: then this result does not overwrite its status
+                tr = current["training"] if current.get("session") == session else {"again": False}
                 tr.update(state=got["state"], finished_at=time.time(), job=got.get("job"), error=got.get("error"),
                           psnr=summary.get("psnr_median"), keyframes=summary.get("keyframes"), gaussians=summary.get("trained_gaussians"),
                           frames=summary.get("frames"))
@@ -1016,7 +1052,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     room["trained"] = {"splat": f"/evidence/{out.name}/trained.splat", "session": session, "at": time.time(),
                                        "psnr": summary.get("psnr_median"), "keyframes": summary.get("keyframes"),
                                        "gaussians": summary.get("trained_gaussians"), "median_depth": summary.get("median_depth"),
-                                       "fov_deg": summary.get("fov_deg")}
+                                       "fov_deg": summary.get("fov_deg"),
+                                       "views": f"/evidence/{out.name}/views.json" if (out / "views.json").exists() else None}
                     try:
                         rooms_file.write_text(json.dumps(rooms))
                     except OSError:
@@ -1188,9 +1225,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 header, _ = link.call({"op": "worker_log", "lines": lines,
                                        "device": "cpu" if parse_qs(url.query).get("device", [""])[0] == "cpu" else "gpu"})
                 return self.send_json(200 if header.get("ok") else 404, header)
-            match = re.fullmatch(r"/evidence/([\w-]+)/(\w+)\.(jpg|splat)", url.path)
+            match = re.fullmatch(r"/evidence/([\w-]+)/(\w+)\.(jpg|splat|mp4|webm|json|bin)", url.path)
             if match and (evidence_dir / match[1] / f"{match[2]}.{match[3]}").exists():
-                kind = "image/jpeg" if match[3] == "jpg" else "application/octet-stream"
+                kind = {"jpg": "image/jpeg", "mp4": "video/mp4", "webm": "video/webm", "json": "application/json"}.get(match[3], "application/octet-stream")
                 return self.send_bytes(200, (evidence_dir / match[1] / f"{match[2]}.{match[3]}").read_bytes(), kind)
             self.send_json(404, {"ok": False, "error": "not found"})
 
@@ -1403,13 +1440,48 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     seq = int(first("seq"))
                 except ValueError:
                     seq = -1
-                if not re.fullmatch(ZONE_NAME, zone) or not re.fullmatch(SESSION_NAME, session) or seq < 0 or not 0 <= size <= MAX_BODY \
+                if not re.fullmatch(ZONE_NAME, zone) or not re.fullmatch(SESSION_NAME, session) or seq < 0 or not 0 <= size <= REC_VIDEO_MAX \
                         or (size == 0 and not final):
-                    self.rfile.read(min(size, 65536))
+                    if size <= 65536:
+                        self.rfile.read(size)
                     return self.send_json(400, {"ok": False, "error": "POST /recording?zone=ROOM&session=NAME&seq=N&final=0|1 "
-                                                "with a zip of frames NNNNNN_<ms>.jpg (or a video) as the body"})
-                blob = self.rfile.read(size) if size else b""
-                header, _ = link.call({"op": "recording", "zone": zone, "session": session, "seq": seq, "final": final}, blob)
+                                                f"with a zip of frames NNNNNN_<ms>.jpg (up to {MAX_BODY >> 20} MB) or a video "
+                                                f"(up to {REC_VIDEO_MAX >> 30} GB) as the body"})
+                head = self.rfile.read(min(size, 4)) if size else b""
+                if head[:2] == b"PK" or not size:  # a zip of frames, as the app streams them
+                    if size > MAX_BODY:
+                        return self.send_json(400, {"ok": False, "error": f"A zip of frames may be at most {MAX_BODY >> 20} MB: send smaller chunks."})
+                    header, _ = link.call({"op": "recording", "zone": zone, "session": session, "seq": seq, "final": final},
+                                          head + self.rfile.read(size - len(head)))
+                else:  # a whole video: to disk here, frames taken here, sent on as parts with the following seq numbers
+                    if cv2 is None:
+                        return self.send_json(400, {"ok": False, "error": "A video needs OpenCV next to the relay: send zips of frames."})
+                    try:
+                        rate = min(30.0, max(1.0, float(first("fps", str(REC_VIDEO_FPS)))))
+                    except ValueError:
+                        rate = float(REC_VIDEO_FPS)
+                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as video:
+                        video.write(head)
+                        left = size - len(head)
+                        while left > 0:
+                            piece = self.rfile.read(min(left, 1 << 20))
+                            if not piece:
+                                break
+                            video.write(piece)
+                            left -= len(piece)
+                    try:
+                        parts, read = video_parts(video.name, rate, int(time.time() * 1000))
+                    finally:
+                        os.unlink(video.name)
+                    if not parts:
+                        return self.send_json(400, {"ok": False, "error": "Could not read any frame from that video."})
+                    for k, part in enumerate(parts):
+                        header, _ = link.call({"op": "recording", "zone": zone, "session": session, "seq": seq + k,
+                                               "final": final and k == len(parts) - 1}, part)
+                        if not header.get("ok"):
+                            break
+                    header["video"] = {"frames_read": read, "frames_kept": header.get("frames_total"), "parts": len(parts), "fps": rate}
+                    seq += len(parts) - 1
                 if not header.get("ok"):
                     return self.send_json(400, header)
                 now = time.time()
@@ -1437,7 +1509,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     state = {"map": rec["map_state"], "training": rec["training"]["state"]}
                 return self.send_json(200, {"ok": True, "session": session, "seq": seq, "frames_total": header["frames_total"],
                                             "status": "final" if header["final"] else "receiving", "viewer": f"/viewer?live={zone}",
-                                            "duplicate": header.get("duplicate"), "missing": header.get("missing"), **state})
+                                            "duplicate": header.get("duplicate"), "missing": header.get("missing"),
+                                            **({"video": header["video"]} if header.get("video") else {}), **state})
             if op == "map":  # the room map: the zone's baseline pictures in one pass, as one splat in map axes
                 self.rfile.read(min(size, 65536))
                 if not re.fullmatch(ZONE_NAME, zone):

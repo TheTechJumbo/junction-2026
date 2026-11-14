@@ -63,6 +63,27 @@ def keyframes(source, most, change):
     return picked, count[0]
 
 
+DEPTH_STEP = 4  # the depth of each keyframe is exported at a quarter of its size: 130 x 130 points for 518 x 518
+
+
+def export_views(r, out, keep):
+    """Each keyframe as a surface for the 3D page's playback: views.json (cameras, sizes) and depths.bin (float16,
+    keyframe after keyframe, DEPTH_STEP times smaller than the picture, 0 where the depth is not trusted: depth edges and
+    pixels no other keyframe confirms). The page lays the keyframe's own photo on its surface, so from where it was taken
+    it is exactly as sharp as the photo; between keyframes it fades from one to the next."""
+    S, H, W = r.depth.shape
+    w, h = (W + DEPTH_STEP - 1) // DEPTH_STEP, (H + DEPTH_STEP - 1) // DEPTH_STEP
+    depths = np.zeros((S, h, w), np.float16)
+    for q in range(S):
+        d = np.where(keep[q], r.depth[q], 0).astype(np.float32)
+        depths[q] = cv2.resize(d, (w, h), interpolation=cv2.INTER_NEAREST)
+    depths.tofile(out / "depths.bin")
+    views = {"size": [W, H], "depth_size": [w, h], "K": np.round(r.K, 4).tolist(), "E": np.round(r.E, 6).tolist(),
+             "files": [f"kf{q:03d}.jpg" for q in range(S)], "depths": "depths.bin", "median_depth": float(np.median(r.depth[keep])) if keep.any() else 1.0}
+    (out / "views.json").write_text(json.dumps(views))
+    return S
+
+
 def ssim(a, b):
     """Structural similarity of two (1, 3, H, W) pictures, 11 px Gaussian window."""
     import torch
@@ -186,15 +207,88 @@ def train(r, pts, cols, sizes, steps, out, log):
     return count, round(time.time() - t0, 1), round(float(np.median(psnr)), 2)
 
 
+def _quat_to_matrix(q):
+    w, x, y, z = q / np.linalg.norm(q)
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                     [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                     [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
+def _slerp(q0, q1, t):
+    if q0 @ q1 < 0:
+        q1 = -q1
+    d = min(1.0, float(q0 @ q1))
+    if d > 0.9995:
+        q = q0 + t * (q1 - q0)
+    else:
+        a = math.acos(d)
+        q = (math.sin((1 - t) * a) * q0 + math.sin(t * a) * q1) / math.sin(a)
+    return q / np.linalg.norm(q)
+
+
+def flythrough(out, between=6, fps=24, log=print):
+    """The trained splat seen along the recorded path, as OUT/flythrough.mp4: from each keyframe's camera to the next
+    in `between` steps (positions moved evenly, rotations turned evenly). Returns the number of frames written."""
+    import splat as splat_file
+    import torch
+    from gsplat import rasterization
+
+    out = Path(out)
+    rec = np.fromfile(out / "trained.splat", dtype=[("pos", "<f4", 3), ("scale", "<f4", 3), ("rgba", "u1", 4), ("rot", "u1", 4)])
+    cams = np.load(out / "cameras.npz")
+    E, K = cams["E"], cams["K"]
+    dev = "cuda"
+    means, scales = torch.tensor(rec["pos"], device=dev), torch.tensor(rec["scale"], device=dev)
+    quats = torch.tensor((rec["rot"].astype(np.float32) - 128) / 128, device=dev)
+    quats = quats / quats.norm(dim=1, keepdim=True).clamp(min=1e-8)
+    opacities = torch.tensor(rec["rgba"][:, 3].astype(np.float32) / 255, device=dev)
+    colors = torch.tensor(rec["rgba"][:, :3].astype(np.float32) / 255, device=dev)
+    side = int(round(2 * K[0][0, 2]))
+    Kt = torch.tensor(K[0], device=dev, dtype=torch.float32)[None]
+    rots = [splat_file.quaternion(e[:, :3]) for e in E]
+    centres = [-e[:, :3].T @ e[:, 3] for e in E]
+    poses = []
+    for i in range(len(E) - 1):
+        for s in range(between):
+            t = s / between
+            R = _quat_to_matrix(_slerp(rots[i], rots[i + 1], t))
+            c = (1 - t) * centres[i] + t * centres[i + 1]
+            poses.append((R, -R @ c))
+    poses.append((E[-1][:, :3], E[-1][:, 3]))
+    path = out / "flythrough.mp4"
+    writer = None
+    for code in ("avc1", "mp4v"):  # H.264 plays everywhere; OpenCV builds without it fall back to MPEG-4
+        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*code), fps, (side, side))
+        if writer.isOpened():
+            break
+    with torch.no_grad():
+        for R, tvec in poses:
+            view = torch.eye(4, device=dev)
+            view[:3, :3] = torch.tensor(R, device=dev, dtype=torch.float32)
+            view[:3, 3] = torch.tensor(tvec, device=dev, dtype=torch.float32)
+            render, _, _ = rasterization(means, quats, scales, opacities, colors, view[None], Kt, side, side, packed=False)
+            frame = (render[0].clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+    writer.release()
+    log(f"fly-through: {len(poses)} frames ({len(poses) / fps:.0f} s) along {len(E)} keyframes in {path}")
+    return len(poses)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("video")
-    ap.add_argument("out")
+    ap.add_argument("video", nargs="?")
+    ap.add_argument("out", nargs="?")
+    ap.add_argument("--flythrough-only", metavar="OUT", help="only draw OUT/flythrough.mp4 from OUT/trained.splat and cameras.npz")
     ap.add_argument("--keyframes", type=int, default=96, help="the most keyframes in the one VGGT pass (96 fit an L4's 24 GB)")
     ap.add_argument("--change", type=float, default=0.9, help="a new keyframe once the view is less alike than this")
     ap.add_argument("--steps", type=int, default=7000)
     ap.add_argument("--no-train", action="store_true")
     args = ap.parse_args()
+    if args.flythrough_only:
+        flythrough(args.flythrough_only)
+        return
+    if not args.video or not args.out:
+        ap.error("give VIDEO OUT (or --flythrough-only OUT)")
     out = Path(args.out)
     (out / "keyframes").mkdir(parents=True, exist_ok=True)
     summary = {"video": Path(args.video).name}
@@ -228,6 +322,8 @@ def main():
     if keep.mean() < 0.03:
         keep = valid & (agree >= 1)
     pts, cols, sizes = start_points(r, keep)
+    # the page's playback surfaces: depth edges out, but no need for two other keyframes to confirm a pixel of its own photo
+    summary["views"] = export_views(r, out, valid & (agree >= 1) if (valid & (agree >= 1)).mean() > 0.05 else valid)
     quat = np.tile([1.0, 0, 0, 0], (len(pts), 1))
     summary["untrained_gaussians"] = write_splat(out / "untrained.splat", pts, np.repeat(sizes[:, None] * 0.75, 3, 1), cols,
                                                  np.full(len(pts), 255.0), quat)
@@ -238,6 +334,10 @@ def main():
         try:
             summary["trained_gaussians"], summary["train_seconds"], summary["psnr_median"] = train(r, pts, cols, sizes, args.steps, out, log)
             log(f"trained splat: {summary['trained_gaussians']} Gaussians in {summary['train_seconds']} s, PSNR {summary['psnr_median']} dB")
+            try:
+                summary["flythrough_frames"] = flythrough(out, log=log)
+            except Exception as err:  # noqa: BLE001  the splat itself is done
+                log(f"no fly-through: {type(err).__name__}: {err}")
         except ImportError as err:
             summary["trained"] = f"not trained: {err} (gsplat is not installed here)"
             log(summary["trained"])
