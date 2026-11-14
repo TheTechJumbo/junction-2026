@@ -122,3 +122,28 @@ Nine frames at 224x224 were stopped by the 600-second runtime limit, with no
 completed reconstruction. See nine-frame-board-result.json. This was a timeout,
 not an OOM result. INT4 was not added because the observed limitation was time,
 not weight memory. No claim of a working full room-change pipeline is made.
+
+## Thread experiment
+
+`--threads` accepts 1, 2, or 4 and defaults to 2. The supervisor passes the
+same value to PyTorch intra-op, OMP and OpenBLAS; PyTorch inter-op stays at 1.
+Use the bounded launcher and a fresh private output directory for each run.
+The report preserves `inference_seconds` (preprocessing through output writes)
+plus separate preprocessing, forward, postprocessing and write timings. The
+supervisor records its wall time; reports also identify frame and checkpoint
+manifest hashes and software versions. Hashing happens outside inference timing.
+
+Compare every completed candidate with the reproduced two-thread baseline:
+
+```
+python unoq/quant/compare_threads.py --reference /path/to/baseline-output \
+  --candidate /path/to/candidate-output
+```
+
+This requires completed, finite reports and exactly matching depth, depth_conf,
+and pose_enc keys and shapes. It reports maximum absolute difference and count
+of elements outside `rtol=1e-4, atol=1e-5`. A candidate fails on any mismatch.
+Screen each setting once, then alternate three baseline and three candidate
+runs for a promising setting under comparable conditions. Adopt a change only
+if all comparisons pass and median inference improves by at least 15%; otherwise
+retain the two-thread default. Keep output files and input images out of git.
