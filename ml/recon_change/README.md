@@ -121,6 +121,36 @@ is the glasses display that draws it: an arrow, a distance and a mini map.
 `/hud?k=KEY&demo=1` is a sample room that needs no relay. A view that does not match the room
 comes back as `lost`. Distances are rough: they assume things are about 2 m away.
 
+**What the carer sets once:** three things the vision stage cannot work out by itself, set on
+`/places?k=KEY` and kept by the gateway. This part only stores them: the position fix, the item
+finder and the change check read the files.
+
+- *The room's real scale.* Pick two named places and type the measured distance between them.
+  Kept as `baselines/<zone>/scale.json`: `{"a": "pill box", "b": "front door", "metres": 2.4}`
+  (0.1 to 50 m). `POST /scale?zone=&a=&b=&metres=`, `POST /scale?zone=&delete=1`; `GET
+  /waypoints` shows it as `scale`, or `null`. Removing one of its two places removes it.
+- *Show an item once.* One to five photos of the exact item (these keys, not any keys), for the
+  whole home. Kept as `enrolled/<item>/00.jpg`, `01.jpg`, ... in the project folder: JPEGs with
+  the long side at most 1280, the item name in lowercase letters and digits with `_` for a
+  space (`remote_control`), at most 12 items. Removing a photo renumbers the rest, so there is
+  never a gap. `POST /enroll?name=` with the photo as the body (JPEG, PNG or WebP, up to 20 MB),
+  `GET /enrolled`, `GET /enrolled/<item>/<n>.jpg`, `POST /enroll?name=&delete=1` (with `&n=`:
+  that photo only).
+- *Spots to watch.* Press "Watch a spot", drag a box on a baseline picture and name it. Kept as
+  `baselines/<zone>/watch.json`: `[{"name": "pill box shelf", "frame": 3, "box": [u0, v0, u1,
+  v1]}]`, the box in fractions of the picture with `u0 < u1` and `v0 < v1`, at most 12 in a
+  room. `POST /watch?zone=&name=&frame=&u0=&v0=&u1=&v1=`, `POST /watch?zone=&name=&delete=1`,
+  `GET /watch?zone=`.
+- A new baseline for a room removes its places, its scale and its watched spots: they were
+  picked in the old pictures. Enrolled items stay.
+- The page also lists the items the relay remembers in the room (`seen` in `/where`), each with
+  a Forget button.
+- The relay checks all of it and the gateway checks it again before it writes anything: names
+  against a pattern, numbers finite and in range, photos by their first bytes and their size.
+- `python live/test_setup_flow.py` tests this offline against the real gateway code in a
+  temporary folder. `python live/dev_setup.py` serves the page with made-up rooms and no
+  cluster, and prints the link (`BEACON_ROOT` or `gateway.set_root()` moves the gateway's folder).
+
 **Questions, reminders and lost items (the demo flow):** the glasses display also asks and
 reminds. Start the relay with the team's event API (the backend that holds the sensor events)
 next to it:
