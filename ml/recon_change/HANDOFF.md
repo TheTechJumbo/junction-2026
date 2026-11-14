@@ -282,3 +282,57 @@ Finding to design around (PR 31): a position fix does not jump, it goes stale. A
 an arrow drawn from the last fix is right 46% of the time between photos; at one photo a second, with
 the steadying, 90%. Guiding a walking person needs about one photo a second or motion sensing in
 between.
+
+## HAND-OFF, Sat 14 Nov 17:55 UTC: start here
+
+Seb is moving to a new chat. Everything is pushed; nothing lives only on a laptop folder. Clone the repo
+fresh and read `ml/recon_change/DEMO.md` (how to run the demo) and this section.
+
+**Where the code is**
+- `main` has the whole vision stage up to the cheap gate (PR 42).
+- `jun-22-hud-waypoints` is one commit ahead of `main` (105fe7d): local mode (`relay.py --local`,
+  `run_local.sh`), `live/simulate.py`, `run_demo.sh`, `DEMO.md`, half-size VGGT weights on a small
+  graphics card. Not yet in a pull request to `main`, because the local models were never run.
+
+**What Seb asked for last, not done**
+1. Install the Android app on his phone (connected by USB) and run the demo with the glasses.
+   - The laptop has no `adb` and no Android SDK. `adb` (Android platform-tools, from Google) has to be
+     installed first; ask Seb before downloading it. Java is JDK 25; the app wants Java 17 to build, so
+     take the debug APK from the repo's Android workflow run on GitHub instead of building.
+   - Then `adb install -r app-debug.apk`, `adb reverse tcp:8000 tcp:8000`, `adb reverse tcp:8090 tcp:8090`,
+     and the steps in `DEMO.md`. The API token to type into the app is `API_TOKEN` in `.env.demo`,
+     which `run_demo.sh` makes. Never print it in a chat or commit it.
+   - The app talks to the event API only: voice questions work through the glasses; the arrow,
+     reminders, lost items and the day page are on the relay's pages (`/hud`, `/places`, `/dayview`).
+2. Run the models on the laptop (RTX 2060, 6 GB; 17 GB RAM). A separate environment was being
+   installed (PyTorch 2.3.1 cu121, then VGGT, then 5 GB of weights into the Hugging Face cache). The
+   commands are in `DEMO.md`, "Models on the laptop". Never started: whether VGGT fits in 6 GB with
+   half-size weights and 5 baseline photos is unknown. First test: `bash run_local.sh <python>`, record
+   a baseline, send a photo, watch `worker.log` for the peak GPU memory line.
+
+**What is running, and will stop**
+- Cluster workers with the item finder and the spot check: started 16:31 UTC, replacements queued, so
+  they end about 20:30 UTC. Restart with `bash iridis/restart_workers.sh` on the cluster (VPN needed);
+  deploy new code first with `bash iridis/deploy_from_laptop.sh` from `ml/recon_change`.
+- The relay and a local copy of the event API were running on Seb's laptop from the old chat's
+  folder. A new chat should start its own with `bash ml/recon_change/run_demo.sh` from a fresh clone
+  (stop the old ones first: they hold ports 8000, 8090 and 8091).
+
+**Unfinished pieces, each a draft pull request**
+- PR 43 `jun-26-people-in-frame`: know when a person or a hand is in the frame so they are not treated
+  as part of the room. Stopped part-way; check what is in the branch before continuing.
+- PR 40 `jun-25-phone-side-vit`: position from a small model on the phone against a map made once.
+  Stopped part-way; it had a plan and code but no numbers at 17:30 UTC.
+- A replay of a real handheld walk through the whole live system, scored against ground truth, was
+  proposed and never started. It would be the first test of the gates on real video.
+- PR 11 `jun-22-recall`: left unmerged on purpose (tuned on the benchmark it is scored on).
+
+**Numbers to carry over** (details in `eval/*_RESULTS.md`)
+- Position fix: a "found" fix is right to 3 cm and 1 degree (median); 84% of same-room views found; no
+  wrong room accepted; 4 s on the cluster GPU, 33 to 39 s on 32 CPU cores, 2 to 5 minutes on 4 cores.
+- An arrow from a photo a few seconds old is right about half the time while the wearer moves.
+- Item finder: 201 of 303 labelled items found, keys only reliable within about 0.9 m.
+- Spot check: 74% of small changes at about 9% false alarms; live on the lounge scene 19 of 20 right.
+- Cheap gate: the same view is answered in under 0.1 s without the model; never tested on real video.
+
+**Not tested anywhere**: a real room of ours, real items, the glasses' camera, a real sensor event.
