@@ -1,0 +1,29 @@
+{
+  "load_seconds": 20.09587551300001,
+  "inference": "completed",
+  "finite": true,
+  "frames": 2,
+  "size": 224,
+  "inference_seconds": 270.79486093799983,
+  "shapes": {
+    "depth": [
+      1,
+      2,
+      224,
+      224,
+      1
+    ],
+    "depth_conf": [
+      1,
+      2,
+      224,
+      224
+    ],
+    "pose_enc": [
+      1,
+      2,
+      9
+    ]
+  },
+  "peak_rss_kib": 2405060
+}

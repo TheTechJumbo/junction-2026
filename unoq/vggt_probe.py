@@ -59,12 +59,16 @@ def worker(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--quantized', action='store_true', help='print the bounded INT8 runner instructions')
     p.add_argument('--weights')
     p.add_argument('--frames')
     p.add_argument('--count', type=int, choices=(2, 3, 9), default=2)
     p.add_argument('--timeout', type=int, default=120)
     p.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     args = p.parse_args()
+    if args.quantized:
+        print('Use quant/bounded.sh --checkpoint PATH --frames PATH --count 2 --size 224 --out PATH; see quant/README.md')
+        return
     if args.worker:
         worker(args)
         return
