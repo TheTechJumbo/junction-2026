@@ -152,6 +152,14 @@ next to it:
   items, and it misses most things that are small in the picture, so expect it to see keys
   from about a metre, not from across the room (`eval/ITEMS_RESULTS.md`). It adds 0.8 s to a
   fix on the GPU and 5 s on the CPU worker.
+  It can be told to find more, with settings only (all off unless set; "Finding more" in
+  `eval/ITEMS_RESULTS.md` has the measurements and the exact values): a limit per item
+  (`RECON_ITEMS_LIMITS`), a second opinion from another model on weak boxes
+  (`RECON_ITEMS_LOOK_FROM`, `RECON_ITEMS_JUDGE`, `RECON_ITEMS_JUDGE_LIMITS`), a list of weak
+  sightings for the relay to add up over looks (`RECON_ITEMS_CANDIDATES`, result key
+  `items_candidates`), and pictures of the wearer's own things in `enrolled/<item name>/NN.jpg`
+  (result field `matched`: `text` or `enrolled`). Every answer carries `confidence_pct`: how
+  often answers with that kind of evidence were right on the test photos.
   The relay sends the wearer's newest photo at up to 1280 px (`big.jpg`) for it.
   A sighting can go stale (someone picks the keys up), so every later fix is asked to look at
   each remembered spot again. After two clear, close looks from different standpoints with no
