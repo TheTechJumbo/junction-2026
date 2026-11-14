@@ -1,5 +1,4 @@
 import asyncio
-import time
 
 import httpx
 import pytest
@@ -35,41 +34,89 @@ def test_invalid_resource_bounds_and_model(kwargs):
         ElevenLabsSpeechService(**kwargs)
 
 
-def test_queue_deadline_and_shutdown_cancel_all_shared_work():
-    started = asyncio.Event()
-    streams = []
-
-    class Slow(httpx.AsyncByteStream):
-        def __init__(self):
-            self.closed = False
-
-        async def __aiter__(self):
-            started.set()
-            await asyncio.sleep(1)
-            yield MP3
-
-        async def aclose(self):
-            self.closed = True
-
+def test_queue_deadline_expires_before_provider_slot_is_available():
     def handler(request):
-        stream = Slow()
-        streams.append(stream)
-        return httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=stream)
+        pytest.fail("Expired queued synthesis must never contact the provider")
 
     async def scenario():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             speech = ElevenLabsSpeechService(
                 "synthetic-key", "synthetic-voice", client=client, timeout_seconds=.03,
             )
-            start = time.monotonic()
-            results = await asyncio.gather(
-                *(speech.synthesize(str(i)) for i in range(8)), return_exceptions=True,
+            # Hold every provider slot independently of synthesis deadlines. A queued
+            # request must fail within its budget even though no active call finishes.
+            for _ in range(4):
+                await speech._semaphore.acquire()
+            try:
+                with pytest.raises(SpeechUnavailable):
+                    await asyncio.wait_for(speech.synthesize("queued"), timeout=1)
+                await speech.aclose()
+                assert not speech._inflight
+            finally:
+                for _ in range(4):
+                    speech._semaphore.release()
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_provider_limit_and_shutdown_cancel_all_shared_work():
+    async def scenario():
+        streams = []
+        four_started = asyncio.Event()
+        fifth_started = asyncio.Event()
+        active = 0
+        peak_active = 0
+
+        class Controlled(httpx.AsyncByteStream):
+            def __init__(self):
+                self.release = asyncio.Event()
+                self.closed = False
+
+            async def __aiter__(self):
+                await self.release.wait()
+                yield MP3
+
+            async def aclose(self):
+                nonlocal active
+                assert not self.closed
+                self.closed = True
+                active -= 1
+
+        def handler(request):
+            nonlocal active, peak_active
+            active += 1
+            peak_active = max(peak_active, active)
+            stream = Controlled()
+            streams.append(stream)
+            if len(streams) == 4:
+                four_started.set()
+            if len(streams) == 5:
+                fifth_started.set()
+            return httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=stream)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            speech = ElevenLabsSpeechService(
+                "synthetic-key", "synthetic-voice", client=client, timeout_seconds=5,
             )
-            assert all(isinstance(result, SpeechUnavailable) for result in results)
-            assert time.monotonic() - start < .3
-            assert len(streams) <= 4  # queueing consumed the same deadline
-            await speech.aclose()
+            callers = [asyncio.create_task(speech.synthesize(str(i))) for i in range(8)]
+            try:
+                await asyncio.wait_for(four_started.wait(), timeout=2)
+                assert len(speech._inflight) == 8
+                assert len(streams) == active == peak_active == 4
+                # A fifth cumulative request is valid after a slot is released;
+                # concurrency must remain bounded at four throughout the handoff.
+                streams[0].release.set()
+                await asyncio.wait_for(fifth_started.wait(), timeout=2)
+                assert len(streams) == 5
+                assert active == peak_active == 4
+            finally:
+                await speech.aclose()
+                results = await asyncio.gather(*callers, return_exceptions=True)
+            assert sum(result == MP3 for result in results) == 1
+            assert all(result == MP3 or isinstance(result, asyncio.CancelledError)
+                       for result in results)
             assert all(stream.closed for stream in streams)
+            assert active == 0
             assert not speech._inflight
             assert not speech._cache
             assert not client.is_closed
