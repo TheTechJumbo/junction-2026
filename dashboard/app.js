@@ -19,7 +19,7 @@ function render({timeline,summary}) {
   $('summary-text').textContent=summary.text || 'No summary has been recorded for this day.';
   $('alert-count').textContent=`${timeline.alerts.length} recorded`;
   $('alerts').replaceChildren();
-  for(const alert of timeline.alerts) { const row=node('article',undefined,'alert-item'); row.append(node('strong',alert.type==='door_open_night'?'Door opened during the night':alert.type.replaceAll('_',' ')),node('p',alert.message),node('time',`${timeLabel(alert.ts)} · Helsinki`)); $('alerts').append(row); }
+  for(const alert of timeline.alerts) { const row=node('article',undefined,'alert-item'); row.append(node('strong',['door_open_night','night_door_open'].includes(alert.type)?'Door opened during the night':alert.type.replaceAll('_',' ')),node('p',alert.message),node('time',`${timeLabel(alert.ts)} · Helsinki`)); $('alerts').append(row); }
   if(!timeline.alerts.length) empty('alerts','No sensor alerts recorded for this day.');
   $('event-count').textContent=`${timeline.events.length} observations`;
   $('events').replaceChildren();

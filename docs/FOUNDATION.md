@@ -2,7 +2,7 @@
 
 Base: 49e019e568930bfd7c021cc2acf9360fa86853be (origin/main after fetch).
 Branch: codex/bartek-foundation. Use this branch's completed foundation commit as the
-common worker base, not the historical main commit alone. No workers launched here.
+common worker base, not the historical main commit alone. Implementation has since completed in isolated worktrees; see HANDOFF.md.
 
 ## Ownership
 | Worker | Exclusive files |
@@ -21,7 +21,7 @@ Python 3.11+ (foundation verified on 3.12). Run `make setup` then `make check`.
 The lock pins the development environment; pyproject defines supported direct ranges.
 Create a private .env from .env.example only when needed; ignored secrets do not
 automatically transfer into worker worktrees. No API credentials are needed for checks.
-No application server exists yet: health/HTTP/storage/answer/speech code are worker tasks.
+The assembled application now runs with make run; see HANDOFF.md for environment setup.
 For changed schemas run `make schemas`, inspect the diff, then `make check`.
 
 ## Test gates
@@ -49,7 +49,7 @@ contracts/fixtures/ are synthetic, never genuine patient observations. events.js
 Helsinki offsets: 08:00 local pills-box opening, 08:40 repeat, 03:10 night door opening.
 There is no confirmed-medication or confirmed-lock fixture. Vision example provides no
 ground truth. legacy-vision.json deliberately differs from the canonical schema and is
-adapter input only. Timeline/answer examples describe intended behavior, not a working app.
+adapter input only. Timeline/answer examples describe contract shapes; the assembled app is tested separately.
 
 The answer fixture is for a question after the first opening and before the repeat;
 its evidence subset is not an answer over the entire daily timeline.

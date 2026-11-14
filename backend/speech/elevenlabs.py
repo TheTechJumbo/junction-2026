@@ -5,6 +5,7 @@ https://elevenlabs.io/docs/api-reference/text-to-speech/convert
 https://elevenlabs.io/docs/overview/models
 """
 import asyncio
+import math
 import os
 import re
 import time
@@ -51,7 +52,9 @@ class ElevenLabsSpeechService:
         cache_ttl_seconds: float = 300, cache_bytes: int = 8 * 1024 * 1024,
         max_audio_bytes: int = 2 * 1024 * 1024,
     ):
-        if timeout_seconds <= 0 or cache_entries < 0 or cache_bytes < 0:
+        if (not math.isfinite(timeout_seconds) or timeout_seconds <= 0
+                or not math.isfinite(cache_ttl_seconds) or cache_ttl_seconds < 0
+                or cache_entries < 0 or cache_bytes < 0 or max_audio_bytes <= 0):
             raise ValueError("Invalid speech deadline or cache limits")
         self.api_key = api_key
         self.voice_id = voice_id

@@ -4,7 +4,7 @@ Status: provisional implementation contract for Bartek's workers, 2026-11-14.
 Existing team agreement is the JUN-6 v3 Event vocabulary and five core endpoints.
 Additional decisions below are local proposals, not approvals from Ed/Seb/Ayman.
 Python schemas: models.py. Generated JSON Schema: schemas/. Internal ports: interfaces.py.
-No product endpoints are implemented in this foundation.
+Product routes are implemented locally; see docs/HANDOFF.md for verification and limits.
 
 ## Data and meaning
 Event has id, type, source (sensor|vision|voice), timezone-aware ts, zone, nullable
@@ -17,7 +17,8 @@ Use configured Europe/Helsinki day boundaries and half-open UTC query intervals;
 sort event presentation by (ts,id), replay by durable ingestion cursor instead.
 
 ## HTTP routes (provisional details)
-All routes except a future minimal health probe require authentication. Bind locally
+All data routes require authentication. GET /health is a minimal public liveness probe;
+/dashboard/ serves static code without embedding household data or credentials. Bind locally
 for development; keep tokens server-side or in an explicit client session, never URLs.
 Deployment authentication and phone/browser transport need agreement (D5).
 

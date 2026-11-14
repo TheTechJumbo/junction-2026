@@ -20,3 +20,12 @@ Serving and manual checks: README.md. No deployment or push performed.
 - Follow-up: integrator browser exposed native fetch receiver failure before HTTP requests.
   Client now calls fetch with globalThis as receiver; receiver-sensitive regression passes.
   Integrator performs actual browser reconnection verification after cherry-picking patch.
+
+## Integrated verification
+
+Integrator verified the real assembled API on 2026-11-14: authenticated daily data,
+empty day, evidence JPEG and missing-evidence 404, server outage/restart recovery and
+credential clearing on reload. Browser testing found and fixed the native fetch receiver
+bug (commit a457825, integrated as 79898e2); regression test added. Desktop 1280px and
+narrow screenshot artifacts are in ignored `.data/`; see `docs/HANDOFF.md` for exact
+checks and limitations. Synthetic data only, no hosted or hardware validation.

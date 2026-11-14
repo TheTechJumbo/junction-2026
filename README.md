@@ -1,8 +1,10 @@
 # Current implementation entry point
 
-JUN-19 supersedes the historical product plan below. For Bartek’s current foundation,
-start with [docs/FOUNDATION.md](docs/FOUNDATION.md), [contracts/API.md](contracts/API.md)
-and [docs/DECISIONS.md](docs/DECISIONS.md). This is scaffolding, not a working application.
+JUN-19 supersedes the historical product plan below. For Bartek’s implemented local application,
+start with [docs/HANDOFF.md](docs/HANDOFF.md) for run commands and verification,
+[contracts/API.md](contracts/API.md) for interfaces and [docs/DECISIONS.md](docs/DECISIONS.md)
+for unresolved team decisions. The historical plan below is retained for reference;
+profiles and confirmed ingestion/locking claims are not implemented.
 
 # junction-2026
 
