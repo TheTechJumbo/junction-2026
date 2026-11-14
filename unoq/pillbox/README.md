@@ -23,12 +23,15 @@ The Mac demo backend can be started from this checkout using its configured priv
 - Mac backend launched with a new private demo token and isolated local data under the user's configuration directory. Existing provider credentials were absent.
 - Ten synthetic events in the validation zone were accepted over Wi-Fi. Delivery latency median 185.9 ms, maximum 1456.9 ms. These measure HTTP delivery using a test queue, including request completion, not physical sensor response time.
 - Actual Wi-Fi disconnect, queued synthetic event, queue reopen and Wi-Fi reconnect passed with the original event ID.
+- The installed service retained a queued synthetic event across a reader restart during a Wi-Fi outage. After reconnect it delivered the event, and the API contained exactly one row for its ID. One reconnect attempt failed to obtain a DHCP lease. A retry restored the connection. The saved profile now retries autoconnect indefinitely.
+- A synthetic opening persisted on the board passed through the installed sender to the real Mac API, completed an active reminder in the relay, and appeared in the day timeline. Dashboard and day-view pages returned HTTP 200. This used an isolated temporary relay and exercised its real sensor integration.
+- Board and Mac UTC epoch seconds matched during a paired check. The installed service is enabled and active, and Bridge reports no queue overflow.
 - Queue identity/restart, authentication failure, malformed receipt and successful delivery unit tests passed.
 - `make check` passed 470 tests, lint and schema checks.
 
 The stock uploader encountered an OpenOCD flash-write timeout. Direct reset/halt flashing succeeded, but the MCU core differed from the installed 0.54.1 toolchain and the sketch did not start. A 2 MiB backup was saved on the board at `/home/arduino/junction-mcu-backup.bin` before updating the MCU core. The matching 0.54.1 core and automatic-start sketch were then flashed successfully. Bridge `pillbox_peek` responds and the Linux reader restarts successfully. The backup captures the MCU at the diagnostic stage, including earlier sketch-flash attempts, and is not a verified working original sketch image.
 
-Physical opening, dashboard display, reminder completion and external-power/USB-free boot await physical testing. No actual sensor opening was observed at this acceptance checkpoint. JUN-13 remains In Progress.
+Physical opening, physical sensor-to-API timing, visible dashboard update, physical-event reminder completion and external-power/USB-free boot await physical testing. No actual sensor opening was observed at this acceptance checkpoint. A Linux reboot command requires interactive administrator authentication on this board, so automatic startup after a full board reboot remains unverified. JUN-13 remains In Progress.
 
 ## Rollback
 
