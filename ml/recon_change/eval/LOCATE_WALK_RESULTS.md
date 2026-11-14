@@ -7,6 +7,8 @@ rooms, with motion blur, true camera poses and true metres.
 
 ## Short answer
 
+**Version 2 of `locate.py` (14 November 2026, section "Version 2" below) changes points 2 to 4:** real metres from one known distance, a 1.5 m guess without it, up from a level surface (bearing error in the office 9 -> 1 degree), and half of the needless "lost" turned into "unsure". Everything from "What was tested" on describes the code before it.
+
 1. **When the fix says "found", the position and the direction are right.** 453 found fixes in three
    rooms: position error 0.03 m (median), 0.10 m (90th percentile), 0.19 m (worst); heading error
    1.0, 5.3 and 7.9 degrees. No wrong room was accepted (0 of 178).
@@ -40,6 +42,322 @@ rooms, with motion blur, true camera poses and true metres.
 Position and heading error are measured after fitting the model's baseline cameras to the truth,
 so they do not contain the metres error. The shown distance and bearing are what `locate()` returns,
 untouched, so they contain everything.
+
+## Version 2
+
+Measured on 14 November 2026 on the same fixes as everything above: the 715 fixes with 12 baseline
+frames and 1 query frame (537 same room, 178 wrong room), plus the 134 with 24 baseline frames.
+Five changes to `locate.py` and `where()` in `live/worker.py`. "Before" is the code the sections
+below describe; "after" is this branch.
+
+| 12 baseline frames + 1 query frame | fr1_office | fr2_desk | fr3_office | All rooms |
+| --- | --- | --- | --- | --- |
+| Same-room queries | 180 | 180 | 177 | 537 |
+| Found, before -> after (the rule for "found" did not change) | 133 -> 133 (74%) | 175 -> 175 (97%) | 145 -> 145 (82%) | 453 -> 453 (84%) |
+| Unsure, before -> after | 5 -> 15 | 5 -> 5 | 9 -> 32 | 19 -> 52 |
+| Lost, before -> after | 42 -> 32 | 0 -> 0 | 23 -> 0 | 65 -> 32 |
+| Wrong-room queries accepted (found or unsure), before -> after | 0 of 60 -> 0 of 60 | 0 of 60 -> 0 of 60 | 0 of 58 -> 0 of 58 | 0 of 178 -> 0 of 178 |
+| Position error of found fixes, m: median / 90th percentile / worst (unchanged) | 0.08 / 0.14 / 0.19 | 0.01 / 0.04 / 0.06 | 0.02 / 0.05 / 0.12 | 0.03 / 0.10 / 0.19 |
+| Heading error of found fixes, degrees (unchanged) | 4.5 / 6.4 / 7.9 | 0.8 / 1.3 / 1.9 | 0.7 / 1.4 / 3.7 | 1.0 / 5.3 / 7.9 |
+| Position error of every fix that shows an arrow after (found and unsure), m | 0.09 / 0.14 / 0.75 | 0.01 / 0.04 / 0.06 | 0.03 / 0.08 / 0.15 | 0.03 / 0.11 / 0.75 |
+| The code's metres / true metres: before | 1.54 | 1.25 | 1.31 | 1.31 |
+| after, no known distance (1.5 m assumed) | 1.16 | 0.93 | 0.98 | 0.98 |
+| after, one known distance | 1.00 | 0.95 | 0.99 | 0.99 |
+| Found fixes with metres within 15% of the truth: before / after / after with one known distance | 0% / 31% / 100% | 0% / 100% / 100% | 0% / 100% / 100% | 0% / 80% / 100% |
+| Error of the shown distance (found fixes), m: before | 1.44 / 2.11 / 2.49 | 0.46 / 0.66 / 0.85 | 0.68 / 1.09 / 1.24 | 0.63 / 1.66 / 2.49 |
+| after, no known distance | 0.36 / 0.58 / 0.81 | 0.10 / 0.16 / 0.26 | 0.04 / 0.09 / 0.15 | 0.09 / 0.42 / 0.81 |
+| after, one known distance | 0.04 / 0.09 / 0.21 | 0.07 / 0.14 / 0.21 | 0.03 / 0.07 / 0.15 | 0.04 / 0.11 / 0.21 |
+| Error of the shown bearing (found fixes), degrees: before | 9 / 25 / 35 | 2 / 7 / 22 | 1 / 3 / 9 | 2 / 13 / 35 |
+| after | 1 / 5 / 14 | 2 / 4 / 7 | 0 / 1 / 4 | 1 / 4 / 14 |
+| The map's up against the true vertical, degrees, median: before -> after | 19.1 -> 6.2 | 10.8 -> 1.0 | 8.2 -> 0.7 | 10.8 -> 1.0 |
+
+PASLCD (states only; it has no true metres): 267 of 270 same-room photos found and 540 of 540
+wrong-room photos lost, before and after. No photo changes state: the one same-room photo that was
+lost stays lost, and the highest one-frame score of a wrong-room photo is 0.18 against the 0.5 it
+would need.
+
+### The five changes
+
+1. **Metres from one known distance.** `locate(..., known={"a": "pill box", "b": "front door",
+   "metres": 2.4})` scales the fix so that the distance between those two named places comes out as
+   given. The worker reads it from `baselines/<zone>/scale.json` (same three keys). With it, every
+   found fix has its metres within 15% of the truth and the shown distance is 4 cm off (median), 21 cm
+   at worst. Any pair of places works: of the 30 pairs tried, the worst is 16% off (two places 0.87 m
+   apart); pairs at least 2 m apart are within 5% in 96% of the fixes (table D). The result says where
+   its metres come from: `metres_from` is `"known distance"` or `"assumed viewing distance"`. A known
+   distance is ignored, with a `metres_note`, when a place is missing from the fix, when the file
+   cannot be read, or when it would make everything more than 5 times larger or smaller than the
+   assumed distance does (a typing mistake such as 24 for 2.4).
+2. **A better guess without it.** The assumed median viewing distance is now 1.5 m (`TYPICAL_M`,
+   worker setting `RECON_TYPICAL_M`), was 2.0 m. **This number is fitted to these three rooms, which
+   are all desks seen from 1 to 2.5 m, and it is scored on the same three rooms.** The right value was
+   1.30, 1.52 and 1.61 m. In the office the metres are still 16% too long. A large living room will
+   need more: give it a known distance instead.
+3. **Up from a level surface.** Up is the direction, within 35 degrees of the cameras' average, along
+   which the most baseline points lie in one thin layer: the normal of the largest table top or
+   floor. A plane is then fitted through that layer. The cameras' average is kept when the layer
+   holds less than 15% of the points or the answer sits at the edge of the search. In all 715 fixes
+   the surface was used; it held 28% to 41% of the points. The bearing error in the cluttered office
+   falls from 9 to 1 degree (median), 25 to 5 (90th percentile) and 35 to 14 (worst), and no bearing
+   is more than 30 degrees off any more (10 were). The office's up is still 6 degrees off: that map is
+   bent with 12 frames (see "Where it breaks"). A level map also shortens the shown distances, because
+   they are measured along the floor (office: 0.51 to 0.36 m median error at the same metres).
+4. **Fewer needless "lost".** "Found" is as before. A view whose two-frame score is under 0.3 but
+   whose score reaches 0.5 when one baseline frame is enough is now "unsure" instead of "lost"
+   (`one_frame_only: true`). 33 of the 65 lost same-room views are rescued; 30 of them have the right
+   position (within 0.2 m and 10 degrees). The other 3, all in the office, are 0.23 m / 4 degrees,
+   0.37 m / 11 degrees and 0.75 m / 13 degrees off. No wrong room is accepted on TUM or PASLCD. The rule
+   is off when the reconstruction has no patch features (on depth alone one frame lets wrong rooms
+   through). `locate(..., rescue=False)` gives the old rule.
+5. **Where the baseline never looked.** Every fix carries `view_gap_deg`, the angle between the
+   wearer's view and the closest baseline view (from the model's cameras; it is within 1.3 degrees
+   of the true angle for 90% of the fixes). Beyond 30 degrees 88% of the views are not found (35 of
+   40), within 30 degrees 10% (49 of 497). A fix that is not found and is beyond 30 degrees gets
+   `hint`: `{"why": "not_filmed", "say": "Turn left", "turn_deg": -38, "tilt_deg": 3}`, the turn back
+   to the closest baseline view. 30 of the 32 lost same-room fixes carry one; left or right was
+   correct in all 30 hints whose true turn is at least 15 degrees. **The hint cannot tell "not filmed
+   this way" from "another room":** 22% of the wrong-room queries on TUM get one too (and 36 of 61
+   on PASLCD). `baseline_views` in every fix is `coverage()` of the baseline: each frame's heading,
+   how much of the full turn is covered, and the gaps ("behind", "left", "right" of the first
+   baseline picture), so the carer can be told what else to film. In the office the 15 queries
+   whose heading falls in a reported gap were all not found.
+
+And one setting that is off by default: `RECON_LOCATE_RETRY=24` runs a second fix with 24 baseline
+photos when the first is not found. On the 89 queries that were run both ways this finds 80 instead
+of 71 (the same as always using 24), at 3.4 s per fix on average instead of 2.4 s; a fix that is not
+found at first answers after 7.5 s, and every look into another room pays that (table F).
+
+### Defaults that changed, and what did not
+
+- Changed: the assumed viewing distance (2.0 -> 1.5 m), up (cameras -> level surface, cameras as
+  fallback), and the rescue rule (on). Each is better on TUM and leaves PASLCD's states as they were.
+- Behind a parameter or a file: the known distance (needs `scale.json`), the second fix with 24
+  photos (`RECON_LOCATE_RETRY`, default 0), `need=1` (unchanged, still not used).
+- Kept: every key of the fix result, and `map_frame`, `to_map`, `from_map`. New keys: `metres_from`,
+  `metres_note` (only when a known distance was not used), `up_from`, `up_tilt_deg`,
+  `up_surface_share`, `match_one_frame`, `one_frame_only`, `view_gap_deg`, `hint`, `baseline_views`,
+  and `retried` when a second fix ran.
+- `locate()` keeps the map frame it chose on the reconstruction (`r.room`), and `map_frame()` returns
+  it for that pass, so `items.py`, which was not touched, puts items on the same map as the places.
+- `set_baseline` in the worker now also deletes `scale.json` (it already deleted `waypoints.json`):
+  the known distance was between two places of the old pictures.
+
+### How this was measured
+
+The walking test saved, for every fix, the model's cameras, the places' positions, the parts of the
+match score and a thinned copy of the baseline's points. The new parts of `locate.py`
+(`surface_up`, `known_metres`, `state_of`, `view_gap`, `hint`, `coverage`) are plain functions of
+exactly those, so `locate_v2_eval.py` calls them on the saved fixes. The only difference from running
+`locate()` is that the saved place positions are rounded to 1 cm: with the old settings the replay
+gives the distance and bearing that `locate()` returned at the time for 97% of the fix-place pairs
+(the rest differ by one step of 0.1 m). This is why "before" in the table above differs from the
+first table of this file in a last digit here and there.
+
+Confirmation with `locate()` itself: the reconstructions of the walking test's fixes were made again
+on the GPU and saved (`locate_walk_eval.py --dump`, 710 of the 715 saved when the 30-minute job
+ended), and the new `locate()` was run on the first 288 of them (12 rounds of the plan: 216 same room,
+72 wrong room) with one known distance. It agrees with the replay in every one: the same state in
+288 of 288, up from the same surface (the normal differs by 0.00 degrees), the same hint or none,
+every distance within 0.1 m and every bearing within 2 degrees (1080 fix-place pairs). On those 288:
+found 183 of 216, unsure 19, lost 14, wrong room accepted 0 of 72, metres within 15% in 183 of 183,
+distance error 0.04 / 0.12 / 0.21 m, bearing error 1 / 4 / 13 degrees. The other saved
+reconstructions were not scored with `locate()`: the cluster's CPU queue was full and the login node
+gives two cores. `locate()` takes 0.05 to 0.11 s longer than before (0.33 -> 0.38, 0.36 -> 0.47 and
+0.34 -> 0.43 s on one CPU core, one fix of each room).
+
+PASLCD: the walking test had scored every saved PASLCD reconstruction twice, with two frames and
+with one frame required; the new rule is applied to those two scores of each photo
+(`locate_v2_paslcd.py`). The new `locate()` itself was run on 154 of the 945 saved passes before the
+run was stopped for time (the cluster's CPU queue was full): it gives the same state as the rule in
+all 154, and takes up from a surface in 111 of them (cameras in 43).
+
+Offline checks, no GPU: `python eval/test_locate_v2.py` (up, known distance, the state rule, hint,
+coverage, the shared map frame, the old keys), next to `test_locate_lookalike.py` and
+`test_items.py`, which still pass.
+
+### What was not tested in version 2
+
+- **The live path.** `where()` in the worker was not run: not the reading of `scale.json`, not
+  `RECON_TYPICAL_M`, not the second fix. The numbers for the second fix come from the saved 24-frame
+  fixes, not from the worker doing it.
+- **A carer's tape measure.** The known distance here is the true distance between two places. A
+  distance that is 5% off makes every metre 5% off, and two places picked on the wrong things make
+  it worse. Places less than 1 m apart gave up to 16% error even with the true distance.
+- **The 1.5 m guess outside desk-like rooms.** Fitted to and scored on the same three rooms.
+- **Up in a room without a large level surface in view**, or with a large slope (a ramp, a sloping
+  ceiling). Only the synthetic check covers the fallback. Its limits (35 degrees, 15% of the points)
+  and the 30 degrees of the hint were set while looking at these three rooms. On PASLCD there is no
+  true vertical to compare with.
+- **Whether a hint helps a person.** Only whether it fires and points the right way.
+- **Items.** `items.py` gets the new map frame through `map_frame()` (`test_items.py` passes), but no
+  item benchmark was run again. Item positions the relay remembered before this change are in the
+  old metres and the old up.
+- **The relay, the HUD and the pages** do not read any of the new keys yet.
+- Everything in "What was not tested" below still holds: no glasses, no homes, three rooms.
+
+### How to run it again
+
+On Iridis, from the work folder, with the walking test's `walk/` in place and this branch's
+`locate.py`, `recon_change.py` and the `eval/` scripts copied to `walk2/code/`:
+
+```
+cd walk2 && OMP_NUM_THREADS=1 ../.venv-recon/bin/python -I code/locate_v2_eval.py --plan ../walk/out/plan.json \
+    --walk ../walk/out --out out_v2 --detector-dir code                      # the tables below, 6 minutes on 6 cores
+sbatch code/locate_walk_dump.slurm --frames 12+1                              # once, one L4 GPU, 28 minutes, 28 MB per fix
+cd .. && sbatch walk2/code/locate_v2_rescore.slurm walk walk2/dump_v2_known --known-pair   # locate() itself on those, CPU
+.venv-recon/bin/python -I walk2/code/locate_v2_paslcd.py --two walk/paslcd/out_need2 --one walk/paslcd/out_need1
+```
+
+### Tables of version 2
+
+Written by `locate_v2_eval.py`. Settings compared in table B: each row adds one change to the row
+above it.
+
+Fixes replayed: 715 with 12 baseline frames and 1 query frame (537 same room, 178 wrong room).
+
+Check of the replay: with the shipped settings it gives the distance (to 0.1 m) and bearing (within 1 degree) that `locate()` returned at the time for 2614/2685 (97%) of the fix-place pairs.
+
+### A. Found, unsure, lost
+
+"Found" is unchanged (two baseline frames must agree). New: a view that reaches the found mark only when one baseline frame is enough is "unsure" instead of "lost".
+
+| Room | Same-room queries | Found (before = after) | Unsure before | Unsure after | Lost before | Lost after | Rescued (lost to unsure) | of those: right position (0.2 m, 10 deg) | of those: poor | Wrong room accepted before | after | Wrong room: highest one-frame score |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fr1_office | 180 | 133/180 (74%) | 5 | 15 | 42 | 32 | 10 | 7 | 3 | 0/60 (0%) | 0/60 (0%) | 0.02 |
+| fr2_desk | 180 | 175/180 (97%) | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0/60 (0%) | 0/60 (0%) | 0.09 |
+| fr3_office | 177 | 145/177 (82%) | 9 | 32 | 23 | 0 | 23 | 23 | 0 | 0/58 (0%) | 0/58 (0%) | 0.01 |
+| **All rooms** | 537 | 453/537 (84%) | 19 | 52 | 65 | 32 | 33 | 30 | 3 | 0/178 (0%) | 0/178 (0%) | 0.09 |
+
+How good is a fix in each state, after the change (position error m and heading error degrees: median / 90th percentile / worst):
+
+| State after | Fixes | Position error m | Heading error deg | Right position (0.2 m, 10 deg) | Off by more than 0.5 m or 20 deg |
+| --- | --- | --- | --- | --- | --- |
+| found | 453 | 0.03 / 0.10 / 0.19 | 1.0 / 5.3 / 7.9 | 453/453 (100%) | 0/453 (0%) |
+| unsure, as before (two-frame score 0.3 to 0.5) | 19 | 0.04 / 0.13 / 0.26 | 0.9 / 5.6 / 6.5 | 18/19 (95%) | 0/19 (0%) |
+| unsure, new (one baseline frame agrees) | 33 | 0.09 / 0.16 / 0.75 | 1.2 / 6.7 / 13.1 | 30/33 (91%) | 1/33 (3%) |
+| lost | 32 | 0.34 / 0.90 / 1.06 | 6.5 / 9.7 / 40.4 | 10/32 (31%) | 12/32 (38%) |
+
+The poor fixes that now come through as "unsure": fr1_office 0.75 m, 13.1 deg (true angle to the closest baseline view 28 deg); fr1_office 0.37 m, 10.5 deg (true angle to the closest baseline view 22 deg); fr1_office 0.23 m, 4.2 deg (true angle to the closest baseline view 8 deg).
+
+### B. What the display shows (found fixes)
+
+Distance and bearing to each place as the fix returns them, against the truth. Position and heading error of the fix do not depend on metres or up and are the same in every row. Bearing rows count places at least 0.5 m away.
+
+| Room | Setting | Found fixes | Metres / true metres: median (10th to 90th pct) | Fixes with metres within 15% | Distance error m: median / 90th / worst | Distance error %, median | Bearing error deg: median / 90th / worst | Bearing off by more than 30 deg | Up off the true vertical deg: median / 90th / worst | Up taken from a surface |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fr1_office | as shipped (up from the cameras, 2.0 m assumed) | 133 | 1.54 (1.52 to 1.59) | 0/133 (0%) | 1.44 / 2.11 / 2.49 | 63 | 9 / 25 / 35 | 10/627 (2%) | 19.1 / 23.1 / 25.9 | 0/133 (0%) |
+| fr1_office | assumed viewing distance 1.5 m | 133 | 1.16 (1.14 to 1.19) | 41/133 (31%) | 0.51 / 0.82 / 1.03 | 23 | 9 / 25 / 35 | 10/627 (2%) | 19.1 / 23.1 / 25.9 | 0/133 (0%) |
+| fr1_office | v2: 1.5 m and up from a level surface | 133 | 1.16 (1.14 to 1.19) | 41/133 (31%) | 0.36 / 0.58 / 0.81 | 17 | 1 / 5 / 14 | 0/627 (0%) | 6.2 / 7.2 / 12.8 | 133/133 (100%) |
+| fr1_office | v2 + one known distance | 133 | 1.00 (0.99 to 1.01) | 133/133 (100%) | 0.04 / 0.09 / 0.21 | 2 | 1 / 5 / 14 | 0/627 (0%) | 6.2 / 7.2 / 12.8 | 133/133 (100%) |
+| fr2_desk | as shipped (up from the cameras, 2.0 m assumed) | 175 | 1.25 (1.24 to 1.25) | 0/175 (0%) | 0.46 / 0.66 / 0.85 | 29 | 2 / 7 / 22 | 0/875 (0%) | 10.8 / 10.9 / 11.0 | 0/175 (0%) |
+| fr2_desk | assumed viewing distance 1.5 m | 175 | 0.93 (0.93 to 0.94) | 175/175 (100%) | 0.07 / 0.21 / 0.41 | 5 | 2 / 7 / 22 | 0/875 (0%) | 10.8 / 10.9 / 11.0 | 0/175 (0%) |
+| fr2_desk | v2: 1.5 m and up from a level surface | 175 | 0.93 (0.93 to 0.94) | 175/175 (100%) | 0.10 / 0.16 / 0.26 | 6 | 2 / 4 / 7 | 0/875 (0%) | 1.0 / 1.1 / 1.6 | 175/175 (100%) |
+| fr2_desk | v2 + one known distance | 175 | 0.95 (0.95 to 0.96) | 175/175 (100%) | 0.07 / 0.14 / 0.21 | 4 | 2 / 4 / 7 | 0/875 (0%) | 1.0 / 1.1 / 1.6 | 175/175 (100%) |
+| fr3_office | as shipped (up from the cameras, 2.0 m assumed) | 145 | 1.31 (1.31 to 1.32) | 0/145 (0%) | 0.68 / 1.09 / 1.24 | 33 | 1 / 3 / 9 | 0/725 (0%) | 8.2 / 8.2 / 8.3 | 0/145 (0%) |
+| fr3_office | assumed viewing distance 1.5 m | 145 | 0.98 (0.98 to 0.99) | 145/145 (100%) | 0.07 / 0.15 / 0.21 | 4 | 1 / 3 / 9 | 0/725 (0%) | 8.2 / 8.2 / 8.3 | 0/145 (0%) |
+| fr3_office | v2: 1.5 m and up from a level surface | 145 | 0.98 (0.98 to 0.99) | 145/145 (100%) | 0.04 / 0.09 / 0.15 | 2 | 0 / 1 / 4 | 0/725 (0%) | 0.7 / 0.8 / 0.9 | 145/145 (100%) |
+| fr3_office | v2 + one known distance | 145 | 0.99 (0.99 to 1.00) | 145/145 (100%) | 0.03 / 0.07 / 0.15 | 1 | 0 / 1 / 4 | 0/725 (0%) | 0.7 / 0.8 / 0.9 | 145/145 (100%) |
+| **All rooms** | as shipped (up from the cameras, 2.0 m assumed) | 453 | 1.31 (1.24 to 1.55) | 0/453 (0%) | 0.63 / 1.66 / 2.49 | 34 | 2 / 13 / 35 | 10/2227 (0%) | 10.8 / 19.9 / 25.9 | 0/453 (0%) |
+| **All rooms** | assumed viewing distance 1.5 m | 453 | 0.98 (0.93 to 1.16) | 361/453 (80%) | 0.11 / 0.62 / 1.03 | 6 | 2 / 13 / 35 | 10/2227 (0%) | 10.8 / 19.9 / 25.9 | 0/453 (0%) |
+| **All rooms** | v2: 1.5 m and up from a level surface | 453 | 0.98 (0.93 to 1.16) | 361/453 (80%) | 0.09 / 0.42 / 0.81 | 6 | 1 / 4 / 14 | 0/2227 (0%) | 1.0 / 6.7 / 12.8 | 453/453 (100%) |
+| **All rooms** | v2 + one known distance | 453 | 0.99 (0.95 to 1.00) | 453/453 (100%) | 0.04 / 0.11 / 0.21 | 2 | 1 / 4 / 14 | 0/2227 (0%) | 1.0 / 6.7 / 12.8 | 453/453 (100%) |
+
+The same for every same-room fix that shows an arrow after the change (found and unsure), v2 settings:
+
+| Room | Fixes | Position error m: median / 90th / worst | Heading error deg | Distance error m (v2) | (v2 + known distance) | Bearing error deg (v2) |
+| --- | --- | --- | --- | --- | --- | --- |
+| fr1_office | 148 | 0.09 / 0.14 / 0.75 | 4.5 / 6.5 / 13.1 | 0.36 / 0.58 / 0.93 | 0.04 / 0.11 / 0.90 | 1 / 6 / 51 |
+| fr2_desk | 180 | 0.01 / 0.04 / 0.06 | 0.8 / 1.3 / 1.9 | 0.10 / 0.16 / 0.26 | 0.07 / 0.14 / 0.21 | 2 / 4 / 7 |
+| fr3_office | 177 | 0.03 / 0.08 / 0.15 | 0.7 / 1.5 / 3.7 | 0.04 / 0.10 / 0.16 | 0.03 / 0.08 / 0.15 | 1 / 2 / 13 |
+| **All rooms** | 505 | 0.03 / 0.11 / 0.75 | 1.0 / 5.4 / 13.1 | 0.09 / 0.42 / 0.93 | 0.05 / 0.12 / 0.90 | 1 / 4 / 51 |
+
+### C. Up
+
+| Room | Same-room fixes | Up from the cameras, off the true vertical deg: median / 90th / worst | Up from a level surface | Surface used | Share of the baseline's points on that surface, median | Surface normal against the cameras' average deg, median / worst | How steady the up is from fix to fix: angle to the room's mean up deg, 90th pct / worst, cameras | surface |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fr1_office | 180 | 19.0 / 22.9 / 25.9 | 6.4 / 7.7 / 13.8 | 180/180 (100%) | 0.32 | 25.4 / 25.9 | 4.0 / 8.1 | 3.8 / 7.9 |
+| fr2_desk | 180 | 10.8 / 10.9 / 11.0 | 1.0 / 1.1 / 1.6 | 180/180 (100%) | 0.41 | 11.6 / 12.1 | 0.1 / 0.2 | 0.3 / 0.7 |
+| fr3_office | 177 | 8.2 / 8.2 / 8.3 | 0.7 / 0.8 / 0.9 | 177/177 (100%) | 0.31 | 8.7 / 9.0 | 0.2 / 0.2 | 0.2 / 0.5 |
+| **All rooms** | 537 | 10.8 / 20.0 / 25.9 | 1.0 / 6.9 / 13.8 | 537/537 (100%) | 0.32 | 11.6 / 25.9 | 1.8 / 8.1 | 1.9 / 7.9 |
+
+Wrong-room fixes (the map is the room's own, the query is from elsewhere): up from a surface in 178/178 (100%).
+
+### D. One known distance
+
+Every pair of the five places as the known distance (found fixes; the table in B uses the two places farthest apart).
+
+| Room | Pair | True distance m | Metres / true metres: median (10th to 90th pct) | Fixes within 15% | Fixes within 5% |
+| --- | --- | --- | --- | --- | --- |
+| fr1_office | place1 to place2 | 3.03 | 1.00 (0.99 to 1.02) | 133/133 (100%) | 132/133 (99%) |
+| fr1_office | place1 to place3 | 3.79 | 1.01 (0.97 to 1.03) | 133/133 (100%) | 129/133 (97%) |
+| fr1_office | place1 to place4 | 0.95 | 0.95 (0.94 to 0.97) | 133/133 (100%) | 73/133 (55%) |
+| fr1_office | place1 to place5 | 2.12 | 0.99 (0.98 to 1.00) | 133/133 (100%) | 133/133 (100%) |
+| fr1_office | place2 to place3 | 5.56 | 1.00 (0.99 to 1.01) | 133/133 (100%) | 132/133 (99%) |
+| fr1_office | place2 to place4 | 3.42 | 1.00 (0.99 to 1.01) | 133/133 (100%) | 132/133 (99%) |
+| fr1_office | place2 to place5 | 2.23 | 1.02 (1.01 to 1.04) | 133/133 (100%) | 130/133 (98%) |
+| fr1_office | place3 to place4 | 3.62 | 0.98 (0.94 to 0.99) | 133/133 (100%) | 108/133 (81%) |
+| fr1_office | place3 to place5 | 3.51 | 0.97 (0.96 to 0.99) | 133/133 (100%) | 132/133 (99%) |
+| fr1_office | place4 to place5 | 2.08 | 0.96 (0.95 to 0.97) | 133/133 (100%) | 116/133 (87%) |
+| fr2_desk | place1 to place2 | 0.78 | 0.99 (0.98 to 0.99) | 175/175 (100%) | 175/175 (100%) |
+| fr2_desk | place1 to place3 | 1.52 | 1.00 (1.00 to 1.00) | 175/175 (100%) | 175/175 (100%) |
+| fr2_desk | place1 to place4 | 0.90 | 0.98 (0.98 to 0.98) | 175/175 (100%) | 175/175 (100%) |
+| fr2_desk | place1 to place5 | 0.56 | 1.04 (1.03 to 1.04) | 175/175 (100%) | 175/175 (100%) |
+| fr2_desk | place2 to place3 | 1.04 | 0.92 (0.92 to 0.93) | 175/175 (100%) | 1/175 (1%) |
+| fr2_desk | place2 to place4 | 0.87 | 0.86 (0.85 to 0.87) | 166/175 (95%) | 0/175 (0%) |
+| fr2_desk | place2 to place5 | 1.16 | 0.99 (0.98 to 0.99) | 175/175 (100%) | 175/175 (100%) |
+| fr2_desk | place3 to place4 | 0.87 | 1.00 (0.99 to 1.01) | 175/175 (100%) | 175/175 (100%) |
+| fr2_desk | place3 to place5 | 1.67 | 0.95 (0.95 to 0.96) | 175/175 (100%) | 143/175 (82%) |
+| fr2_desk | place4 to place5 | 1.14 | 0.94 (0.94 to 0.95) | 175/175 (100%) | 1/175 (1%) |
+| fr3_office | place1 to place2 | 1.10 | 1.00 (0.99 to 1.01) | 145/145 (100%) | 145/145 (100%) |
+| fr3_office | place1 to place3 | 1.26 | 1.00 (1.00 to 1.00) | 145/145 (100%) | 145/145 (100%) |
+| fr3_office | place1 to place4 | 1.00 | 0.99 (0.99 to 1.00) | 145/145 (100%) | 145/145 (100%) |
+| fr3_office | place1 to place5 | 0.07 | 1.02 (1.01 to 1.02) | 145/145 (100%) | 132/145 (91%) |
+| fr3_office | place2 to place3 | 1.37 | 1.00 (0.99 to 1.00) | 145/145 (100%) | 145/145 (100%) |
+| fr3_office | place2 to place4 | 1.67 | 0.99 (0.99 to 1.00) | 145/145 (100%) | 145/145 (100%) |
+| fr3_office | place2 to place5 | 1.13 | 1.00 (1.00 to 1.01) | 145/145 (100%) | 145/145 (100%) |
+| fr3_office | place3 to place4 | 0.74 | 1.00 (0.99 to 1.01) | 145/145 (100%) | 145/145 (100%) |
+| fr3_office | place3 to place5 | 1.23 | 1.01 (1.00 to 1.01) | 145/145 (100%) | 145/145 (100%) |
+| fr3_office | place4 to place5 | 0.95 | 1.00 (1.00 to 1.00) | 145/145 (100%) | 145/145 (100%) |
+
+- Known distance under 1 m: 9 pairs, metres within 15% in 1434/1443 (99%) of the fixes, within 5% in 1195/1443 (83%), worst 16% off.
+- Known distance 1 to 2 m: 12 pairs, metres within 15% in 1890/1890 (100%) of the fixes, within 5% in 1510/1890 (80%), worst 9% off.
+- Known distance 2 m and more: 9 pairs, metres within 15% in 1197/1197 (100%) of the fixes, within 5% in 1144/1197 (96%), worst 15% off.
+
+### E. The hint: looking where the baseline did not look
+
+`view_gap_deg` is the angle between the wearer's view and the closest baseline view, from the model's own cameras (no truth). A fix that is not found gets a hint when it is above 30 degrees.
+
+| Model's angle to the closest baseline view | Same-room queries | Found | Unsure (after) | Lost (after) | Position error m: median / worst |
+| --- | --- | --- | --- | --- | --- |
+| under 15 | 301 | 285/301 (95%) | 16 | 0 | 0.02 / 0.26 |
+| 15 to 30 | 196 | 163/196 (83%) | 31 | 2 | 0.05 / 0.75 |
+| 30 to 50 | 25 | 5/25 (20%) | 5 | 15 | 0.13 / 1.06 |
+| 50 and more | 15 | 0/15 (0%) | 0 | 15 | 0.38 / 1.01 |
+
+- As a predictor: beyond 30 degrees 35/40 (88%) are not found; within 30 degrees 49/497 (10%) are not found.
+- Of the 32 same-room fixes that are lost after the change, 30/32 (94%) carry a hint; of all 84 that are not found, 35/84 (42%).
+- The model's angle against the true one: median difference 0.4 deg, 90th percentile 1.3. Of the 35 hints, 30/35 (86%) are for views truly more than 30 degrees away, 35/35 (100%) more than 20. Of the 30 not-found views truly beyond 30 degrees, 30 got a hint.
+- The turn it gives: against the true turn to the same baseline view, median difference 2 deg, worst 93; left or right is correct in 30/30 (100%) of the hints whose true turn is at least 15 deg. What it says: Turn right 23, Turn left 8, Look down 4.
+- Wrong-room queries: 40/178 (22%) get a hint (the model puts a wrong-room picture somewhere, so the angle means nothing there).
+
+What `coverage()` reports for each baseline (12 frames, from one fix of each room; headings are map headings, 0 = where the first baseline frame looks):
+
+| Room | Covered of 360 deg | Gaps (from, to, side) | Frames look between (pitch deg, minus = down) | Same-room queries whose heading falls in a gap | of those found |
+| --- | --- | --- | --- | --- | --- |
+| fr1_office | 307 | 93 to 126 (right); -174 to -153 (behind) | -51 to 14 | 15 | 0/15 (0%) |
+| fr2_desk | 338 | 178 to -159 (behind) | -44 to -24 | 0 | - |
+| fr3_office | 344 | 75 to 82 (right); -93 to -84 (left) | -40 to -19 | 12 | 9/12 (75%) |
+
+### F. 24 baseline frames only when the 12-frame fix is not found
+
+| Rule | Found | Unsure | Lost | Position error of found fixes m: median / 90th / worst | Heading error deg | Seconds per fix, mean |
+| --- | --- | --- | --- | --- | --- | --- |
+| 12 baseline frames, always | 71/89 (80%) | 11 | 7 | 0.03 / 0.10 / 0.14 | 0.8 / 5.4 / 7.3 | 2.4 |
+| 24 baseline frames, always | 80/89 (90%) | 4 | 5 | 0.02 / 0.08 / 0.11 | 0.7 / 1.6 / 3.0 | 5.1 |
+| 12, then 24 when not found | 80/89 (90%) | 4 | 5 | 0.03 / 0.10 / 0.14 | 0.8 / 4.8 / 7.3 | 3.4 |
+
+The same 89 query frames each way. A second fix is run for 18/89 (20%) of them and takes 5.1 s on top of the first 2.4 s, so a fix that is not found at first answers after 7.5 s. Per room, found with 12 / with 24 / with the rule: fr1_office 20 / 21 / 21 of 30; fr2_desk 28 / 30 / 30 of 30; fr3_office 23 / 29 / 29 of 29.
+Wrong-room queries with 24 frames: 0/45 (0%) accepted (highest one-frame score 0.21). Every wrong-room view runs the second fix.
 
 ## What was tested
 

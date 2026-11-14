@@ -166,14 +166,15 @@ def known_metres(spots, known, assumed, limit=SCALE_LIMIT):
     return metres, "known distance", None
 
 
-def build_frame(r, base, valid, typical_m=None, up="surface", known=None, spots=None):
+def build_frame(r, base, valid, typical_m=None, up="surface", known=None, spots=None, points=None):
     """The room map of one pass, worked out from scratch (see map_frame). up: "surface" or "cameras".
-    known and spots: one known distance and the places' positions in the pass (see known_metres)."""
+    known and spots: one known distance and the places' positions in the pass (see known_metres).
+    points: {baseline frame: its trusted points in the pass's 3D frame}, if the caller has them."""
     cam_up, north, east = axes(r.E, base)
     unit = float(np.median(r.depth[base][valid[base]]))  # the baseline's median viewing distance, in the pass's units
     use, how = cam_up, {"from": "cameras", "tilt_deg": 0.0, "share": 0.0}
     if up == "surface":
-        cloud = np.concatenate([rc.unproject(r.depth[q], r.K[q], r.E[q])[valid[q]][::47] for q in base])
+        cloud = np.concatenate([(points[q] if points else rc.unproject(r.depth[q], r.K[q], r.E[q])[valid[q]])[::47] for q in base])
         use, how = surface_up(cloud, cam_up, UP_TOL * unit)
         north, east = level_axes(r.E[base[0]][2, :3], use, north)
     metres, metres_from, note = known_metres(spots or {}, known, (TYPICAL_M if typical_m is None else typical_m) / unit)
@@ -365,7 +366,8 @@ def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sam
     valid = rc.valid_mask(r, conf_pct)
     near = rc.nearest_in_window(r.depth, 7)
     spots = [spot(r, place) for place in places]
-    room = build_frame(r, base, valid, typical_m, up, known, {p["name"]: x for p, x in zip(places, spots) if x is not None})
+    seen = {q: rc.unproject(r.depth[q], r.K[q], r.E[q])[valid[q]] for q in base}  # each baseline frame's trusted points
+    room = build_frame(r, base, valid, typical_m, up, known, {p["name"]: x for p, x in zip(places, spots) if x is not None}, seen)
     try:
         r.room = room  # items.py asks map_frame for this pass's frame and must get this one
     except AttributeError:
@@ -421,7 +423,7 @@ def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sam
         marks.append((world, 1.4 * ball, (255, 210, 40)))  # a place: yellow
 
     # A floor plan to draw: the room's points seen from above, without the floor and the ceiling.
-    cloud = on_map(np.concatenate([rc.unproject(r.depth[q], r.K[q], r.E[q])[valid[q]][::23] for q in base]))
+    cloud = on_map(np.concatenate([seen[q][::23] for q in base]))
     low, high = np.percentile(cloud[:, 2], [40, 90])
     cloud = cloud[(cloud[:, 2] >= low) & (cloud[:, 2] <= high)]
     if len(cloud) > 1500:
