@@ -34,7 +34,7 @@ def main():
     for q in detail["after"]:
         at_b, at_a = box_pixels(recon.E[q], ts.BOX_B), box_pixels(recon.E[q], ts.BOX_A)
         gt = at_b | at_a
-        a, g = pred[q]
+        a, g = pred[q][:2]
         p = a | g
         tp, fp, fn = tp + int((p & gt).sum()), fp + int((p & ~gt).sum()), fn + int((~p & gt).sum())
         app_on_b, app_px = app_on_b + int((a & at_b).sum()), app_px + int(a.sum())
