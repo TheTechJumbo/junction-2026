@@ -1,9 +1,6 @@
 # Kaamos
 
-- **Idea:** the Finnish polar night, seen across a Helsinki courtyard at roof height. Snowy tin roofs, chimneys, the cathedral dome far off, and one window with a lamp in it: Anna's. The page takes its light from that view. Above the roofline is sky; below it is the facade, and the panels are its windows (square frames, a transom under each heading, snow on the sill).
-- **The sky is real:** `data-sky` drives the sky gradient, stars, moon, horizon glow, the neighbours' windows and the whole page palette (registered `@property` colours, so it fades). Dark is the normal state; `low-sun`/`twilight` bring a rose and gold band over the roofs; `day` turns the page pale and cold blue. The sun moves along a shallow arc with `--sun-progress`/`--sun-altitude`.
-- **Palette (from scene.svg):** blue-hour indigo `#1d2a4a` and night sky `#0b1029`, wall `#121a35`, slate tin `#3b4763`, snow `#eef2f6`, Anna's lamp `#f2b04a` (the one warm accent: now, primary actions), her lingonberry curtains `#b23a48` / `#f08c98` (only for things to notice), dusk rose `#d99a9e` and gold `#f0c27e` from the horizon glow.
-- **Mood:** in `notice` the lamp glows stronger and breathes faster, the headline gets a lingonberry window, and the Things to notice panel takes the curtain red. In `calm` nothing is red and the lamp breathes slowly.
-- **Rhythm of the day:** a skyline strip. Night is starry indigo, daylight is the lit band from sunrise to sunset; each moment hangs above it like a small window on a stem.
-- **Type:** Josefin Sans (display, 300/600): geometric, a little 1920s Nordic, quiet. Albert Sans (text, 400/600): a Scandinavian-inspired geometric with open, readable shapes. Both SIL OFL, from @fontsource.
-- **Motion:** snow drifting, smoke from Anna's chimney, a slow breathing lamp, a few twinkling stars; panels light up in sequence on load (under 600 ms). Everything reads with motion off.
+- **Idea:** the Helsinki polar night across a courtyard at roof height. Sky above the roofline, Anna's lamp-lit facade below; the panels are its windows.
+- **Moves with:** `data-sky` recolours the sky, stars, moon and page (dark is normal); the sun follows `--sun-progress`. `notice` brings lingonberry red and a faster-breathing lamp.
+- **Type:** Josefin Sans (display) and Albert Sans (text). Palette tokens at the top of `theme.css`.
+- `assets/scene.svg` is drawn by `source/gen_scene.py`.
