@@ -25,6 +25,7 @@
   on the relay). The arrow then points at the next corner of that way and the distance is the
   walk, not the straight line; the small map shows the way as a dotted line. Without a route for
   a place (too few map points, no way through) the arrow points straight at it, as before.
+  /hud?k=KEY&route=0 switches route finding off: the straight arrow everywhere.
 
   /hud?k=KEY            live, from the relay
   /hud?k=KEY&demo=1     sample room, no relay needed: arrow keys or the buttons turn and walk,
@@ -143,7 +144,7 @@ function fromMe(position) {  // metres, and degrees from straight ahead (+ to th
 // and the metres up to the spot where the wearer will stand ("walk"). null when the fix has no
 // route for the place or the wearer has left it: then the arrow points straight at the place.
 function nextLeg(to) {
-  const way = fix && fix.route && fix.route.to && fix.route.to[to.name];
+  const way = query.get('route') !== '0' && fix && fix.route && fix.route.to && fix.route.to[to.name];
   if (!way || way.way !== 'route' || !way.points || way.points.length < 2) return null;
   const P = way.points, last = P.length - 1;
   let on = 0, off = Infinity;  // the stretch of the route the wearer is on: the nearest one
@@ -214,7 +215,7 @@ function draw() {
   $('far').textContent = lost || !to || there ? '' : `about ${far < 3 ? (Math.round(far * 2) / 2 || 0.5) : Math.round(far)} m`;
   $('age').textContent = !fix ? '' : demo ? 'sample room' : `${fix.state === 'unsure' ? 'rough fix, ' : ''}updated ${Math.round((Date.now() - gotAt) / 1000 + (fix.age_s || 0))} s ago`;
   // route finding: say which kind of arrow this is (a route around things, or the straight line and why)
-  const way = to && !lost && fix && fix.route && fix.route.to ? fix.route.to[to.name] : null;
+  const way = to && !lost && query.get('route') !== '0' && fix && fix.route && fix.route.to ? fix.route.to[to.name] : null;
   if (to && !lost && !there) $('age').textContent += leg ? (leg.turns > 0 ? ` · ${leg.turns} turn${leg.turns > 1 ? 's' : ''} on the way` : ' · clear way')
     : way && way.why ? ` · straight line: ${way.why}` : '';
 

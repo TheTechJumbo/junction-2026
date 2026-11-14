@@ -117,12 +117,16 @@ def check_room():
     blind["map"]["obstacles"] = [[round(x, 2), round(y, 2)] for x, y in room]
     assert route.plan(blind)["to"]["pill box"]["corners"] >= 1
 
-    # 5. Thirty stray points on the open floor (noise) do not close it.
+    # 5. Single points count: the plan has few points, so one may be all there is of a chair leg.
+    # A few of them on the open floor are walked around, not through and not given up on.
     rng = random.Random(1)
-    strays = [[rng.uniform(-2.2, 2.2), rng.uniform(-0.7, 4.7)] for _ in range(30)]
-    strays = [p for p in strays if gap_to_box(p, TABLE) > 0.5 and all(math.dist(p, q) > 0.35 for q in strays if q is not p)]
-    noisy = route.plan(fix_of(room + strays, {"pill box": PILL_BOX}))["to"]["pill box"]
-    assert noisy["way"] == "route" and noisy["length_m"] < straight["length_m"] * 1.1, (len(strays), noisy)
+    strays = [[rng.uniform(-2.2, 2.2), rng.uniform(-0.7, 4.7)] for _ in range(12)]
+    strays = [p for p in strays if gap_to_box(p, TABLE) > 0.9 and math.dist(p, ME[:2]) > 0.9 and math.dist(p, PILL_BOX[:2]) > 1.5]
+    dotted = route.plan(fix_of(room + strays, {"pill box": PILL_BOX}))["to"]["pill box"]
+    assert dotted["way"] == "route", dotted
+    nearest = min(math.dist(p, q) for p in walk(dotted["points"][:-1]) for q in strays)
+    assert nearest >= route.BODY_M / 2 - route.CELL_M, f"the route passes {nearest:.2f} m from a single point"
+    assert route.plan(fix_of(room + strays, {"pill box": PILL_BOX}), keep_lone=False)["to"]["pill box"]["length_m"] <= dotted["length_m"] + 0.05
 
 
 def check_width():

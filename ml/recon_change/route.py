@@ -12,8 +12,9 @@ What it works from (all in the fix, all in the map's east/north metres):
     position       where the wearer stands
 
 How a cell is decided (cells are CELL_M = 0.1 m squares):
-    solid    a map point fell in it and at least one more in it or in a cell touching it. One point
-             alone is taken for noise and dropped.
+    solid    a map point fell in it. One point is enough: the plan has 1500 points for a whole
+             room, so one is often all a chair gets (dropping lone points as noise was measured
+             and never did better).
     closed   solid, or closer than half a body to a solid cell, or outside the outline of
              everything the baseline saw (the convex hull of the points and the cameras): the route
              never leaves the part of the room the baseline looked at.
@@ -54,7 +55,7 @@ NEAR_COST = 1.0      # a cell right at the body's edge costs 1 + NEAR_COST times
 UNSEEN_COST = 0.5    # a cell far from where the baseline camera walked costs up to this much more
 UNSEEN_FROM_M, UNSEEN_FULL_M = 0.5, 2.0  # "far" starts and is complete at these distances from the walked line
 WALK_GAP_M = 2.5     # two baseline cameras in a row this close are joined: the camera was carried between them
-KEEP_LONE = False    # True: a single map point with none beside it is solid too
+KEEP_LONE = True     # a single map point with none beside it is solid too (False: it is dropped as noise)
 CORRIDOR_M = None    # a number: cells farther than this from where the baseline camera walked (or the wearer stands) are closed
 MERGE_M = 0.5        # corners closer together than this are made one
 REACH_M = 1.2        # the route may end this far from the place
