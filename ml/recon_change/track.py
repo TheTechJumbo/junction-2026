@@ -29,11 +29,16 @@ The rules, in the order they are applied to a new fix:
 
 With no new photo nothing moves: the position stays and the confidence falls with time.
 
-The confidence percentage is the chance that the answer is right now: position within 0.3 m and
+The confidence percentage is the chance that the answer is right NOW: position within 0.3 m and
 heading within 15 degrees of the truth. It is a logistic model of things known at run time (the
-match score, how many recent fixes agreed, misses, a waiting jump, the age, and how fast the
-wearer was moving), fitted and checked against motion-capture truth in eval/TRACK_RESULTS.md.
-fix_confidence_pct() is the same for one fix on its own.
+match score, how many recent fixes agreed, whether the answer is still settling, the age, and how
+fast the wearer was moving at the last fixes), fitted and checked against motion-capture truth in
+eval/TRACK_RESULTS.md. fix_confidence_pct() is the same for one fix on its own.
+
+"show" says whether the display should draw an arrow. A pose goes stale within seconds when the
+wearer moves, so the percentage of the moment falls between two photos and jumps back up at the
+next one: an arrow tied to it would blink. So the arrow is decided once per photo, on "next_pct",
+the confidence expected when the next photo is due: on at SHOW_PCT, off again below HIDE_PCT.
 """
 import json
 import math
@@ -45,13 +50,15 @@ LOST_AFTER = 3  # misses in a row before the answer is dropped
 SILENCE_S = 30.0  # no usable fix for this long: dropped as well
 STEADY_AFTER = 2  # fixes that agree before "settling" becomes "steady"
 KEEP = 5  # how many recent fixes are remembered
-SHOW_PCT = 50  # the display draws an arrow at or above this, and "Look around slowly" below
+# The display draws an arrow when the confidence expected at the next photo is at least SHOW_PCT, and
+# takes it away again only below HIDE_PCT. Two limits, so the arrow does not flip while the number hovers.
+SHOW_PCT, HIDE_PCT = 40, 20
+CYCLE_S, MAX_CYCLE_S = 6.0, 10.0  # seconds between photos: assumed until two fixes were seen, and the most that is believed
 
 # Fitted by eval/track_eval.py (leave one room out; the numbers here are the fit on all three rooms).
 # `pct = 100 / (1 + exp(-sum(weight * feature)))`, features as in features().
-CAL = {"bias": 1.2, "score": 2.0, "agree": 1.0, "misses": -0.8, "waiting": -1.0, "settling": -0.5,
-       "age_s": -0.12, "moved_m": -1.5, "turned_deg": -0.03}
-FIX_CAL = {"bias": -3.0, "score": 8.0}
+CAL = {"bias": 0.617, "score": 0.441, "agree": 2.654, "settling": -1.290, "age_s": -0.322, "moved_m": -0.553, "turned_deg": -0.349}
+FIX_CAL = {"bias": -1.996, "score": 15.119}
 
 
 def wrap(deg):
@@ -73,7 +80,7 @@ def fix_confidence_pct(fix):
 def new_state(zone=None):
     return {"zone": zone, "state": "lost", "position": None, "heading_deg": None, "at": None, "seen_at": None,
             "score": 0.0, "run": 0, "misses": 0, "waiting": None, "recent": [], "speed_m_s": 0.0, "turn_deg_s": 0.0,
-            "places": {}}
+            "places": {}, "showing": False}
 
 
 class Tracker:
@@ -88,6 +95,14 @@ class Tracker:
         s = self.s
         if fix.get("zone") and s["zone"] and fix["zone"] != s["zone"]:
             return self.current(now)  # a fix for another room is not ours to hear about at all
+        s["showing"] = self.current(now)["show"]  # was the arrow still up when this photo arrived?
+        self._take(fix, now)
+        out = self.current(now)
+        s["showing"] = out["show"]
+        return out
+
+    def _take(self, fix, now):
+        s = self.s
         s["seen_at"] = now
         self._places(fix)
         score = float(fix.get("confidence") or 0.0)
@@ -153,7 +168,6 @@ class Tracker:
         s = self.s
         s["recent"] = (s["recent"] + [{"at": now, "kind": kind, "d_m": None if d is None else round(d, 3),
                                        "d_deg": None if dh is None else round(dh, 1)}])[-KEEP:]
-        return self.current(now)
 
     def _places(self, fix):
         """The room's named places, kept steady too: they do not move, so their positions are averaged."""
@@ -182,9 +196,14 @@ class Tracker:
         recent = s["recent"]
         return {"bias": 1.0, "score": s["score"],
                 "agree": sum(r["kind"] in ("agree", "start", "jump") for r in recent) / KEEP,
-                "misses": float(s["misses"]), "waiting": 1.0 if s["waiting"] else 0.0,
                 "settling": 1.0 if s["state"] == "settling" else 0.0, "age_s": min(age, 60.0),
                 "moved_m": min(s["speed_m_s"] * age, 5.0), "turned_deg": min(s["turn_deg_s"] * age, 180.0)}
+
+    def cycle(self):
+        """Seconds from one photo to the next, as seen lately (the median gap between recent fixes)."""
+        times = [r["at"] for r in self.s["recent"]]
+        gaps = sorted(b - a for a, b in zip(times, times[1:]) if b > a)
+        return max(0.5, min(MAX_CYCLE_S, gaps[len(gaps) // 2])) if gaps else CYCLE_S
 
     def current(self, now):
         """The answer at time `now`. Never changes the pose: with no new photo it only gets older."""
@@ -193,12 +212,16 @@ class Tracker:
         lost = s["position"] is None or now - s["at"] > SILENCE_S
         agree = sum(r["kind"] in ("agree", "start", "jump") for r in s["recent"])
         if lost:
-            return {"state": "lost", "position": None, "heading_deg": None, "confidence_pct": 0, "show": False,
+            return {"state": "lost", "position": None, "heading_deg": None, "confidence_pct": 0, "next_pct": 0, "show": False,
                     "agree": agree, "of": len(s["recent"]), "age_s": age, "waiting": bool(s["waiting"]),
                     "waypoints": [{"name": n, "distance_m": None, "bearing_deg": None, "position": [round(v, 2) for v in p]}
                                   for n, p in s["places"].items()]}
         f = self.features(now)
         pct = _percent(sum(CAL[k] * f[k] for k in CAL))
+        # The arrow is decided once per photo, not moment by moment: it is drawn only if the answer is
+        # expected to still be good when the next photo is due. So it cannot blink between two photos.
+        f = self.features(max(now, s["at"] + self.cycle()))
+        hold = _percent(sum(CAL[k] * f[k] for k in CAL))
         x, y, heading = s["position"][0], s["position"][1], s["heading_deg"]
         ways = []
         for name, p in s["places"].items():
@@ -207,5 +230,5 @@ class Tracker:
                          "bearing_deg": int(round(wrap(math.degrees(math.atan2(east, north)) - heading))),  # 0 ahead, + to the right
                          "position": [round(v, 2) for v in p]})
         return {"state": s["state"], "position": [round(v, 2) for v in s["position"]], "heading_deg": int(round(heading)),
-                "confidence_pct": pct, "show": s["state"] == "steady" and pct >= SHOW_PCT,
+                "confidence_pct": pct, "next_pct": hold, "show": s["state"] == "steady" and hold >= (HIDE_PCT if s.get("showing") else SHOW_PCT),
                 "agree": agree, "of": len(s["recent"]), "age_s": age, "waiting": bool(s["waiting"]), "waypoints": ways}

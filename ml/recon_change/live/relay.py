@@ -17,6 +17,8 @@ It prints the link to open. The link carries an access key, and every request ne
                                   sees now -> where they are and the way to each named place
                                   (add &view=1 to also get the room as a 3D file with them marked)
     GET  /where?zone=kitchen      the latest position fix for that zone (what the glasses display polls)
+                                  (both replies carry "stable": the steady position made from the stream of
+                                  fixes, with "confidence_pct" and "show", see track.py)
     GET  /waypoints?zone=kitchen  the zone's named places
     POST /waypoint?zone=kitchen&name=pill+box&frame=3&u=0.4&v=0.6   name a spot in baseline picture 3
     POST /waypoint?zone=kitchen&name=pill+box&delete=1
@@ -99,6 +101,9 @@ try:
     import recon_change as rc
 except ImportError:  # no OpenCV here: videos are forwarded whole
     cv2 = rc = None
+
+sys.path.insert(0, str(HERE.parent))
+import track  # noqa: E402  the steady position made from the stream of fixes: pure Python, needs nothing
 
 
 class Link:
@@ -298,6 +303,30 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         seen = json.loads(seen_file.read_text())  # {zone: {item: where and when it was last seen}}
     except (OSError, ValueError):
         seen = {}
+
+    # One tracker per zone turns the stream of fixes into one steady position with a confidence
+    # percentage (track.py). Its state is a little JSON, kept next to where.json across a restart.
+    track_file = evidence_dir / "track.json"
+    try:
+        trackers = {z: track.Tracker(state) for z, state in json.loads(track_file.read_text()).items()}
+    except (OSError, ValueError, AttributeError, TypeError):
+        trackers = {}
+    track_lock = threading.Lock()
+
+    def steady(zone, fix=None, taken_at=None):
+        """The steady position of a zone as of now (the "stable" part of the /locate and /where replies),
+        or None before the zone's first fix. With `fix`, that fix (photo taken at `taken_at`) is taken in first."""
+        try:
+            with track_lock:
+                if fix is not None:
+                    trackers.setdefault(zone, track.Tracker(zone=zone)).update({**fix, "zone": zone}, taken_at)
+                    try:
+                        track_file.write_text(json.dumps({z: t.dump() for z, t in trackers.items()}))
+                    except OSError:
+                        pass
+                return trackers[zone].current(time.time()) if zone in trackers else None
+        except Exception:  # the steady position is an extra: it must never cost the wearer a fix
+            return None
 
     def remember_items(zone, result, images):
         """Keep where each item in this fix was seen. Only with a position: a lost fix places nothing."""
@@ -544,7 +573,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:
                     return self.send_json(404, {"ok": False, "error": "No position fix yet. POST a photo to /locate first."})
-                return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1), "seen": seen_list(fix["zone"], fix)})
+                return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1), "seen": seen_list(fix["zone"], fix),
+                                            "stable": steady(fix["zone"])})
             if url.path == "/waypoints":
                 header, _ = link.call({"op": "waypoints", "zone": zone})
                 return self.send_json(200 if header.get("ok") else 404, header)
@@ -708,13 +738,15 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 fix = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail, **result,
                        "images": images, "splat": splat_url, "seconds": {**seconds, **result.get("seconds", {})},
                        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "at": time.time()}
+                fix["confidence_pct"] = track.fix_confidence_pct(result)  # this one fix on its own, as a percentage
                 where[zone] = fix
                 try:
                     where_file.write_text(json.dumps(where))
                 except OSError:
                     pass
                 remember_items(zone, result, images)
-                return self.send_json(200, {**fix, "age_s": 0.0, "seen": seen_list(zone, fix)})
+                # t0: when the photo reached the relay. The steady position ages from the photo, not from the answer.
+                return self.send_json(200, {**fix, "age_s": 0.0, "seen": seen_list(zone, fix), "stable": steady(zone, result, t0)})
             headline, detail = in_plain_words(result)
             events = to_events(result, zone, images)
             body = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail,

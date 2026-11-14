@@ -124,6 +124,23 @@ def main():
     code, where = call("/where?zone=kitchen")
     assert code == 200 and where["seen"][0]["name"] == "keys" and where["zone"] == "kitchen"
 
+    # The steady position rides along: /locate and /where both carry "stable" (track.py), and the fix
+    # itself gets a percentage. One fix gives a pose that is still settling; a second one that agrees
+    # makes it steady, with the way to each place recomputed from the steady pose.
+    assert 0 <= fix["confidence_pct"] <= 100 and where["confidence_pct"] == fix["confidence_pct"], fix
+    assert fix["stable"]["state"] == "settling" and fix["stable"]["position"] == [0.0, 0.0, 0.0] and not fix["stable"]["show"], fix["stable"]
+    assert where["stable"]["state"] == "settling" and where["stable"]["age_s"] >= 0
+    code, again = call("/locate?zone=kitchen", raw=JPEG)
+    stable = again["stable"]
+    assert stable["state"] == "steady" and stable["show"] and stable["agree"] == 2 and 0 < stable["confidence_pct"] <= 100, stable
+    assert {w["name"]: (w["distance_m"], abs(w["bearing_deg"])) for w in stable["waypoints"]} == {"pill box": (2.0, 0), "front door": (3.0, 180)}, stable
+    gateway.fix = {**FIX, "state": "lost", "confidence": 0.02, "position": [4.0, 4.0, 0.0], "heading_deg": 120, "items": []}
+    code, missed = call("/locate?zone=kitchen", raw=JPEG)  # one lost fix among good ones: the raw fix says lost, the steady answer stays
+    assert missed["state"] == "lost" and missed["stable"]["state"] == "steady" and missed["stable"]["position"] == [0.0, 0.0, 0.0], missed["stable"]
+    assert json.loads((evidence / "track.json").read_text())["kitchen"]["state"] == "steady"  # kept for the next start
+    gateway.fix = FIX
+    assert call("/where?zone=hall")[0] == 404
+
     # "Where are my keys?" is answered by the relay, and still counted by the event API.
     code, body = call("/ask?zone=kitchen", {"question": "Where are my keys?"})
     assert code == 200 and body["point"]["name"] == "keys", body
