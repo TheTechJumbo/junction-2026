@@ -15,7 +15,7 @@ import java.util.zip.ZipInputStream
 
 /** Room recording without a camera or a relay: the zip, the timer, the camera choice and the upload. */
 class RoomRecordingTest {
-    @Test fun zipHoldsTheFramesAs000JpgOnwardInCaptureOrder() {
+    @Test fun zipHoldsTheFramesAs0000JpgOnwardInCaptureOrder() {
         val zip = FrameZip()
         val frames = List(12) { i -> ByteArray(100 + i) { (i + it).toByte() } }
         frames.forEach { assertTrue(zip.add(it)) }
@@ -31,7 +31,7 @@ class RoomRecordingTest {
                 contents.add(input.readBytes())
             }
         }
-        assertEquals((0 until 12).map { String.format(Locale.US, "%03d.jpg", it) }, names)
+        assertEquals((0 until 12).map { String.format(Locale.US, "%04d.jpg", it) }, names)
         frames.forEachIndexed { i, frame -> assertArrayEquals(frame, contents[i]) }
         assertSame(bytes, zip.bytes())
         assertThrows(IllegalStateException::class.java) { zip.add(byteArrayOf(1)) }
@@ -51,7 +51,7 @@ class RoomRecordingTest {
         assertEquals(3, few.count)
     }
 
-    @Test fun recordingTakesAboutThreeFramesPerSecondForTheChosenTime() {
+    @Test fun recordingTakesTenFramesPerSecondForTheChosenTime() {
         runBlocking {
             var now = 0L
             val captureTimes = mutableListOf<Long>()
@@ -59,13 +59,14 @@ class RoomRecordingTest {
             val recorder = RoomRecorder(capture = { captureTimes += now; ByteArray(1000) }, durationMs = 30_000,
                 clock = { now }, pause = { now += it })
             val zip = recorder.record { progress += it }
-            assertEquals(90, zip.count)
-            assertEquals(90, captureTimes.size)
+            assertEquals(300, zip.count)
+            assertEquals(300, captureTimes.size)
             assertEquals(0L, captureTimes.first())
             assertTrue(captureTimes.last() < 30_000_000_000L)
-            captureTimes.zipWithNext().forEach { (a, b) -> assertEquals(333_333_333.0, (b - a).toDouble(), 1.0) }
-            assertEquals(90, progress.last().frames)
+            captureTimes.zipWithNext().forEach { (a, b) -> assertEquals(100_000_000.0, (b - a).toDouble(), 1.0) }
+            assertEquals(300, progress.last().frames)
             assertEquals(0, progress.last().failedFrames)
+            assertEquals(0, progress.last().skippedFrames)
         }
     }
 
@@ -91,10 +92,36 @@ class RoomRecordingTest {
                 ByteArray(5)
             }, durationMs = 10_000, clock = { now }, pause = { now += it })
             val zip = recorder.record { progress += it }
-            assertEquals(30, calls)
-            assertEquals(15, zip.count)
-            assertEquals(15, progress.last().failedFrames)
+            assertEquals(100, calls)
+            assertEquals(50, zip.count)
+            assertEquals(50, progress.last().failedFrames)
+            assertEquals(0, progress.last().skippedFrames)
         }
+    }
+
+    @Test fun aTickWithNoNewFrameIsSkippedNotWaitedForOrRepeated() {
+        runBlocking {
+            var now = 0L
+            var calls = 0
+            val progress = mutableListOf<RecordProgress>()
+            // The stream has a new frame on two ticks out of three.
+            val recorder = RoomRecorder(capture = { calls++; if (calls % 3 == 0) null else ByteArray(5) },
+                durationMs = 10_000, clock = { now }, pause = { now += it })
+            val zip = recorder.record { progress += it }
+            assertEquals(100, calls)
+            assertEquals(67, zip.count)
+            assertEquals(33, progress.last().skippedFrames)
+            assertEquals(0, progress.last().failedFrames)
+            assertTrue(now < 10_000_000_000L)
+        }
+    }
+
+    @Test fun sixtySecondsAtTenFramesPerSecondFitTheZip() {
+        val zip = FrameZip()
+        val frame = ByteArray(70 * 1024)
+        repeat(600) { assertTrue(zip.add(frame)) }
+        assertTrue(zip.bytes().size < FrameZip.MAX_BYTES)
+        assertTrue(FrameZip.MAX_FRAMES >= 600)
     }
 
     @Test fun recordingTimeIsKeptBetweenTenAndSixtySeconds() {

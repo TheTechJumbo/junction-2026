@@ -42,6 +42,7 @@ import com.junction.glasses.live.RecordingReply
 import com.junction.glasses.live.RecordingUploader
 import com.junction.glasses.live.RelayClient
 import com.junction.glasses.live.RoomRecorder
+import com.junction.glasses.live.FramePump
 import com.junction.glasses.live.SizeSettle
 import com.junction.glasses.live.StreamUploadBody
 import com.junction.glasses.live.UploadOutcome
@@ -78,6 +79,8 @@ class MainActivity : ComponentActivity() {
         private const val REGISTRATION_SETTLE_MS = 3_000L
         /** How long a new glasses video may keep growing while Meta AI imports it. */
         private const val SETTLE_LIMIT_MS = 5 * 60 * 1000L
+        /** Record room waits this long for the camera's first frame (the glasses camera can take a while). */
+        private const val FIRST_FRAME_WAIT_MS = 45_000L
     }
     private val main = Handler(Looper.getMainLooper())
     private lateinit var glasses: MetaGlassesAdapter
@@ -274,7 +277,7 @@ class MainActivity : ComponentActivity() {
                 .apply { topMargin = dp(8) }
             container.addView(this)
         }
-        note("Record room takes about 3 photos per second from the selected camera, then replaces the zone's baseline on the relay (what the room should look like). Walk slowly around the room.")
+        note("Record room takes 10 photos per second from the selected camera (the newest frame each tick; none repeated), then replaces the zone's baseline on the relay (what the room should look like). Walk slowly around the room.")
         secondsField = field("Seconds to record (10 to 60)").apply {
             inputType = InputType.TYPE_CLASS_NUMBER
             setText((RoomRecorder.DEFAULT_DURATION_MS / 1000).toString())
@@ -543,7 +546,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         AlertDialog.Builder(this).setTitle("Replace the baseline of zone \"$zone\"?")
-            .setMessage("Records $seconds s from the ${cameraSource.label.lowercase(Locale.US)} camera at about 3 photos per second, then replaces " +
+            .setMessage("Records $seconds s from the ${cameraSource.label.lowercase(Locale.US)} camera at ${RoomRecorder.FRAMES_PER_SECOND} photos per second, then replaces " +
                 "what the relay knows of how zone \"$zone\" should look. Walk slowly around the room. Photos stay in memory and go only to the relay.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Record") { _, _ -> startRecording(client, zone, seconds) }
@@ -553,16 +556,26 @@ class MainActivity : ComponentActivity() {
         if (recordJob != null) return
         if (liveLoop != null) stopLiveCamera("Live camera paused for the room recording.")
         val frames = sources()
-        val recorder = RoomRecorder(capture = { frames.capture().jpeg }, durationMs = seconds * 1000)
+        // The pump keeps the newest encoded frame ready; each tick takes it if new, else skips the tick.
+        val pump = FramePump(lifecycleScope, capture = { frames.capture().jpeg })
+        val recorder = RoomRecorder(capture = { pump.takeNew() }, durationMs = seconds * 1000)
         recordButton.text = "Stop recording"
         recordStatus.text = "Recording zone $zone from the ${cameraSource.label.lowercase(Locale.US)} camera…"
         // LAZY: lifecycleScope starts coroutines immediately on the main thread; recordJob must be set first.
         val job = lifecycleScope.launch(start = CoroutineStart.LAZY) {
             try {
+                pump.start()
+                if (!pump.awaitFirst(FIRST_FRAME_WAIT_MS)) {
+                    recordStatus.text = "The ${cameraSource.label.lowercase(Locale.US)} camera gave no frame in ${FIRST_FRAME_WAIT_MS / 1000} s" +
+                        (pump.lastError?.let { ": ${LiveRelayLoop.describe(it)}" } ?: ".") + " Nothing was uploaded."
+                    return@launch
+                }
                 val zip = recorder.record { progress ->
                     recordStatus.text = "Recording zone $zone: ${progress.frames} frames · ${megabytes(progress.bytes)} · " +
-                        "${progress.elapsedMs / 1000} of $seconds s" + (if (progress.failedFrames > 0) " · ${progress.failedFrames} frames failed" else "")
+                        "${progress.elapsedMs / 1000} of $seconds s" + (if (progress.failedFrames > 0) " · ${progress.failedFrames} frames failed" else "") +
+                        (if (progress.skippedFrames > 0) " · ${progress.skippedFrames} ticks without a new frame" else "")
                 }
+                pump.stop()
                 liveSources?.stop()
                 liveSources = null
                 if (zip.count < RoomRecorder.MIN_FRAMES) {
@@ -578,6 +591,7 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 recordStatus.text = "Recording not saved: ${LiveRelayLoop.describe(e)}"
             } finally {
+                pump.stop()
                 if (recordJob === coroutineContext[Job]) {
                     recordJob = null
                     recordButton.text = "Record room"

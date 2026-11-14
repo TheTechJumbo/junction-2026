@@ -10,8 +10,9 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 /**
- * A room recording as the relay's /baseline takes it (as `simulate.py as_zip` builds it): an
- * uncompressed (stored) zip of 000.jpg, 001.jpg, ... in capture order, built in memory only.
+ * A room recording as the relay's /baseline takes it: an uncompressed (stored) zip of 0000.jpg,
+ * 0001.jpg, ... in capture order (four digits, so 1000 and more frames still sort in order; the
+ * worker takes 1 to 4 digits), built in memory only.
  * [add] refuses a frame that would take the finished zip over [maxBytes] or past [maxFrames].
  */
 internal class FrameZip(private val maxBytes: Int = MAX_BYTES, private val maxFrames: Int = MAX_FRAMES) {
@@ -29,7 +30,7 @@ internal class FrameZip(private val maxBytes: Int = MAX_BYTES, private val maxFr
         if (count >= maxFrames || projected > maxBytes) return false
         val checksum = CRC32()
         checksum.update(jpeg, 0, jpeg.size)
-        val entry = ZipEntry(String.format(Locale.US, "%03d.jpg", count))
+        val entry = ZipEntry(String.format(Locale.US, "%04d.jpg", count))
         entry.method = ZipEntry.STORED
         entry.size = jpeg.size.toLong()
         entry.compressedSize = jpeg.size.toLong()
@@ -48,8 +49,9 @@ internal class FrameZip(private val maxBytes: Int = MAX_BYTES, private val maxFr
     }.also { finished = it }
 
     companion object {
-        const val MAX_BYTES = 40 * 1024 * 1024
-        const val MAX_FRAMES = 999
+        /** 60 s at 10 frames/s is 600 frames, about 40 MB at 504x896: room to spare. */
+        const val MAX_BYTES = 120 * 1024 * 1024
+        const val MAX_FRAMES = 1200
         // Generous per-entry overheads, so the finished zip always stays under the cap.
         private const val LOCAL_ENTRY = 64L
         private const val CENTRAL_ENTRY = 96L
@@ -57,16 +59,18 @@ internal class FrameZip(private val maxBytes: Int = MAX_BYTES, private val maxFr
     }
 }
 
-internal data class RecordProgress(val frames: Int, val bytes: Int, val elapsedMs: Long, val failedFrames: Int)
+/** [skippedFrames]: ticks where the camera had no new frame yet (skipped, never waited for or repeated). */
+internal data class RecordProgress(val frames: Int, val bytes: Int, val elapsedMs: Long, val failedFrames: Int, val skippedFrames: Int = 0)
 
 /**
- * Records the room for [durationMs] (clamped to 10 to 60 s) at about [framesPerSecond]: frame k is
- * taken at k / rate seconds, or as soon as the camera can after that. A failed frame is counted and
- * skipped. Stops early when the zip is full. Cancelling the coroutine stops it; nothing is kept.
- * [clock] and [pause] are in nanoseconds.
+ * Records the room for [durationMs] (clamped to 10 to 60 s) on a fixed tick of [framesPerSecond]:
+ * at tick k (k / rate seconds) it takes the newest frame. [capture] returns null when the camera has
+ * no new frame since the last tick; that tick is skipped, never waited for and never filled with a
+ * repeat. A failed frame is counted and skipped. Stops early when the zip is full. Cancelling the
+ * coroutine stops it; nothing is kept. [clock] and [pause] are in nanoseconds.
  */
 internal class RoomRecorder(
-    private val capture: suspend () -> ByteArray,
+    private val capture: suspend () -> ByteArray?,
     durationMs: Long,
     private val framesPerSecond: Int = FRAMES_PER_SECOND,
     private val maxBytes: Int = FrameZip.MAX_BYTES,
@@ -81,26 +85,29 @@ internal class RoomRecorder(
         val planned = (durationMs * framesPerSecond / 1000).toInt().coerceAtLeast(1)
         val start = clock()
         var failed = 0
+        var skipped = 0
         for (k in 0 until planned) {
             val wait = start + durationNs * k / planned - clock()
             if (wait > 0) pause(wait)
             if (clock() - start >= durationNs) break
+            var frameFailed = false
             val jpeg = try {
                 capture()
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                failed++
+                failed++; frameFailed = true
                 null
             }
+            if (jpeg == null && !frameFailed) skipped++
             if (jpeg != null && !zip.add(jpeg)) break
-            onProgress(RecordProgress(zip.count, zip.size, (clock() - start) / 1_000_000, failed))
+            onProgress(RecordProgress(zip.count, zip.size, (clock() - start) / 1_000_000, failed, skipped))
         }
         return zip
     }
 
     companion object {
-        const val FRAMES_PER_SECOND = 3
+        const val FRAMES_PER_SECOND = 10
         const val MIN_DURATION_MS = 10_000L
         const val MAX_DURATION_MS = 60_000L
         const val DEFAULT_DURATION_MS = 30_000L
