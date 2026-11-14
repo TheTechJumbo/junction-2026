@@ -48,7 +48,7 @@ checks or put tokens in URLs. Use a trusted HTTPS deployment for untethered use.
 1. Confirm compatible glasses and firmware. For display output use Meta Ray-Ban
    Display; other supported glasses can report display unsupported.
 2. Pair with the Android phone in Meta AI and enable Developer Mode. The APK uses
-   blank Meta application/client metadata for developer-mode testing. Publishing
+   Meta application/client metadata set to 0/0 for developer-mode testing. Publishing
    requires the appropriate registered Meta app settings; not configured here.
 3. In our app, Enable glasses access, grant Android permissions, Register with
    Meta AI, then Connect glasses. Registration and permission handoffs intentionally
