@@ -32,12 +32,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", default=".env.local")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
     try:
         load_private_env(args.env_file)
     except (OSError, ValueError):
         parser.error("Unable to load the private config; use one KEY=value assignment per line")
-    uvicorn.run("backend.run:create_application", factory=True, host="127.0.0.1", port=args.port,
+    uvicorn.run("backend.run:create_application", factory=True, host=args.host, port=args.port,
                 access_log=False)
 
 

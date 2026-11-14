@@ -1,0 +1,14 @@
+[Unit]
+Description=Junction pill-box Bridge reader and durable delivery
+After=network-online.target arduino-router.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/junction/pillbox.env
+ExecStart=%h/junction-pillbox-env/bin/python %h/junction/unoq/pillbox/reader.py
+Restart=always
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=default.target
