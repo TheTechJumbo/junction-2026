@@ -28,6 +28,43 @@ class HttpBackendClient(baseUrl: String, private val token: String, allowLocalHt
     init { require(token.isNotBlank() && !token.contains('\n') && !token.contains('\r')) { "A valid session token is required" } }
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
+    /** Read-only authenticated probe; never creates question logs or sensor events. */
+    fun checkConnection(callback: (Result<Unit>) -> Unit): Cancelable {
+        val request = Request.Builder()
+            .url(base.newBuilder().addPathSegment("events").addQueryParameter("limit", "1").build())
+            .header("Authorization", "Bearer $token").header("Accept", "application/json").get().build()
+        return execute(request, 256 * 1024, "application/json", callback) { bytes ->
+            val root = com.google.gson.GsonBuilder().setStrictness(com.google.gson.Strictness.STRICT)
+                .create().fromJson(bytes.toString(Charsets.UTF_8), com.google.gson.JsonObject::class.java)
+            require(root.keySet() == setOf("events", "next_cursor"))
+            fun string(value: com.google.gson.JsonElement): String {
+                require(value.isJsonPrimitive && value.asJsonPrimitive.isString)
+                return value.asString
+            }
+            val cursor = root.get("next_cursor")
+            if (!cursor.isJsonNull) string(cursor)
+            val events = root.get("events")
+            require(events.isJsonArray && events.asJsonArray.size() <= 1)
+            events.asJsonArray.forEach { entry ->
+                require(entry.isJsonObject)
+                val event = entry.asJsonObject
+                require(event.keySet() == setOf("id", "type", "source", "ts", "zone", "object", "confidence", "evidence_url"))
+                require(string(event.get("id")).matches(Regex("[A-Za-z0-9_-]{1,128}")))
+                require(string(event.get("type")).length in 1..256)
+                require(string(event.get("zone")).length in 1..256)
+                require(string(event.get("source")) in setOf("sensor", "vision", "voice"))
+                java.time.OffsetDateTime.parse(string(event.get("ts")))
+                val obj = event.get("object")
+                if (!obj.isJsonNull) require(string(obj).length <= 256)
+                val evidence = event.get("evidence_url")
+                if (!evidence.isJsonNull) string(evidence)
+                val confidence = event.get("confidence")
+                require(confidence.isJsonPrimitive && confidence.asJsonPrimitive.isNumber)
+                require(confidence.asDouble.isFinite() && confidence.asDouble in 0.0..1.0)
+            }
+            Unit
+        }
+    }
     override fun ask(question: String, callback: (Result<Answer>) -> Unit): Cancelable {
         require(question.isNotBlank() && question.length <= 2000)
         return request("ask", "question", question, 256 * 1024, "application/json", callback) { bytes ->
@@ -56,9 +93,14 @@ class HttpBackendClient(baseUrl: String, private val token: String, allowLocalHt
     private fun <T> request(path: String, key: String, value: String, limit: Int, expectedType: String,
         callback: (Result<T>) -> Unit, decode: (ByteArray) -> T): Cancelable {
         val payload = com.google.gson.JsonObject().apply { addProperty(key, value) }.toString()
-        val call = http.newCall(Request.Builder().url(base.newBuilder().addPathSegment(path).build())
+        val request = Request.Builder().url(base.newBuilder().addPathSegment(path).build())
             .header("Authorization", "Bearer $token").header("Accept", expectedType)
-            .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType())).build())
+            .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+        return execute(request, limit, expectedType, callback, decode)
+    }
+    private fun <T> execute(request: Request, limit: Int, expectedType: String,
+        callback: (Result<T>) -> Unit, decode: (ByteArray) -> T): Cancelable {
+        val call = http.newCall(request)
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) { callback(Result.failure(BackendFailure(if (call.isCanceled()) "cancelled" else "network"))) }
             override fun onResponse(call: Call, response: Response) {
@@ -72,7 +114,7 @@ class HttpBackendClient(baseUrl: String, private val token: String, allowLocalHt
                         source.request(limit.toLong() + 1)
                         if (source.buffer.size > limit) throw BackendFailure("response_too_large")
                         Result.success(decode(source.readByteArray()))
-                    } catch (e: Exception) { Result.failure(if (e is BackendFailure) e else BackendFailure("invalid_response")) }
+                    } catch (e: Exception) { Result.failure(if (call.isCanceled()) BackendFailure("cancelled") else if (e is BackendFailure) e else BackendFailure("invalid_response")) }
                 }
                 callback(result)
             }
