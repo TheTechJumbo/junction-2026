@@ -336,3 +336,8 @@ fresh and read `ml/recon_change/DEMO.md` (how to run the demo) and this section.
 - Cheap gate: the same view is answered in under 0.1 s without the model; never tested on real video.
 
 **Not tested anywhere**: a real room of ours, real items, the glasses' camera, a real sensor event.
+
+**Correction, 18:00 UTC.** The laptop set-up stopped early: only PyTorch 2.3.1 cu121 got installed in the
+separate environment (with numpy 2.x, which must be replaced by `numpy<2`). OpenCV, VGGT and the 5 GB of
+weights are not there. Run the remaining commands from `DEMO.md`, "Models on the laptop". The relay and the
+event API on Seb's laptop have also stopped: nothing is listening on ports 8000, 8090 or 8091.
