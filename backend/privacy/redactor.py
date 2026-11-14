@@ -22,6 +22,9 @@ WORKER_ERROR_CLASSES = frozenset({
     "AttributeError", "ImportError", "ModuleNotFoundError", "ValueError",
     "OSError", "MemoryError", "RuntimeError", "UnidentifiedImageError",
     "DecompressionBombError", "DecompressionBombWarning", "error", "UnexpectedError",
+    "ModelIntegrityError", "InputByteLimitError", "ImagePixelLimitError",
+    "DetectorShapeError", "DetectorNonfiniteError", "DetectorGeometryError",
+    "DetectorScoreError", "DetectorOutsideImageError", "EncodedOutputLimitError",
 })
 
 

@@ -345,3 +345,38 @@ def test_default_budget_tiny_green_jpeg_after_actual_api_normalization():
     assert result.content_type == "image/jpeg"
     assert result.status == "no_faces_detected"
     assert decoded(result.image_bytes, expected_format="JPEG").shape == (8, 8, 3)
+
+
+@pytest.mark.parametrize("box,error", [
+    ([20, 20, 5, 5], worker.DetectorOutsideImageError),  # wholly inside synthetic padding
+    ([0, 0, -1, 5], worker.DetectorGeometryError),
+    ([0, 0, np.nan, 5], worker.DetectorNonfiniteError),
+])
+def test_specific_detector_validation_stage_still_rejects(monkeypatch, box, error):
+    import cv2
+
+    class Detector:
+        def detect(self, image):
+            face = np.ones((1, 15), dtype=np.float32)
+            face[0, :4] = box
+            face[0, -1] = .9
+            return 1, face
+
+    monkeypatch.setattr(cv2.FaceDetectorYN, "create", lambda *args: Detector())
+    with pytest.raises(error):
+        worker.transform(png(Image.new("RGB", (8, 8))))
+
+
+def test_slightly_out_of_range_score_is_identified_and_rejected(monkeypatch):
+    import cv2
+
+    class Detector:
+        def detect(self, image):
+            face = np.ones((1, 15), dtype=np.float64)
+            face[0, :4] = [0, 0, 5, 5]
+            face[0, -1] = 1.0000001
+            return 1, face
+
+    monkeypatch.setattr(cv2.FaceDetectorYN, "create", lambda *args: Detector())
+    with pytest.raises(worker.DetectorScoreError):
+        worker.transform(png(Image.new("RGB", (8, 8))))

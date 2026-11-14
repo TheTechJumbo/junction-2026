@@ -14,6 +14,42 @@ DETECTOR_EDGE = 1280
 MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 
 
+
+class ModelIntegrityError(ValueError):
+    pass
+
+
+class InputByteLimitError(ValueError):
+    pass
+
+
+class ImagePixelLimitError(ValueError):
+    pass
+
+
+class DetectorShapeError(ValueError):
+    pass
+
+
+class DetectorNonfiniteError(ValueError):
+    pass
+
+
+class DetectorGeometryError(ValueError):
+    pass
+
+
+class DetectorScoreError(ValueError):
+    pass
+
+
+class DetectorOutsideImageError(ValueError):
+    pass
+
+
+class EncodedOutputLimitError(ValueError):
+    pass
+
 def transform(data):
     import cv2
     import numpy as np
@@ -24,15 +60,15 @@ def transform(data):
     warnings.simplefilter("error", Image.DecompressionBombWarning)
     model = Path(__file__).with_name("models") / "face_detection_yunet_2023mar.onnx"
     if model.stat().st_size != 232589 or hashlib.sha256(model.read_bytes()).hexdigest() != MODEL_SHA256:
-        raise ValueError("Unverified detector model")
+        raise ModelIntegrityError("Unverified detector model")
     if not 0 < len(data) <= MAX_INPUT_BYTES:
-        raise ValueError("Input limit")
+        raise InputByteLimitError("Input limit")
     with Image.open(io.BytesIO(data)) as source:
         width, height = source.size
         if (source.format not in {"JPEG", "PNG"} or getattr(source, "n_frames", 1) != 1
                 or width < 1 or height < 1
                 or width * height > MAX_PIXELS):
-            raise ValueError("Pixel limit")
+            raise ImagePixelLimitError("Pixel limit")
         output_format = source.format
         image = ImageOps.exif_transpose(source).convert("RGB")
         image.load()
@@ -51,13 +87,15 @@ def transform(data):
     boxes = []
     if faces is not None:
         if len(faces) > 64 or faces.ndim != 2 or faces.shape[1] != 15:
-            raise ValueError("Invalid/excessive detector output")
+            raise DetectorShapeError("Invalid/excessive detector output")
         for face in faces:
             if not np.isfinite(face).all():
-                raise ValueError("Nonfinite detector output")
+                raise DetectorNonfiniteError("Nonfinite detector output")
             x, y, w, h = (float(value) for value in face[:4])
-            if w <= 0 or h <= 0 or not .6 <= float(face[-1]) <= 1:
-                raise ValueError("Invalid detector box")
+            if w <= 0 or h <= 0:
+                raise DetectorGeometryError("Invalid detector box")
+            if not .6 <= float(face[-1]) <= 1:
+                raise DetectorScoreError("Invalid detector score")
             # Map actual resized axes back independently (rounding may alter aspect).
             x, w = x * width / detector_width, w * width / detector_width
             y, h = y * height / detector_height, h * height / detector_height
@@ -66,7 +104,7 @@ def transform(data):
                    min(width, math.ceil(x + 1.35 * w)), min(height, math.ceil(y + 1.35 * h)))
             left, top, right, bottom = box
             if left >= right or top >= bottom:
-                raise ValueError("Detector box outside image")
+                raise DetectorOutsideImageError("Detector box outside image")
             region = image.crop(box)
             # Strong local blur retains scene context. It is not an anonymity guarantee.
             region = region.filter(ImageFilter.GaussianBlur(radius=max(right-left, bottom-top) / 3))
@@ -82,7 +120,7 @@ def transform(data):
         clean.save(output, format="PNG")
     encoded = output.getvalue()
     if len(encoded) > MAX_OUTPUT_BYTES:
-        raise ValueError("Output limit")
+        raise EncodedOutputLimitError("Output limit")
     return {"face_boxes": boxes, "status": "detected_faces_redacted" if boxes else "no_faces_detected",
             "content_type": "image/jpeg" if output_format == "JPEG" else "image/png"}, encoded
 
@@ -95,7 +133,10 @@ def main():
         # Exception class only; never emit messages, paths, image bytes or a traceback.
         allowed = {"AttributeError", "ImportError", "ModuleNotFoundError", "ValueError",
                    "OSError", "MemoryError", "RuntimeError", "UnidentifiedImageError",
-                   "DecompressionBombError", "DecompressionBombWarning", "error"}
+                   "DecompressionBombError", "DecompressionBombWarning", "error",
+                   "ModelIntegrityError", "InputByteLimitError", "ImagePixelLimitError",
+                   "DetectorShapeError", "DetectorNonfiniteError", "DetectorGeometryError",
+                   "DetectorScoreError", "DetectorOutsideImageError", "EncodedOutputLimitError"}
         name = type(error).__name__
         sys.stderr.write(name if name in allowed else "UnexpectedError")
         raise SystemExit(1) from None
