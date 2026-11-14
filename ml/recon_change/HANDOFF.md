@@ -254,3 +254,31 @@ a painted-in phone found and placed, and the lounge scene with 20 marked spots: 
 
 Waiting on Seb: four session pull requests are measured and unmerged (28 position fix v2, 29 carer
 setup page, 30 day log, 31 stable confidence). Still running: the object map (32).
+
+## Update, Sat 14 Nov about 16:35 UTC: merged, NOT yet deployed
+
+Merged into `jun-22-hud-waypoints` and pushed (all twelve offline tests pass on the combined code):
+
+- PR 29, carer setup on `/places`: one real distance (`baselines/<zone>/scale.json`), photos of an item
+  (`enrolled/<item>/NN.jpg`), boxes round spots to watch (`baselines/<zone>/watch.json`).
+- PR 28, position fix v2: metres from one known distance or an assumed 1.5 m, up from the largest level
+  surface, "unsure" instead of "lost" when one baseline photo confirms the view, a hint which way to turn.
+- PR 31, steady position with a calibrated confidence percentage (`track.py`): the relay adds `stable`
+  and `confidence_pct` to `/locate` and `/where`, and `/hud` draws from it.
+- PR 30, day log (`day.py`): `/day` and `/dayview`, and day questions in `/ask`. It is fed the fix
+  itself, not the steady answer: the two were measured apart, and at one photo every 6 s the steady
+  answer is rarely "steady", so visits would go missing.
+- PR 32, object map (`objects.py`): merged as code with its results, not wired into the worker or relay.
+
+**The cluster still runs the previous version.** The university VPN dropped during the afternoon, and
+the workers' two-hour jobs have ended. When the VPN is back, from `ml/recon_change` on the laptop:
+
+    bash iridis/deploy_from_laptop.sh
+
+It copies the files (including `recon_rust.py`), checks that they import, and restarts both workers
+with the item finder's settings. Then restart the relay. Nothing from PRs 28 to 32 has run live.
+
+Finding to design around (PR 31): a position fix does not jump, it goes stale. At one photo every 6 s
+an arrow drawn from the last fix is right 46% of the time between photos; at one photo a second, with
+the steadying, 90%. Guiding a walking person needs about one photo a second or motion sensing in
+between.
