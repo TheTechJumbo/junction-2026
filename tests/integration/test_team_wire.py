@@ -134,7 +134,7 @@ def test_actual_unoq_export_to_api_answer_and_summary(app_context, tmp_path):
         assert timeline["alerts"][0]["event_ids"] == ["synthetic-demo-door"]
         assert "05:10" in timeline["alerts"][0]["message"]
         assert timeline["questions"][0]["count"] == 2
-        assert "2 pill box opening(s)" in client.get("/summary").json()["text"]
+        assert "2 pill box openings" in client.get("/summary").json()["text"]
         # Synthetic UNO export is replay-safe and never transfers local artifact references.
         assert client.post("/events", json=store.export()).status_code == 200
         assert len(client.get("/timeline").json()["events"]) == 3

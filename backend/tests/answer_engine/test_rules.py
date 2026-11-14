@@ -240,15 +240,16 @@ def test_summary_counts_only_day_sensor_observations_and_questions(engine):
     alerts = engine.derive_alerts(events, DAY, TZ)
     fake = Alert(id="fake", type="vision", ts=NOW, message="unsafe", event_ids=["vision"])
     text = engine.summarize(events, [*alerts, *alerts, fake], questions, DAY, TZ)
-    assert "1 pill box opening(s) and 1 front door opening(s)" in text
-    assert "1 night door alert(s)" in text
-    assert "2 question(s) were recorded (pills: 2)" in text
+    assert "1 pill box opening and 1 front door opening were" in text
+    assert "1 night door alert." in text
+    assert "2 questions were recorded (pills: 2)" in text
+    assert "(s)" not in text
     assert engine.summarize(list(reversed(events)), alerts, questions, DAY, TZ) == text
 
 
 def test_summary_empty_day(engine):
     text = engine.summarize([], [], [], DAY, TZ)
-    assert "0 pill box" in text and "0 question(s)" in text
+    assert "0 pill box openings" in text and "0 questions were" in text
 
 
 def test_conflicting_same_id_events_are_not_asserted(engine):
@@ -299,7 +300,7 @@ def test_evidence_attachment_replay_preserves_observation(engine):
         result = engine.answer("pills?", events, NOW, TZ)
         assert result.evidence == [attached]
         text = engine.summarize(events, [], [], DAY, TZ)
-        assert "1 pill box opening(s)" in text
+        assert "1 pill box opening and" in text
 
 
 def test_vision_cannot_override_or_create_sensor_truth(engine):

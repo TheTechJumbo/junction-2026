@@ -1,9 +1,9 @@
-name: Android glasses
+name: Android apps
 on:
   push:
     branches: ["codex/android-glasses"]
   pull_request:
-    paths: ["android/**", ".github/workflows/android-ci.yml"]
+    paths: ["android/**", "dashboard/**", ".github/workflows/android-ci.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -45,7 +45,7 @@ jobs:
         env:
           JUNCTION_ANDROID_TEST_URL: http://127.0.0.1:8097
           JUNCTION_ANDROID_TEST_TOKEN: synthetic-android-ci
-        run: ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+        run: ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest :family:assembleDebug :family:assembleRelease :family:lintDebug :family:testDebugUnitTest
       - name: Require executed backend integration test
         run: |
           python - <<'PY'
@@ -65,6 +65,22 @@ jobs:
             android/app/build/outputs/apk/debug/*.apk
             android/app/build/reports/tests/testDebugUnitTest/
             android/app/build/reports/lint-results-debug.html
+      - name: Check the family app packages the dashboard
+        run: |
+          apk=android/family/build/outputs/apk/debug/family-debug.apk
+          for f in index.html app.js client.js day.js base.css themes/themes.json fixtures/timeline.json; do
+            unzip -l "$apk" | grep -q "assets/dashboard/$f" || { echo "missing $f in $apk"; exit 1; }
+          done
+          ls -l android/family/build/outputs/apk/*/
+      - name: Upload family app APKs and reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: daylight-family-apk
+          path: |
+            android/family/build/outputs/apk/debug/*.apk
+            android/family/build/outputs/apk/release/*.apk
+            android/family/build/reports/tests/testDebugUnitTest/
+            android/family/build/reports/lint-results-debug.html
       - name: Stop backend
         if: always()
         run: |

@@ -15,8 +15,10 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import com.junction.glasses.live.RelayClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -29,7 +31,9 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
@@ -46,7 +50,22 @@ class AutomaticSetupActivityTest {
     private val activity: MainActivity get() = owner!!.get()
 
     // The always-on recording would start a foreground service; it has its own JVM tests (AlwaysOnPartsTest).
-    @Before fun setup() { MainActivity.alwaysOnAutoStart = false; server = MockWebServer(); server.start() }
+    // Backend probes are answered in queue order; the wearer screen's own /timeline refresh is answered apart
+    // (as in SetupDiagnosticsTest), so it never takes a probe's reply or shows up as a probe.
+    private val probes = LinkedBlockingQueue<MockResponse>()
+    private val probeRequests = LinkedBlockingQueue<RecordedRequest>()
+    private val probeCount = AtomicInteger()
+    @Before fun setup() {
+        MainActivity.alwaysOnAutoStart = false
+        server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.path?.startsWith("/timeline") == true) MockResponse().setResponseCode(404)
+                else { probeCount.incrementAndGet(); probeRequests.add(request); probes.poll(5, TimeUnit.SECONDS) ?: MockResponse().setResponseCode(503) }
+        }
+        server.start()
+    }
+    private fun takeProbe(seconds: Long): RecordedRequest? = probeRequests.poll(seconds, TimeUnit.SECONDS)
     @After fun cleanup() {
         owner?.pause()?.stop()?.destroy()
         drain(); server.shutdown()
@@ -57,11 +76,11 @@ class AutomaticSetupActivityTest {
 
     @Test fun debugExtrasConnectBackendWithoutShowingOrKeepingTheToken() {
         MainActivity.automaticSetup = false
-        server.enqueue(page())
+        probes.add(page())
         launch(debugIntent("synthetic-intent-token"))
         await { text("backendStatus").contains("authenticated") }
         assertNotNull(field("controller").get(activity))
-        assertEquals("Bearer synthetic-intent-token", server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("Authorization"))
+        assertEquals("Bearer synthetic-intent-token", takeProbe(1)!!.getHeader("Authorization"))
         assertEquals(server.url("/").toString(), (field("endpoint").get(activity) as EditText).text.toString())
         assertEquals("", (field("token").get(activity) as EditText).text.toString())
         assertNoVisibleText("synthetic-intent-token")
@@ -74,14 +93,14 @@ class AutomaticSetupActivityTest {
 
     @Test fun resentDebugExtrasReconnectTheSameActivity() {
         MainActivity.automaticSetup = false
-        server.enqueue(page()); server.enqueue(page())
+        probes.add(page()); probes.add(page())
         launch(debugIntent("synthetic-first-token"))
         await { text("backendStatus").contains("authenticated") }
-        assertEquals("Bearer synthetic-first-token", server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("Authorization"))
+        assertEquals("Bearer synthetic-first-token", takeProbe(1)!!.getHeader("Authorization"))
         val first = activity
         val adapter = field("glasses").get(first)
         owner!!.newIntent(debugIntent("synthetic-second-token"))
-        assertEquals("Bearer synthetic-second-token", server.takeRequest(5, TimeUnit.SECONDS)!!.getHeader("Authorization"))
+        assertEquals("Bearer synthetic-second-token", takeProbe(5)!!.getHeader("Authorization"))
         await { text("backendStatus").contains("authenticated") && field("controller").get(activity) != null }
         assertSame(first, activity)
         assertSame(adapter, field("glasses").get(activity))
@@ -94,7 +113,7 @@ class AutomaticSetupActivityTest {
         owner = Robolectric.buildActivity(MainActivity::class.java, debugIntent("synthetic-stale-token")).setup(Bundle())
         drain()
         assertEquals("Backend: not checked.", text("backendStatus"))
-        assertEquals(0, server.requestCount)
+        assertEquals(0, probeCount.get())
         assertEquals("", (field("token").get(activity) as EditText).text.toString())
         assertFalse(activity.intent.hasExtra(DebugBackendLaunch.EXTRA_API_TOKEN))
     }
@@ -144,10 +163,10 @@ class AutomaticSetupActivityTest {
         val memory = testMemory("remembered")
         MainActivity.backendMemoryOverride = memory
         assertTrue(memory.save(server.url("/").toString(), "synthetic-remembered-token"))
-        server.enqueue(page())
+        probes.add(page())
         launch(Intent(app(), MainActivity::class.java))
         await { text("backendStatus").contains("authenticated") }
-        assertEquals("Bearer synthetic-remembered-token", server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("Authorization"))
+        assertEquals("Bearer synthetic-remembered-token", takeProbe(1)!!.getHeader("Authorization"))
         assertEquals("", (field("token").get(activity) as EditText).text.toString())
         assertNoVisibleText("synthetic-remembered-token")
         button("Forget saved backend").performClick()
@@ -160,11 +179,11 @@ class AutomaticSetupActivityTest {
         val memory = testMemory("replaced")
         MainActivity.backendMemoryOverride = memory
         assertTrue(memory.save("http://127.0.0.1:9", "synthetic-old-token"))
-        server.enqueue(page())
+        probes.add(page())
         launch(debugIntent("synthetic-new-token"))
         await { text("backendStatus").contains("authenticated") }
-        assertEquals("Bearer synthetic-new-token", server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("Authorization"))
-        assertEquals(1, server.requestCount)
+        assertEquals("Bearer synthetic-new-token", takeProbe(1)!!.getHeader("Authorization"))
+        assertEquals(1, probeCount.get())
         assertEquals(server.url("/").toString() to "synthetic-new-token", memory.load())
     }
 
