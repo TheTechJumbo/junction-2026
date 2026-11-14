@@ -1,6 +1,7 @@
 """Run pixel processing in a killable child; never write source imagery to a file."""
 import io
 import json
+import logging
 import math
 import os
 import subprocess
@@ -15,6 +16,13 @@ from PIL import Image
 MAX_INPUT_BYTES = 5 * 1024 * 1024
 MAX_OUTPUT_BYTES = 5 * 1024 * 1024
 MAX_PIXELS = 16_000_000
+
+logger = logging.getLogger(__name__)
+WORKER_ERROR_CLASSES = frozenset({
+    "AttributeError", "ImportError", "ModuleNotFoundError", "ValueError",
+    "OSError", "MemoryError", "RuntimeError", "UnidentifiedImageError",
+    "DecompressionBombError", "DecompressionBombWarning", "error", "UnexpectedError",
+})
 
 
 class RedactionUnavailable(Exception):
@@ -75,6 +83,7 @@ class LocalFaceRedactor:
     def _process(self, image_bytes, deadline):
         worker = Path(__file__).with_name("worker.py")
         process = None
+        category = "spawn_failure"
         try:
             # Isolated interpreter ignores PYTHONPATH and user-site packages. Do not
             # inherit application/provider credentials or write imagery to tempfiles.
@@ -84,14 +93,19 @@ class LocalFaceRedactor:
                                MKL_NUM_THREADS="1", VECLIB_MAXIMUM_THREADS="1")
             process = subprocess.Popen(
                 [sys.executable, "-I", "-B", str(worker)], stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
                 close_fds=True,
             )
+            category = "worker_protocol"
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(process.args, self.timeout_seconds)
-            output, _ = process.communicate(image_bytes, timeout=remaining)
-            if process.returncode or not 0 < len(output) <= MAX_OUTPUT_BYTES + 8192:
+            output, diagnostic = process.communicate(image_bytes, timeout=remaining)
+            if process.returncode:
+                label = (diagnostic or b"").strip().decode("ascii", errors="replace")
+                category = label if label in WORKER_ERROR_CLASSES else "worker_exit"
+                raise ValueError()
+            if not 0 < len(output) <= MAX_OUTPUT_BYTES + 8192:
                 raise ValueError()
             header, data = output.split(b"\n", 1)
             metadata = json.loads(header)
@@ -107,8 +121,11 @@ class LocalFaceRedactor:
                 raise subprocess.TimeoutExpired(process.args, self.timeout_seconds)
             return RedactionResult(data, boxes, metadata["status"], metadata["content_type"])
         except subprocess.TimeoutExpired:
+            logger.warning("Face redaction failed: category=timeout")
             raise RedactionUnavailable("Face redaction timed out; image was not accepted") from None
         except Exception:
+            logger.warning("Face redaction failed: category=%s returncode=%s",
+                           category, process.returncode if process is not None else None)
             raise RedactionUnavailable("Face redaction failed; image was not accepted") from None
         finally:
             if process is not None:

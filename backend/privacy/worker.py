@@ -91,8 +91,13 @@ def main():
     try:
         metadata, data = transform(sys.stdin.buffer.read(MAX_INPUT_BYTES + 1))
         sys.stdout.buffer.write(json.dumps(metadata, separators=(",", ":")).encode() + b"\n" + data)
-    except Exception:
-        # No originals, exception details, file paths or provider data in error output.
+    except Exception as error:
+        # Exception class only; never emit messages, paths, image bytes or a traceback.
+        allowed = {"AttributeError", "ImportError", "ModuleNotFoundError", "ValueError",
+                   "OSError", "MemoryError", "RuntimeError", "UnidentifiedImageError",
+                   "DecompressionBombError", "DecompressionBombWarning", "error"}
+        name = type(error).__name__
+        sys.stderr.write(name if name in allowed else "UnexpectedError")
         raise SystemExit(1) from None
 
 

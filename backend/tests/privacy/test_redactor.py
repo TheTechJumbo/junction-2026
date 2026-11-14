@@ -122,7 +122,7 @@ def test_child_failures_never_return_original_and_release_slot(monkeypatch, faul
             assert "ELEVENLABS_API_KEY" not in kwargs["env"]
             assert kwargs["stdin"] == subprocess.PIPE
             assert kwargs["stdout"] == subprocess.PIPE
-            assert kwargs["stderr"] == subprocess.DEVNULL
+            assert kwargs["stderr"] == subprocess.PIPE
             if fault == "spawn_elapsed":
                 clock[0] += 4
             instances.append(self)
@@ -283,3 +283,50 @@ def test_worker_enforces_its_own_pixel_and_output_limits(monkeypatch):
     monkeypatch.setattr(worker, "MAX_OUTPUT_BYTES", 1)
     with pytest.raises(ValueError, match="Output limit"):
         worker.transform(image)
+
+
+def test_worker_emits_only_fixed_exception_class_not_private_message(monkeypatch, capsys):
+    import sys
+
+    class Input:
+        buffer = io.BytesIO(b"synthetic-private-image-input")
+
+    def fail(data):
+        raise ValueError("synthetic-private-message /private/path token=secret")
+
+    monkeypatch.setattr(sys, "stdin", Input())
+    monkeypatch.setattr(worker, "transform", fail)
+    with pytest.raises(SystemExit) as error:
+        worker.main()
+    assert error.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.err == "ValueError"
+    assert not captured.out
+
+
+@pytest.mark.parametrize("stderr,category", [
+    (b"ModuleNotFoundError", "ModuleNotFoundError"),
+    (b"error", "error"),
+    (b"/private/path: interpreter loader failed secret=private", "worker_exit"),
+    (b"ValueError\nsynthetic-private-detail", "worker_exit"),
+])
+def test_parent_logs_only_allowed_worker_category(monkeypatch, caplog, stderr, category):
+    class Failed:
+        args = ["worker"]
+        returncode = 1
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def communicate(self, data=None, timeout=None):
+            return b"synthetic-private-stdout", stderr
+
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(subprocess, "Popen", Failed)
+    with pytest.raises(RedactionUnavailable):
+        LocalFaceRedactor().redact(png(Image.new("RGB", (8, 8))))
+    assert f"category={category} returncode=1" in caplog.text
+    assert "private" not in caplog.text
+    assert "secret" not in caplog.text
