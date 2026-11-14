@@ -1,10 +1,12 @@
 import io
 import os
 import socket
+import struct
 import subprocess
 import sys
 import threading
 import time
+import zlib
 from datetime import UTC, datetime
 
 import httpx
@@ -75,22 +77,33 @@ def test_selected_file_is_regular_bounded_and_decoded(selected_image, tmp_path):
 
 def test_exact_event_preflight_paginated_before_upload(selected_image):
     calls = []
+    uploaded = False
     def handler(request):
+        nonlocal uploaded
         calls.append(request)
         assert request.headers["Authorization"] == "Bearer " + TOKEN
         if request.method == "GET":
-            if "cursor" not in request.url.params:
+            assert request.extensions["timeout"]["read"] == 2
+            cursor = request.url.params.get("cursor")
+            if cursor is None:
                 return httpx.Response(200, json={"events": [event(id="unrelated")], "next_cursor": "next"})
-            assert request.url.params["cursor"] == "next"
-            return httpx.Response(200, json={"events": [event()], "next_cursor": "end"})
+            if cursor == "next":
+                return httpx.Response(200, json={"events": [event()], "next_cursor": "original"})
+            if cursor == "original":
+                assert uploaded
+                return httpx.Response(200, json={"events": [event(evidence_url=URL)], "next_cursor": "attached"})
+            assert cursor == "attached"
+            return httpx.Response(200, json={"events": [], "next_cursor": cursor})
         assert request.method == "POST"
+        assert request.extensions["timeout"]["read"] == 12
         assert request.url.raw_path == b"/events/synthetic_board-1/evidence"
         assert request.headers["Content-Type"] == "image/png"
         assert request.content == selected_image.read_bytes()
+        uploaded = True
         return httpx.Response(200, json={"evidence_url": URL})
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assert attach("http://127.0.0.1:8000", EVENT_ID, selected_image, TOKEN, client=client) == URL
-    assert [request.method for request in calls] == ["GET", "GET", "POST"]
+    assert [request.method for request in calls] == ["GET", "GET", "POST", "GET", "GET", "GET", "GET"]
 
 
 @pytest.mark.parametrize("event_id", ["../another", "contains/slash", "query?x=y", "fragment#x", "a%2Fb"])
@@ -159,6 +172,12 @@ def test_cli_real_http_updates_same_dashboard_event_and_authenticates_photo(monk
     monkeypatch.setenv("API_TOKEN", TOKEN)
     monkeypatch.setenv("LOCAL_DATA_DIR", str(tmp_path / "central"))
     app = create_application()
+    original_attach = app.state.store.attach_evidence
+    def slow_privacy_processing(*args, **kwargs):
+        # Synthetic stand-in for bounded face processing; no detector/model needed.
+        time.sleep(2.2)
+        return original_attach(*args, **kwargs)
+    monkeypatch.setattr(app.state.store, "attach_evidence", slow_privacy_processing)
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     origin = f"http://127.0.0.1:{sock.getsockname()[1]}"
@@ -184,8 +203,10 @@ def test_cli_real_http_updates_same_dashboard_event_and_authenticates_photo(monk
             result = subprocess.run(missing, capture_output=True, text=True, timeout=15)
             assert result.returncode == 1
             assert client.get("/timeline").json()["events"][0]["evidence_url"] is None
+            started = time.monotonic()
             success = subprocess.run(command, capture_output=True, text=True, timeout=15)
             assert success.returncode == 0, success.stderr
+            assert time.monotonic() - started > 2
             assert client.get("/dashboard/").status_code == 200
             timeline = client.get("/timeline").json()["events"]
             assert len(timeline) == 1 and timeline[0]["id"] == EVENT_ID
@@ -204,3 +225,41 @@ def test_cli_real_http_updates_same_dashboard_event_and_authenticates_photo(monk
         thread.join(5)
         sock.close()
     assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("latest_url", [None, "/evidence/" + "b" * 32])
+def test_syntactically_valid_receipt_must_match_latest_event(selected_image, latest_url):
+    uploaded = False
+    writes = 0
+    def handler(request):
+        nonlocal uploaded, writes
+        if request.method == "POST":
+            writes += 1
+            uploaded = True
+            return httpx.Response(200, json={"evidence_url": URL})
+        cursor = request.url.params.get("cursor")
+        if not uploaded:
+            return httpx.Response(200, json={"events": [event()], "next_cursor": "before"})
+        if cursor is None:
+            # A stale matching snapshot cannot substantiate the returned receipt.
+            return httpx.Response(200, json={"events": [event(evidence_url=URL)], "next_cursor": "old"})
+        if cursor == "old":
+            return httpx.Response(200, json={"events": [event(evidence_url=latest_url)], "next_cursor": "new"})
+        return httpx.Response(200, json={"events": [], "next_cursor": "new"})
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AttachmentUnavailable, match="latest event"):
+            attach("http://127.0.0.1", EVENT_ID, selected_image, TOKEN, client=client)
+    assert writes == 1
+
+
+def test_decoded_pixel_limit_is_checked_before_loading(selected_image, monkeypatch):
+    data = bytearray(selected_image.read_bytes())
+    # Change only the PNG IHDR dimensions and checksum, preserving a tiny bounded fixture.
+    data[16:24] = struct.pack(">II", 4001, 4000)
+    data[29:33] = struct.pack(">I", zlib.crc32(data[12:29]))
+    selected_image.write_bytes(data)
+    def no_load(*args, **kwargs):
+        pytest.fail("Oversized pixel buffer must never be allocated")
+    monkeypatch.setattr("PIL.PngImagePlugin.PngImageFile.load", no_load)
+    with pytest.raises(AttachmentUnavailable, match="16 megapixel"):
+        read_image(selected_image)

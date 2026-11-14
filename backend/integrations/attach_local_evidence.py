@@ -19,6 +19,7 @@ from PIL import Image, UnidentifiedImageError
 from contracts.models import EventPage, EvidenceResponse
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_PIXELS = 16_000_000
 MAX_RECEIPT_BYTES = 1024 * 1024
 
 
@@ -59,6 +60,8 @@ def read_image(path):
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(data)) as image:
+                if image.width * image.height > MAX_IMAGE_PIXELS:
+                    raise AttachmentUnavailable("Image exceeds the 16 megapixel decoded limit")
                 media_type = {"JPEG": "image/jpeg", "PNG": "image/png"}.get(image.format)
                 if media_type is None:
                     raise AttachmentUnavailable("Select a valid JPEG or PNG image")
@@ -73,12 +76,12 @@ def read_image(path):
         raise AttachmentUnavailable("Selected local image could not be read or decoded") from None
 
 
-def _response_json(client, method, url, token, deadline, **kwargs):
+def _response_json(client, method, url, token, deadline, *, read_timeout=2, **kwargs):
     if time.monotonic() >= deadline:
         raise AttachmentUnavailable("Local attachment operation exceeded its deadline")
     with client.stream(method, url, headers={"Authorization": "Bearer " + token,
                                            **kwargs.pop("headers", {})},
-                       follow_redirects=False, timeout=httpx.Timeout(2, connect=1),
+                       follow_redirects=False, timeout=httpx.Timeout(2, connect=1, read=read_timeout),
                        **kwargs) as response:
         if response.status_code != 200:
             raise AttachmentUnavailable("Local API rejected the request; verify authentication and event ID")
@@ -110,6 +113,28 @@ def _verify_event(client, target, event_id, token, deadline):
     raise AttachmentUnavailable("Event lookup exceeded its limit; no image was uploaded")
 
 
+def _verify_attachment(client, target, event_id, expected_url, token, deadline):
+    """Replay entries are snapshots: scan through the end to compare the latest one."""
+    cursor, latest = None, None
+    for _ in range(1000):
+        params = {"limit": 100}
+        if cursor is not None:
+            params["cursor"] = cursor
+        page = EventPage.model_validate_json(_response_json(
+            client, "GET", target + "/events", token, deadline, params=params))
+        for event in page.events:
+            if event.id == event_id:
+                latest = event
+        if not page.events:
+            if latest is not None and latest.evidence_url == expected_url:
+                return
+            raise AttachmentUnavailable("Attachment receipt does not match the latest event; inspect before retrying")
+        if page.next_cursor is None or page.next_cursor == cursor:
+            raise AttachmentUnavailable("Attachment readback did not provide a usable event cursor")
+        cursor = page.next_cursor
+    raise AttachmentUnavailable("Attachment readback exceeded its limit; inspect before retrying")
+
+
 def attach(target, event_id, image_path, token, *, client=None):
     """Validate a selected file and existing event, then upload once to the local API.
 
@@ -132,9 +157,12 @@ def attach(target, event_id, image_path, token, *, client=None):
         # Encode the path component even though the canonical ID validator is restrictive.
         receipt = EvidenceResponse.model_validate_json(_response_json(
             client, "POST", target + "/events/" + quote(event_id, safe="") + "/evidence",
-            token, deadline, content=data, headers={"Content-Type": media_type}))
+            token, time.monotonic() + 15, read_timeout=12,
+            content=data, headers={"Content-Type": media_type}))
         if not re.fullmatch(r"/evidence/[0-9a-f]{32}", receipt.evidence_url):
             raise AttachmentUnavailable("API did not return a valid local evidence receipt; inspect the event before retrying")
+        _verify_attachment(client, target, event_id, receipt.evidence_url, token,
+                           time.monotonic() + 10)
         return receipt.evidence_url
     except AttachmentUnavailable:
         raise

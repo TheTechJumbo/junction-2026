@@ -14,7 +14,8 @@ After privately exporting `API_TOKEN`, run:
 ```
 
 The event must already exist, for example after the separate metadata import command.
-The command validates the image format and a 5 MiB limit, checks for that event using
+The command validates the image format, a 5 MiB limit, and a 16 megapixel limit before
+decoding pixels. It checks for that event using
 authenticated event pagination, and uploads only after a match. It never creates an
 observation to make an image fit. The endpoint applies its normal image privacy and
 retention policy; the command does not bypass it.
@@ -25,6 +26,14 @@ and inherited HTTP proxies are rejected or disabled. The token is accepted only 
 the environment. Symbolic links and nonregular files are rejected. No upload retries
 occur automatically. A failed or malformed receipt can follow a successful server
 commit: inspect the event before deliberately retrying.
+
+GET requests retain a two-second read timeout and ten-second lookup budget. Uploads
+have a separate fifteen-second receipt budget and twelve-second read timeout to allow
+the endpoint's bounded face-processing step. After upload, the command scans the event
+feed through its latest entries with a separate ten-second budget and checks that the
+requested event references the returned local image URL. An older matching replay entry
+is insufficient if a newer entry references a different image. A failed readback reports
+uncertainty and does not repeat the upload.
 
 The same event ID receives an evidence update, which the dashboard obtains through
 its normal polling/SSE updates. Images remain authenticated and expire under the
