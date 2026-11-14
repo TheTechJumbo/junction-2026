@@ -98,6 +98,37 @@ shows what the relay kept. That replaces the zone's baseline, so the app asks fi
 naming the zone. The relay needs at least 6 photos. Leaving the app stops the recording
 and nothing is uploaded. The live stream pauses while recording.
 
+### Record video, then the laptop maps it
+
+Recording and mapping are separate steps: nothing is processed on the phone while
+recording, and the video goes to the laptop (`POST {relay}/recording?zone={zone}`, the
+`X-Key` header, `video/mp4`, streamed with progress) which builds the map. The card shows
+the relay's status and "Open on the laptop: http://127.0.0.1:8090/..." (the viewer path
+the relay returns, without the key). Check status asks `GET {relay}/recording?zone=`.
+**Record video** follows the same Phone / Glasses choice and zone as Live and Record room:
+
+- **Glasses** (main path): Record video arms the app and the button becomes Cancel. Record
+  on the glasses (press and hold the capture button, or "Hey Meta, record a video"), then
+  open Meta AI so it imports the video into `Download/Meta AI/`. The app notices the new
+  video, waits until its size has stopped growing for 3 s, sends it and disarms (gives up
+  after 10 minutes). It asks for **video access (READ_MEDIA_VIDEO)** at first use and only
+  reads Meta AI's files, never changes or deletes them. "Glasses videos" lists them,
+  newest first, with Send to laptop; "Auto-send new glasses videos" sends each new one
+  once while the app runs. DAT 1.0.1 gives photos, not video, from the glasses session.
+- **Phone**: Record video records the back camera here (CameraX, FHD or HD, no audio;
+  live and Record room stop meanwhile), with a red REC indicator; Stop recording or
+  leaving the app finishes it. The file is
+  `/sdcard/Android/data/com.junction.glasses/files/recordings/room-<zone>-<yyyyMMdd-HHmmss>.mp4`
+  and is sent when done ("Send to laptop when done", on by default). After a successful
+  upload it is deleted unless "Keep video on phone" is on; after a failure it stays, with
+  Retry and Delete in the list, and can be copied with
+  `adb pull /sdcard/Android/data/com.junction.glasses/files/recordings/<name>`.
+
+Privacy: videos have no audio. A phone video stays in this app's own storage (no other
+app can read it; backup is disabled) until it is uploaded, and is then deleted unless
+kept. Glasses videos stay where Meta AI put them, untouched. Videos go only to the
+configured relay.
+
 Debug builds only (placeholders shown; relay defaults: `http://127.0.0.1:8090`, zone
 `kitchen`; add `--es relay_url ...` for another address):
 

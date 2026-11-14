@@ -212,6 +212,25 @@ class AutomaticSetupActivityTest {
         assertEquals(RelayClient.DEFAULT_ZONE, (field("zoneField").get(activity) as EditText).text.toString())
     }
 
+    @Test fun recordVideoWithThePhoneAsksForTheCameraFirstAndCreatesNoRecorder() {
+        MainActivity.automaticSetup = false
+        launch(Intent(app(), MainActivity::class.java))
+        button("Record video").performClick()
+        assertNull(field("videoRecorder").get(activity))
+        assertEquals(listOf(Manifest.permission.CAMERA), shadowOf(activity).lastRequestedPermission.requestedPermissions.toList())
+        assertTrue(text("recordStatus").contains("camera permission"))
+    }
+
+    @Test fun recordVideoWithTheGlassesNeedsTheRelayKeyBeforeWatchingForVideos() {
+        MainActivity.automaticSetup = false
+        launch(Intent(app(), MainActivity::class.java))
+        button("Glasses").performClick()
+        button("Record video").performClick()
+        assertTrue(text("recordStatus").contains("No relay key"))
+        assertNull(field("glassesObserver").get(activity))
+        assertEquals("Record video", button("Record video").text.toString())
+    }
+
     @Test fun backendMemoryKeepsOnlyCiphertextAndNeedsTheSameKey() {
         val prefs = app().getSharedPreferences("test_backend_memory_direct", Context.MODE_PRIVATE)
         val memory = BackendMemory(prefs, { testKey(1) }, { softwareCipher() })

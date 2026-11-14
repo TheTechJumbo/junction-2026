@@ -27,15 +27,36 @@ import androidx.lifecycle.lifecycleScope
 import com.junction.glasses.core.*
 import com.junction.glasses.live.CameraFrame
 import com.junction.glasses.live.CameraSource
+import com.junction.glasses.live.FileUploadBody
 import com.junction.glasses.live.GlassesCamera
+import com.junction.glasses.live.GlassesVideo
+import com.junction.glasses.live.GlassesVideoLibrary
+import com.junction.glasses.live.GlassesVideoWatch
 import com.junction.glasses.live.LiveRelayLoop
 import com.junction.glasses.live.LiveSnapshot
 import com.junction.glasses.live.LiveSources
 import com.junction.glasses.live.PhoneCamera
+import com.junction.glasses.live.PhoneVideoRecorder
+import com.junction.glasses.live.RecordingNames
+import com.junction.glasses.live.RecordingReply
+import com.junction.glasses.live.RecordingUploader
 import com.junction.glasses.live.RelayClient
 import com.junction.glasses.live.RoomRecorder
+import com.junction.glasses.live.SizeSettle
+import com.junction.glasses.live.StreamUploadBody
+import com.junction.glasses.live.UploadOutcome
+import android.database.ContentObserver
+import android.os.Build
+import android.os.SystemClock
+import java.io.File
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.junction.glasses.meta.MetaGlassesAdapter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -54,6 +75,8 @@ class MainActivity : ComponentActivity() {
         private const val STATE_REGISTRATION_REQUESTED = "auto_setup_registration_requested"
         private const val STATE_CONSENT_REQUESTED = "auto_setup_consent_requested"
         private const val REGISTRATION_SETTLE_MS = 3_000L
+        /** How long a new glasses video may keep growing while Meta AI imports it. */
+        private const val SETTLE_LIMIT_MS = 5 * 60 * 1000L
     }
     private val main = Handler(Looper.getMainLooper())
     private lateinit var glasses: MetaGlassesAdapter
@@ -116,6 +139,24 @@ class MainActivity : ComponentActivity() {
     private lateinit var recordButton: Button
     private lateinit var recordStatus: TextView
     private var pendingLiveCamera = false
+    private lateinit var videoButton: Button
+    private lateinit var uploadStatus: TextView
+    private lateinit var sendWhenDone: Switch
+    private lateinit var keepOnPhone: Switch
+    private lateinit var autoSendGlasses: Switch
+    private lateinit var phoneVideosList: LinearLayout
+    private lateinit var glassesVideosList: LinearLayout
+    /** Created only when "Record video" starts with the Phone source. */
+    private var videoRecorder: PhoneVideoRecorder? = null
+    private var videoFile: File? = null
+    private var uploadJob: Job? = null
+    private val glassesWatch = GlassesVideoWatch(System.currentTimeMillis() / 1000)
+    private var glassesLibrary: GlassesVideoLibrary? = null
+    private var glassesObserver: ContentObserver? = null
+    private var glassesCheckJob: Job? = null
+    private var armTimeoutJob: Job? = null
+    private var armedZone: String? = null
+    private var pendingMediaAction: (() -> Unit)? = null
     private var relayUrl = RelayClient.DEFAULT_URL
     private var relayKey: String? = null
     private var relayZone = RelayClient.DEFAULT_ZONE
@@ -134,6 +175,10 @@ class MainActivity : ComponentActivity() {
         if (pendingLiveCamera) {
             pendingLiveCamera = false
             if (isGranted(Manifest.permission.CAMERA)) startLiveCamera() else liveDetails.text = "Camera permission is needed for the live camera."
+        }
+        pendingMediaAction?.let { action ->
+            pendingMediaAction = null
+            if (isGranted(mediaPermission())) action() else uploadStatus.text = "Allow access to videos so the app can send glasses videos."
         }
         updatePermissionStatus()
         autoPermissionsPending = false
@@ -233,7 +278,27 @@ class MainActivity : ComponentActivity() {
             setText((RoomRecorder.DEFAULT_DURATION_MS / 1000).toString())
         }
         recordButton = button("Record room") { if (recordJob != null) stopRecording("Recording stopped. Nothing was uploaded.") else confirmRecording() }
+        note("Record video follows the camera choice. Phone: records here (no audio) and sends the video to the laptop when you stop. Glasses: record on the glasses; when Meta AI has imported the video, this app sends it to the laptop.")
+        videoButton = button("Record video", primary = true) { recordVideoPressed() }
         recordStatus = label("")
+        fun toggle(title: String, on: Boolean): Switch = Switch(this).apply {
+            text = title
+            isChecked = on
+            setTextColor(colors.text)
+            setPadding(0, dp(6), 0, dp(6))
+            container.addView(this)
+        }
+        sendWhenDone = toggle("Send to laptop when done", true)
+        keepOnPhone = toggle("Keep video on phone", false)
+        autoSendGlasses = toggle("Auto-send new glasses videos", false)
+        autoSendGlasses.setOnCheckedChangeListener { _, on -> autoSendChanged(on) }
+        button("Check status") { checkRecordingStatus() }
+        uploadStatus = label("")
+        label("Phone videos waiting on the phone", 15f).setTypeface(null, Typeface.BOLD)
+        phoneVideosList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; container.addView(this) }
+        label("Glasses videos (imported by Meta AI)", 15f).setTypeface(null, Typeface.BOLD)
+        button("Show glasses videos") { showGlassesVideos() }
+        glassesVideosList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; container.addView(this) }
         card("1. Backend setup")
         note("Use the backend API_TOKEN, not an ElevenLabs key or database URL. Emulator: http://10.0.2.2:8000. USB phone: http://127.0.0.1:8000 with adb reverse.")
         endpoint = field("Backend HTTPS URL").apply {
@@ -335,6 +400,7 @@ class MainActivity : ComponentActivity() {
         backendMemory?.loadRelay()?.let { (url, key, zone) -> relayUrl = url; relayKey = key; relayZone = zone; zoneField.setText(zone) }
         if (!consumeDebugBackendExtras(apply = savedInstanceState == null)) connectRememberedBackend()
         renderRelaySettings()
+        refreshPhoneVideos()
         startAutomaticSetup()
     }
     override fun onNewIntent(intent: Intent) {
@@ -401,18 +467,18 @@ class MainActivity : ComponentActivity() {
         liveSources = null
     }
     private fun updateKeepScreenOn() {
-        if (liveLoop != null || recordJob != null) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (liveLoop != null || recordJob != null || videoRecorder != null) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
-    /** The relay client for the zone on the card, or null after saying on [status] what is missing. */
-    private fun relayClient(status: TextView): RelayClient? {
+    private fun cardZone(): String = zoneField.text.toString().trim()
+    /** The relay client for [zone] (the card's zone by default), or null after saying on [status] what is missing. */
+    private fun relayClient(status: TextView, zone: String = cardZone()): RelayClient? {
         val key = relayKey
         if (key.isNullOrBlank()) {
             status.text = if (BuildConfig.DEBUG) "No relay key yet. Send it with adb: --es relay_key … (see README)."
                 else "The live camera needs a debug build with a relay key."
             return null
         }
-        val zone = zoneField.text.toString().trim()
         if (!RelayClient.isZone(zone)) {
             status.text = "Zone names use a-z, 0-9, _ and - (for example kitchen)."
             return null
@@ -426,6 +492,7 @@ class MainActivity : ComponentActivity() {
     private fun startLiveCamera() {
         if (liveLoop != null) return
         if (recordJob != null) { liveDetails.text = "Recording the room; start the live camera after it."; return }
+        if (videoRecorder != null) { liveDetails.text = "Recording a video; start the live camera after it."; return }
         val client = relayClient(liveDetails) ?: return
         if (cameraSource == CameraSource.PHONE && !isGranted(Manifest.permission.CAMERA)) {
             pendingLiveCamera = true
@@ -456,6 +523,7 @@ class MainActivity : ComponentActivity() {
     }
     /** Record room replaces the zone's baseline on the relay, so it asks first, naming the zone. */
     private fun confirmRecording() {
+        if (videoRecorder != null) { recordStatus.text = "A video is recording; stop it first."; return }
         val client = relayClient(recordStatus) ?: return
         val zone = zoneField.text.toString().trim()
         val seconds = (secondsField.text.toString().trim().toLongOrNull() ?: (RoomRecorder.DEFAULT_DURATION_MS / 1000))
@@ -523,7 +591,320 @@ class MainActivity : ComponentActivity() {
         releaseSources()
         updateKeepScreenOn()
     }
-    private fun megabytes(bytes: Int): String = String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    private fun megabytes(bytes: Int): String = megabytes(bytes.toLong())
+    private fun megabytes(bytes: Long): String = String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    private fun minutesSeconds(totalSeconds: Long): String = String.format(Locale.US, "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
+
+    // ---- Record video: Phone records here with CameraX; Glasses arms the app for Meta AI's import ----
+
+    private fun recordVideoPressed() {
+        when {
+            videoRecorder != null -> stopPhoneVideo()
+            glassesWatch.armed -> disarmGlasses("Cancelled. No glasses video will be sent for this recording.")
+            cameraSource == CameraSource.PHONE -> startPhoneVideo()
+            else -> armGlasses()
+        }
+    }
+    private fun recordingsFolder(): File? = getExternalFilesDir("recordings")?.also { it.mkdirs() }
+    /** In-app video from the phone's back camera; one camera use at a time, so live and Record room stop first. */
+    private fun startPhoneVideo() {
+        val zone = cardZone()
+        if (!RelayClient.isZone(zone)) { recordStatus.text = "Zone names use a-z, 0-9, _ and - (for example kitchen)."; return }
+        if (!isGranted(Manifest.permission.CAMERA)) {
+            recordStatus.text = "The phone camera needs the camera permission. Allow it, then tap Record video again."
+            permissions.launch(arrayOf(Manifest.permission.CAMERA))
+            return
+        }
+        val folder = recordingsFolder() ?: run { recordStatus.text = "No app storage is available for videos."; return }
+        if (liveLoop != null) stopLiveCamera("Live camera paused for the video recording.")
+        if (recordJob != null) stopRecording("Record room stopped for the video recording. Nothing was uploaded.")
+        val file = File(folder, RecordingNames.fileName(zone, LocalDateTime.now()))
+        val recorder = PhoneVideoRecorder(this)
+        videoRecorder = recorder
+        videoFile = file
+        videoButton.text = "Stop recording"
+        recordStatus.setTextColor(Color.rgb(217, 48, 37))
+        recordStatus.text = "● REC 00:00 · zone $zone"
+        updateKeepScreenOn()
+        lifecycleScope.launch {
+            try {
+                recorder.start(file,
+                    onStatus = { elapsedNs, bytes ->
+                        if (videoRecorder === recorder) recordStatus.text = "● REC ${minutesSeconds(elapsedNs / 1_000_000_000)} · ${megabytes(bytes)} · zone $zone"
+                    },
+                    onFinished = { code -> phoneVideoFinished(recorder, file, code, null) })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                recorder.release()
+                phoneVideoFinished(recorder, file, -1, LiveRelayLoop.describe(e))
+            }
+        }
+    }
+    private fun stopPhoneVideo() {
+        val recorder = videoRecorder ?: return
+        recorder.stop()
+        recordStatus.text = "Finishing the video…"
+    }
+    private fun phoneVideoFinished(recorder: PhoneVideoRecorder, file: File, code: Int, failure: String?) {
+        if (videoRecorder !== recorder) return
+        videoRecorder = null
+        videoFile = null
+        videoButton.text = "Record video"
+        recordStatus.setTextColor(colors.text)
+        updateKeepScreenOn()
+        if (!file.isFile || file.length() == 0L) {
+            file.delete()
+            recordStatus.text = "The video was not recorded" + (failure?.let { ": $it" } ?: " (CameraX code $code).")
+            refreshPhoneVideos()
+            return
+        }
+        recordStatus.text = "Saved ${file.name} (${megabytes(file.length())})." +
+            (if (code != 0) " The recording ended early (CameraX code $code) but the file was kept." else "")
+        refreshPhoneVideos()
+        if (sendWhenDone.isChecked) uploadPhoneVideo(file)
+    }
+    /** Glasses: nothing records here. The app waits for the next video Meta AI imports, then sends it. */
+    private fun armGlasses() {
+        val zone = cardZone()
+        relayClient(recordStatus, zone) ?: return
+        withMediaAccess {
+            armedZone = zone
+            glassesWatch.arm(System.currentTimeMillis())
+            watchGlassesVideos()
+            videoButton.text = "Cancel"
+            recordStatus.text = "Record on your glasses now: press and hold the capture button (or say \"Hey Meta, record a video\"). " +
+                "When you stop, open Meta AI so it imports the video. This app then sends it to zone $zone."
+            armTimeoutJob?.cancel()
+            armTimeoutJob = lifecycleScope.launch {
+                delay(GlassesVideoWatch.ARM_TIMEOUT_MS)
+                if (glassesWatch.armed) disarmGlasses("No new glasses video arrived within 10 minutes. Record on the glasses, " +
+                    "open Meta AI to import it, then tap Record video again, or send it from the glasses videos list.")
+            }
+        }
+    }
+    private fun disarmGlasses(message: String) {
+        glassesWatch.disarm()
+        armedZone = null
+        armTimeoutJob?.cancel()
+        armTimeoutJob = null
+        videoButton.text = "Record video"
+        recordStatus.text = message
+        if (!autoSendGlasses.isChecked) unwatchGlassesVideos()
+    }
+    private fun autoSendChanged(on: Boolean) {
+        if (on) withMediaAccess { watchGlassesVideos(); checkGlassesVideos() }
+        else if (!glassesWatch.armed) unwatchGlassesVideos()
+    }
+    private fun mediaPermission(): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Manifest.permission.READ_MEDIA_VIDEO else Manifest.permission.READ_EXTERNAL_STORAGE
+    /** Runs [action] once the app may read videos, asking at first use. */
+    private fun withMediaAccess(action: () -> Unit) {
+        if (isGranted(mediaPermission())) { action(); return }
+        pendingMediaAction = action
+        uploadStatus.text = "Allow access to videos so the app can read the glasses videos Meta AI imported (read only)."
+        permissions.launch(arrayOf(mediaPermission()))
+    }
+    private fun glassesVideos(): GlassesVideoLibrary = glassesLibrary ?: GlassesVideoLibrary(contentResolver).also { glassesLibrary = it }
+    private fun watchGlassesVideos() {
+        if (glassesObserver == null) glassesObserver = glassesVideos().watch { checkGlassesVideos() }
+    }
+    private fun unwatchGlassesVideos() {
+        glassesObserver?.let { glassesVideos().unwatch(it) }
+        glassesObserver = null
+    }
+    /** Armed or auto-send: sends the next new Meta AI video once its size has stopped growing for 3 s. */
+    private fun checkGlassesVideos() {
+        if (glassesCheckJob?.isActive == true || uploadJob != null) return
+        val armed = glassesWatch.armed
+        if (!armed && !autoSendGlasses.isChecked) return
+        if (!isGranted(mediaPermission())) return
+        val zone = armedZone ?: cardZone()
+        val library = glassesVideos()
+        glassesCheckJob = lifecycleScope.launch {
+            val videos = withContext(Dispatchers.IO) { runCatching { library.query() }.getOrDefault(emptyList()) }
+            val video = glassesWatch.next(videos, autoSendGlasses.isChecked) ?: return@launch
+            relayClient(uploadStatus, zone) ?: return@launch
+            glassesWatch.markSent(video.id)
+            recordStatus.text = "New glasses video ${video.name}: waiting until Meta AI has finished importing it…"
+            val settle = SizeSettle()
+            val giveUpAt = SystemClock.elapsedRealtime() + SETTLE_LIMIT_MS
+            var size: Long? = null
+            while (SystemClock.elapsedRealtime() < giveUpAt) {
+                size = withContext(Dispatchers.IO) { runCatching { library.size(video.id) }.getOrNull() }
+                if (settle.settled(SystemClock.elapsedRealtime(), size ?: -1L)) break
+                delay(1_000)
+            }
+            if (armed) disarmGlasses("Glasses video ${video.name} found.")
+            if (size == null || size <= 0L) {
+                recordStatus.text = "Glasses video ${video.name} could not be read. Send it from the glasses videos list."
+                return@launch
+            }
+            uploadGlassesVideo(video.copy(sizeBytes = size), zone)
+        }
+    }
+    private fun uploadPhoneVideo(file: File) {
+        if (file == videoFile) { uploadStatus.text = "That video is still recording."; return }
+        val zone = RecordingNames.zoneOf(file.name) ?: run { uploadStatus.text = "${file.name} is not a room video."; return }
+        val client = relayClient(uploadStatus, zone) ?: return
+        val uploader = RecordingUploader(packageName) { video, videoZone, progress ->
+            client.uploadRecording(videoZone, FileUploadBody(video, RelayClient.VIDEO_MP4, progress))
+        }
+        val keep = keepOnPhone.isChecked
+        runUpload(file.name) { progress ->
+            when (val outcome = uploader.send(file, keep, progress)) {
+                is UploadOutcome.Sent -> sentText(outcome.reply) +
+                    (if (outcome.deletedFromPhone) "\nThe video was deleted from the phone." else "\nThe video stays on the phone.")
+                is UploadOutcome.Failed -> "Upload failed: ${outcome.message}\nThe video stays on the phone. Use Retry below, or copy it with:\n${outcome.adbPull}"
+            }
+        }
+    }
+    /** Reads Meta AI's video as a stream; never changes or deletes it. */
+    private fun uploadGlassesVideo(video: GlassesVideo, zone: String) {
+        val client = relayClient(uploadStatus, zone) ?: return
+        val library = glassesVideos()
+        runUpload(video.name) { progress ->
+            try {
+                val body = StreamUploadBody({ library.open(video.id) }, video.sizeBytes, RelayClient.VIDEO_MP4, progress)
+                sentText(client.uploadRecording(zone, body)) + "\nMeta AI's copy on the phone is unchanged."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "Upload failed: ${LiveRelayLoop.describe(e)}\nSend it again from the glasses videos list."
+            }
+        }
+    }
+    /** One upload at a time, with progress in bytes and percent; [work] returns the text to show at the end. */
+    private fun runUpload(name: String, work: suspend (onProgress: (Long, Long) -> Unit) -> String) {
+        if (uploadJob != null) { uploadStatus.text = "Another upload is running; try again when it has finished."; return }
+        uploadStatus.text = "Uploading $name…"
+        val job = lifecycleScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                var lastPercent = -2L
+                uploadStatus.text = work { sent, total ->
+                    val percent = if (total > 0) sent * 100 / total else -1L
+                    if (percent != lastPercent) {
+                        lastPercent = percent
+                        val shown = if (total > 0) "${megabytes(sent)} of ${megabytes(total)} ($percent %)" else megabytes(sent)
+                        main.post { if (uploadJob != null) uploadStatus.text = "Uploading $name: $shown" }
+                    }
+                }
+            } finally {
+                if (uploadJob === coroutineContext[Job]) uploadJob = null
+                refreshPhoneVideos()
+                checkGlassesVideos()
+            }
+        }
+        uploadJob = job
+        job.start()
+    }
+    private fun sentText(reply: RecordingReply): String = listOfNotNull(
+        "Sent to the laptop" + (reply.zone?.let { " (zone $it)" } ?: "") + (reply.status?.let { ": $it" } ?: "."),
+        reply.seconds?.let { "Video: ${String.format(Locale.US, "%.0f", it)} s" + (reply.id?.let { id -> " · id $id" } ?: "") },
+        reply.viewerUrl(relayUrl)?.let { "Open on the laptop: $it" },
+    ).joinToString("\n")
+    private fun checkRecordingStatus() {
+        val zone = cardZone()
+        val client = relayClient(uploadStatus, zone) ?: return
+        uploadStatus.text = "Asking the laptop about zone $zone…"
+        lifecycleScope.launch {
+            uploadStatus.text = try {
+                val reply = client.recordingStatus(zone)
+                listOfNotNull(
+                    "Laptop, zone ${reply.zone ?: zone}: ${reply.status ?: "no status"}",
+                    reply.seconds?.let { "Video: ${String.format(Locale.US, "%.0f", it)} s" + (reply.id?.let { id -> " · id $id" } ?: "") },
+                    reply.viewerUrl(relayUrl)?.let { "Open on the laptop: $it" },
+                ).joinToString("\n")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "Status unavailable: ${LiveRelayLoop.describe(e)}"
+            }
+        }
+    }
+    private fun rowButton(title: String, action: () -> Unit): Button = Button(this).apply {
+        text = title
+        setOnClickListener { action() }
+        stylePill(this, false)
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            .apply { marginStart = dp(6) }
+    }
+    private fun rowText(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        setTextColor(colors.text)
+        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+    }
+    /** Phone videos still in the app's recordings folder, newest first, with Retry and Delete. */
+    private fun refreshPhoneVideos() {
+        if (!::phoneVideosList.isInitialized) return
+        phoneVideosList.removeAllViews()
+        val files = recordingsFolder()?.listFiles()?.filter { it.isFile && RecordingNames.isRecording(it.name) }
+            ?.sortedByDescending { it.name } ?: emptyList()
+        if (files.isEmpty()) {
+            phoneVideosList.addView(rowText("None: every phone video has been sent and removed."))
+            return
+        }
+        for (file in files) {
+            phoneVideosList.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(rowText("${file.name}\n${megabytes(file.length())}"))
+                addView(rowButton("Retry") { uploadPhoneVideo(file) })
+                addView(rowButton("Delete") { confirmDelete(file) })
+            })
+        }
+    }
+    private fun confirmDelete(file: File) {
+        AlertDialog.Builder(this).setTitle("Delete ${file.name}?")
+            .setMessage("The video is removed from the phone for good. A copy already sent to the laptop is not affected.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ ->
+                if (file != videoFile) file.delete()
+                refreshPhoneVideos()
+            }
+            .show()
+    }
+    /** Meta AI's imported glasses videos, newest first, each with Send to laptop. Read only. */
+    private fun showGlassesVideos() = withMediaAccess {
+        val library = glassesVideos()
+        lifecycleScope.launch {
+            val videos = withContext(Dispatchers.IO) { runCatching { library.query(20) }.getOrDefault(emptyList()) }
+            glassesVideosList.removeAllViews()
+            if (videos.isEmpty()) {
+                glassesVideosList.addView(rowText("No glasses videos yet. Record on the glasses, then open Meta AI so it imports them."))
+                return@launch
+            }
+            val dates = DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.getDefault())
+            for (video in videos) {
+                val thumb = ImageView(this@MainActivity).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(80), dp(60)).apply { marginEnd = dp(8) }
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    contentDescription = "Glasses video ${video.name}"
+                }
+                val added = Instant.ofEpochSecond(video.dateAddedSec).atZone(ZoneId.systemDefault()).format(dates)
+                glassesVideosList.addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(4), 0, dp(4))
+                    addView(thumb)
+                    addView(rowText("$added · ${minutesSeconds(video.durationMs / 1000)} · ${megabytes(video.sizeBytes)}" +
+                        (if (glassesWatch.wasSent(video.id)) "\nSent in this session" else "")))
+                    addView(rowButton("Send to laptop") { sendGlassesVideo(video) })
+                })
+                launch {
+                    val picture = withContext(Dispatchers.IO) { library.thumbnail(video.id) }
+                    if (picture != null) thumb.setImageBitmap(picture)
+                }
+            }
+        }
+    }
+    private fun sendGlassesVideo(video: GlassesVideo) {
+        val zone = cardZone()
+        relayClient(uploadStatus, zone) ?: return
+        glassesWatch.markSent(video.id)
+        uploadGlassesVideo(video, zone)
+    }
     private fun renderLive(snapshot: LiveSnapshot<CameraFrame>) {
         if (liveLoop == null) return
         // The camera makes a thumbnail at most twice a second; other frames leave the picture as it is.
@@ -897,6 +1278,9 @@ class MainActivity : ComponentActivity() {
         cancelAutomaticRetry()
         stopLiveCamera("Live camera stopped because the app left the screen.")
         stopRecording("Recording stopped because the app left the screen. Nothing was uploaded; record again when ready.")
+        // A phone video is stopped and finalised; it is then sent as usual. An armed glasses wait keeps running,
+        // because Meta AI has to be opened to import the glasses video.
+        stopPhoneVideo()
         if (!glasses.isExternalFlowPending) { glasses.stopListening(); glasses.suspendLifecycle() }
         super.onStop()
     }
@@ -911,6 +1295,8 @@ class MainActivity : ComponentActivity() {
             autoGlasses.onForeground()
             continueAutomaticSetup()
         }
+        // Back from Meta AI: look for a newly imported glasses video in case no change was reported.
+        if (::autoSendGlasses.isInitialized && (glassesWatch.armed || autoSendGlasses.isChecked)) checkGlassesVideos()
     }
     /** A backend check cut short by leaving the app (e.g. Meta AI consent) is re-run with the in-memory client. */
     private fun resumeInterruptedBackendCheck() {
@@ -922,6 +1308,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         stopLiveCamera("Live camera is off.")
         stopRecording("Recording stopped.")
+        videoRecorder?.release()
+        unwatchGlassesVideos()
         recognizer?.destroy(); glasses.close(); audio.close()
         super.onDestroy()
     }
