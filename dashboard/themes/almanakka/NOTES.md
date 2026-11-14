@@ -1,0 +1,9 @@
+# Almanakka
+
+The idea: Daylight is a page from the family almanac (almanakka), the small printed yearbook kept by the phone, with each day's sunrise and sunset and the Sundays and holidays printed in red. The hero is an ink line drawing of Anna's kitchen corner: the window, the wall almanac open at November, the kettle, the weekly pill box (MA TI KE TO PE LA SU, Saturday's lid open) and the front door with its letterbox. It draws itself in once on load; the sun crosses the window with `--sun-progress`/`--sun-altitude` and sets behind the Helsinki rooftops, the pane's wash follows `data-sky`, a crescent moon and stars come out after dark, and the kettle steams except at night.
+
+Palette, all taken from the drawings: ink `#1f3a5f` (every line, every word), the almanac's printed red `#c8322b` (the Sunday column and SU lid in the scene, used on the page only for red-letter moments), cool newsprint paper `#e9edf0` (the rooftops in the window), and one blue wash `#bdd6e3` for the sky in the pane, deepening to `#34507a` at night. Red appears only when `data-mood="notice"`: the headline, the day name, the alert count, a flagged mark on the hour ruler, and a red ring drawn round the 14th on the wall almanac. A calm day gets an ink tick there instead.
+
+Type: Schibsted Grotesk (a Nordic newspaper grotesk; 400, 700 and 900 for the big numerals and headlines) with IBM Plex Mono for times, small-caps style labels and the printed notes. Almanac conventions: double rules for the running head and the date bar, a dotted-leader table for sunrise and sunset, an hour ruler with tick marks for the rhythm of the day, a two-column grid with a column rule on wide screens (the day on the left, marginal notes on the right), tally marks for repeated questions and a daily note written on ruled lines.
+
+The SVGs are generated with a little seeded wobble so straight lines read as drawn by hand; every drawn path has `pathLength="1"` so the draw-in is one CSS animation.

@@ -27,6 +27,36 @@ Authorization only from the same origin; redirects, query parameters, URL creden
 unsupported media, and external URLs are rejected. Browser blob URLs are revoked when
 the evidence dialog closes, the day changes or the session ends.
 
+## Looks and the time of day
+
+The page follows the real day in Helsinki: a live clock, sunrise and sunset (`day.js`, worked
+out locally with no network), a "now" line on the rhythm-of-the-day strip, and a hero scene that
+moves with the sun. It reads as calm, quiet or "something to notice" from the backend's alerts
+only; it applies no care rules of its own.
+
+There are several looks to choose from with **Look**. Each one is a folder in `themes/` with its
+own SVG artwork, fonts and stylesheet; `themes/README.md` explains how to make one. `base.css`
+holds only resets and accessibility rules.
+
+Preview options in the address: `?demo` opens the example day, `?theme=<id>` picks a look,
+`?at=HH:MM` previews the scene at another time of day, and `?nosw` skips the offline cache.
+None of them carry credentials.
+
+## Install as an app
+
+The dashboard installs as a phone or desktop app with its own icon that opens full-screen
+(`manifest.json`, `icons/`). Browsers only allow this over HTTPS, or on `127.0.0.1`/`localhost`
+for testing on the same machine.
+
+- Android (Chrome): open `/dashboard/`, then **Install app** in the toolbar or *Add to home screen*.
+- iPhone (Safari): Share, then *Add to Home Screen*.
+- Desktop (Chrome/Edge): the install icon in the address bar, or **Install app**.
+
+`sw.js` caches only the app's own files, so the installed app opens offline and shows its
+offline message. It never caches API responses, evidence images, fixtures, or any request
+that carries the token. The token is still kept in memory only, so the app asks for it each
+time it is opened.
+
 ## Browser checks
 
 Check wide and 390px layouts, keyboard focus, native date picker, Connect dialog submit /

@@ -1,0 +1,10 @@
+# Ryijy
+
+- **Idea:** the day is a ryijy, the knotted-pile rug a Finnish family hands down. The hero band is 48 knot columns, one per half hour; the columns woven so far today are in full wool, the rest are bare warp with the pattern chart faintly marked on it. A birch shuttle passes slowly along the column being knotted. A past day is a finished rug.
+- **Sky in the weave:** the top band is night indigo, with the stretch between today's sunrise and sunset knotted in woad blue (`--sunrise`/`--sunset`). The sun motif rides that stretch with `--sun-progress` (rose-hip red when low); after dark a crescent moon sits at the weaving edge and stars show in the night stretch.
+- **Mood:** a calm or unknown day weaves juniper fields with indigo diamonds and ochre rings. A day with something to notice turns the border, rings and hearts madder on charcoal, and the eyebrow label, the first stat and the "Things to notice" panel go madder too. A quiet day swaps to indigo fields.
+- **Palette** (all from `assets/scene.svg`): madder `#9c2f2a`, rose hip `#d9604f`, indigo `#2c3d6b`, woad `#7d9acb`, night `#1b2440`, birch ochre `#d9a441`, juniper `#2e4a36`, undyed wool `#ebe5d8`, raw wool `#b8ab92`, charcoal backing `#24221f`. The page ground follows the real sky: undyed wool by day, charcoal from twilight on.
+- **Shapes:** everything is squares and steps. Filled panels have stepped corners (`clip-path`), dividers are two-row knot checks, open panels have running-stitch (dashed) edges, and knotted fringe hangs at the top and bottom of the page. Icons are drawn on a 12 x 12 stitch grid.
+- **Rhythm:** one woven strip, 24 hour-columns wide, with a weft row per kind (door, pills, glasses, questions) so close moments don't overlap. Alert knots are madder with an ochre ring.
+- **Type:** Barlow Condensed 600/700 for display (sturdy, slightly condensed, like woven lettering); Atkinson Hyperlegible 400/700 for reading, for clear figures and letterforms on a worried glance. Both SIL OFL, self-hosted.
+- The SVGs are generated from knot charts (ASCII grids), so every shape sits on the 8-unit knot grid.

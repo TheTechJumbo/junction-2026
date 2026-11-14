@@ -1,0 +1,10 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="change_address" android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_address_short"
+        android:shortcutLongLabel="@string/shortcut_address_long">
+        <intent android:action="com.junction.family.CHANGE_ADDRESS"
+            android:targetPackage="com.junction.family"
+            android:targetClass="com.junction.family.MainActivity" />
+    </shortcut>
+</shortcuts>

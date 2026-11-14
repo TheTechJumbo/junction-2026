@@ -1,24 +1,114 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-mood="unknown" data-mode="disconnected" data-daypart="morning" data-day-state="today">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'">
-<title>Daylight · Family view</title><link rel="stylesheet" href="styles.css"><script type="module" src="app.js"></script>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'">
+<title>Daylight</title>
+<link rel="manifest" href="manifest.json"><meta name="theme-color" content="#ffffff">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Daylight"><meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="themes/kaamos/theme.css" id="theme-css">
+<script type="module" src="app.js"></script>
 </head>
 <body>
-<a class="skip" href="#main">Skip to daily overview</a>
-<header class="topbar"><a class="brand" href="./"><span class="brand-icon" aria-hidden="true">◒</span> daylight<span class="brand-caption">FAMILY VIEW</span></a><div class="connection"><span id="connection-label">Not connected</span><button id="connection-button" class="quiet">Connect</button></div></header>
-<main id="main">
-<div class="page-heading"><div><p class="eyebrow">A little reassurance, every day</p><h1>A day at home.</h1><p class="intro">The moments that matter, all in one place.</p></div><div class="day-control"><label for="day">Viewing day</label><input id="day" type="date" required><small>Europe/Helsinki</small></div></div>
-<div class="toolbar"><span id="mode-label">Private family overview</span><div><button id="refresh" class="quiet">↻ Refresh</button><button id="demo" class="quiet">Explore synthetic demo</button></div></div>
-<div id="status" class="status" role="status" aria-live="polite"></div>
-<section id="content" aria-label="Daily overview" hidden>
-<div class="grid"><section class="card summary"><p class="eyebrow">THE DAILY PICTURE</p><h2>The day, at a glance</h2><p id="summary-text"></p><p class="footnote">Openings are observations. They do not confirm medication was taken or a door was locked.</p></section><section class="card alerts"><div class="section-heading"><h2>Things to notice</h2><span class="badge" id="alert-count"></span></div><p class="muted">Alerts from sensor observations</p><div id="alerts"></div></section></div>
-<div class="grid lower"><section class="card timeline"><div class="section-heading"><h2>The day's timeline</h2><span class="muted" id="event-count"></span></div><p class="muted">Times shown in Helsinki · earliest first</p><ol id="events"></ol></section><div class="side"><section class="card"><p class="eyebrow">A MOMENT OF REASSURANCE</p><h2>Repeated questions</h2><p class="muted">Questions recorded during this day</p><div id="questions"></div></section><section class="card"><div class="section-heading"><h2>Home connection</h2><span class="small-icon" aria-hidden="true">⌁</span></div><p class="muted">Device status reported by the home service</p><div id="sensors"></div></section><aside class="care-note"><span aria-hidden="true">◌</span><p>Small moments, gently remembered.<br><span>Your family's view of the day.</span></p></aside></div></div>
-</section>
-<footer><span>daylight</span><p>Designed for a little more peace of mind.</p><p id="updated">Connect to view recorded observations.</p></footer>
-</main>
-<dialog id="connect-dialog" aria-labelledby="connect-title"><form id="connect-form"><h2 id="connect-title">Connect to home</h2><p>Enter the access token provided for your home service.</p><label for="token">Access token</label><input id="token" type="password" autocomplete="off" required><p class="muted">Kept in memory for this tab. Refreshing the page clears it.</p><div class="dialog-actions"><button type="button" id="cancel-connect" class="quiet">Cancel</button><button type="submit" class="primary">Connect</button></div></form></dialog>
-<dialog id="evidence-dialog" aria-labelledby="evidence-title"><h2 id="evidence-title">Observation evidence</h2><p id="evidence-status" role="status"></p><img id="evidence-image" alt="Evidence attached to the selected observation" hidden><button id="close-evidence" class="primary">Close</button></dialog>
-</body></html>
+<a class="skip" href="#main">Skip to the day</a>
+<div class="sprite" id="sprite" aria-hidden="true"></div>
+<div class="app">
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brand-mark" data-asset="mark" aria-hidden="true"></span><span class="brand-name">Daylight</span><span class="brand-caption">Family view</span></a>
+    <div class="topbar-actions">
+      <span class="connection" id="connection-label">Not connected</span>
+      <button id="theme-button" class="ghost" type="button" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-theme"></use></svg><span>Look</span></button>
+      <button id="connection-button" class="ghost" type="button">Connect</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-scene" data-asset="scene" aria-hidden="true"></div>
+      <div class="hero-copy">
+        <p class="hero-eyebrow"><span id="hero-place">At home</span><span class="sep" aria-hidden="true"> · </span><time id="clock" title="Helsinki time">--:--</time></p>
+        <div class="hero-title-row"><h1 id="hero-title">Connect to see the day at home.</h1>
+        <button id="info-button" class="ghost icon-button info-button" type="button" aria-label="Daily note and details" title="Daily note and details" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg></button></div>
+        <p id="hero-lede" class="hero-lede" hidden></p>
+        <ul class="hero-stats" id="hero-stats" aria-label="This day in numbers">
+          <li data-stat="alerts" title="Things to notice"><svg class="icon" aria-hidden="true"><use href="#i-alert"></use></svg><strong id="stat-alerts">–</strong><span class="visually-hidden">to notice</span></li>
+          <li data-stat="events" title="Observations"><svg class="icon" aria-hidden="true"><use href="#i-sensor"></use></svg><strong id="stat-events">–</strong><span class="visually-hidden">observations</span></li>
+          <li data-stat="questions" title="Questions asked"><svg class="icon" aria-hidden="true"><use href="#i-question"></use></svg><strong id="stat-questions">–</strong><span class="visually-hidden">questions</span></li>
+        </ul>
+        <div class="hero-actions" id="hero-actions">
+          <button id="hero-connect" class="primary" type="button">Connect to home</button>
+          <button id="hero-demo" class="ghost" type="button">Example day</button>
+        </div>
+      </div>
+      <aside class="sun-card" aria-label="Daylight in Helsinki">
+        <p class="sun-row"><svg class="icon" aria-hidden="true"><use href="#i-sun"></use></svg><span class="visually-hidden">Sunrise</span><time id="sunrise">--:--</time></p>
+        <p class="sun-row"><svg class="icon" aria-hidden="true"><use href="#i-moon"></use></svg><span class="visually-hidden">Sunset</span><time id="sunset">--:--</time></p>
+        <p class="sun-length visually-hidden" id="day-length"></p>
+      </aside>
+    </section>
+
+    <nav class="day-nav" aria-label="Choose a day">
+      <button id="prev-day" class="ghost icon-button" type="button" aria-label="Previous day"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button>
+      <div class="day-field"><label for="day" class="visually-hidden">Day</label><input id="day" type="date" required><span id="day-name" class="day-name"></span></div>
+      <button id="next-day" class="ghost icon-button" type="button" aria-label="Next day"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+      <button id="today" class="ghost" type="button">Today</button>
+      <span class="day-nav-spacer"></span>
+      <span id="mode-label" class="mode-label" hidden></span>
+      <button id="install" class="ghost icon-button" type="button" aria-label="Install app" title="Install app" hidden><svg class="icon" aria-hidden="true"><use href="#i-install"></use></svg></button>
+      <button id="refresh" class="ghost icon-button" type="button" aria-label="Refresh" title="Refresh"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
+      <button id="demo" class="ghost" type="button">Example day</button>
+    </nav>
+
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+
+    <section id="content" class="content" aria-label="The day" hidden>
+      <section class="rhythm panel" aria-labelledby="rhythm-title">
+        <div class="panel-head"><h2 id="rhythm-title">The day</h2></div>
+        <div class="rhythm-track" id="rhythm-track">
+          <div class="rhythm-parts" aria-hidden="true"><span data-part="night">Night</span><span data-part="morning">Morning</span><span data-part="afternoon">Afternoon</span><span data-part="evening">Evening</span></div>
+          <div class="rhythm-daylight" aria-hidden="true"></div>
+          <ol class="rhythm-marks" id="rhythm-marks"></ol>
+          <div class="rhythm-now" aria-hidden="true"><span>Now</span></div>
+          <div class="rhythm-hours" aria-hidden="true"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+        </div>
+      </section>
+
+      <div class="board">
+        <section class="attention panel" aria-labelledby="attention-title">
+          <div class="panel-head"><h2 id="attention-title">To notice</h2><span class="count" id="alert-count"></span></div>
+          <div id="alerts" class="alerts"></div>
+        </section>
+
+        <section class="timeline panel" aria-labelledby="timeline-title">
+          <div class="panel-head"><h2 id="timeline-title">Timeline</h2><span class="count" id="event-count"></span></div>
+          <ol id="events" class="events"></ol>
+        </section>
+
+        <section class="questions panel" aria-labelledby="questions-title">
+          <div class="panel-head"><h2 id="questions-title">Questions</h2></div>
+          <div id="questions" class="question-list"></div>
+        </section>
+
+
+        <section class="home panel" aria-labelledby="home-title">
+          <div class="panel-head"><h2 id="home-title">Sensors</h2></div>
+          <div id="sensors" class="sensor-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <footer class="footer"><span class="footer-mark" data-asset="mark" aria-hidden="true"></span><p id="updated">Connect to view recorded observations.</p></footer>
+  </main>
+</div>
+
+<dialog id="connect-dialog" aria-labelledby="connect-title"><form id="connect-form"><h2 id="connect-title">Connect to home</h2><p>Enter the access token for your home service.</p><label for="token">Access token</label><input id="token" type="password" autocomplete="off" required><p class="muted">Kept in memory for this session only. Closing the app clears it.</p><div class="dialog-actions"><button type="button" id="cancel-connect" class="ghost">Cancel</button><button type="submit" class="primary">Connect</button></div></form></dialog>
+<dialog id="evidence-dialog" aria-labelledby="evidence-title"><h2 id="evidence-title">Evidence</h2><p id="evidence-status" role="status"></p><img id="evidence-image" alt="The moment attached to this observation" hidden><div class="dialog-actions"><button id="close-evidence" class="primary" type="button">Close</button></div></dialog>
+<dialog id="info-dialog" aria-labelledby="info-title"><h2 id="info-title">Daily note</h2><p id="summary-text" class="summary-text"></p><p class="footnote" id="info-footnote">Sensors record openings. An opening does not confirm that pills were taken or that a door was locked.</p><div class="dialog-actions"><button id="close-info" class="primary" type="button">Close</button></div></dialog>
+<dialog id="theme-dialog" aria-labelledby="theme-title"><form id="theme-form" method="dialog"><h2 id="theme-title">Choose a look</h2><fieldset><legend class="visually-hidden">Look</legend><div id="theme-options" class="theme-options"></div></fieldset><div class="dialog-actions"><button class="primary" type="submit">Done</button></div></form></dialog>
+</body>
+</html>
