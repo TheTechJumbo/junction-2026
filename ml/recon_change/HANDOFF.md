@@ -230,3 +230,55 @@ behind them. Agents in flight: item finder recall, the walking test of the posit
 (`jun-25-locate-walk`, draft PR 18), and watched spots for small changes (`jun-22-watch-spots`).
 
 Still not done: a real room of ours, real items, the glasses, a real sensor event, a voice.
+
+## Update, Sat 14 Nov about 12:15 UTC
+
+Deployed and tested live on the GPU lane at 12:09 UTC: change check 15 to 16 s, position fix 3.9 s,
+a painted-in phone found and placed, and the lounge scene with 20 marked spots: 19 right, 1 wrong.
+
+- **Start or restart the workers with** `bash iridis/restart_workers.sh` from the project folder on the
+  cluster. It sources `iridis/worker_env.sh` (the item finder's settings), holds other queued GPU jobs
+  for the minute it takes, and queues replacements behind the new workers. A plain `sbatch` without
+  those settings still works but runs the item finder at its old, weaker settings.
+- **Files the cluster needs** from `ml/recon_change/`: `recon_change.py`, `recon_rust.py` (the change
+  check imports it; without the Rust build it falls back to NumPy), `locate.py`, `items.py`, `watch.py`,
+  `splat.py`, `live/worker.py`, `live/gateway.py`, `iridis/*`. Forgetting `recon_rust.py` took the
+  workers down for three minutes at 12:08 UTC.
+- **Item finder**: a limit per item plus a second opinion from CLIP on weak boxes finds 201 of 303
+  labelled items (was 97), 3 wrong answers in 140, none on 162 held-out item-free photos. Keys over
+  64 px: 14 of 25. "Show it once" did not help in the one synthetic test that could be built.
+- **Watched spots** (`watch.py`): 74% of small changes caught at about 9% false alarms on held-out
+  scenes, against 7% for the room-wide check. Wired into every check and position fix.
+- **Walking test** of the position fix: found fixes are right (3 cm, 1 degree median), no wrong room
+  accepted, 16% of same-room views not found, metres a third too long.
+
+Waiting on Seb: four session pull requests are measured and unmerged (28 position fix v2, 29 carer
+setup page, 30 day log, 31 stable confidence). Still running: the object map (32).
+
+## Update, Sat 14 Nov about 16:35 UTC: merged, NOT yet deployed
+
+Merged into `jun-22-hud-waypoints` and pushed (all twelve offline tests pass on the combined code):
+
+- PR 29, carer setup on `/places`: one real distance (`baselines/<zone>/scale.json`), photos of an item
+  (`enrolled/<item>/NN.jpg`), boxes round spots to watch (`baselines/<zone>/watch.json`).
+- PR 28, position fix v2: metres from one known distance or an assumed 1.5 m, up from the largest level
+  surface, "unsure" instead of "lost" when one baseline photo confirms the view, a hint which way to turn.
+- PR 31, steady position with a calibrated confidence percentage (`track.py`): the relay adds `stable`
+  and `confidence_pct` to `/locate` and `/where`, and `/hud` draws from it.
+- PR 30, day log (`day.py`): `/day` and `/dayview`, and day questions in `/ask`. It is fed the fix
+  itself, not the steady answer: the two were measured apart, and at one photo every 6 s the steady
+  answer is rarely "steady", so visits would go missing.
+- PR 32, object map (`objects.py`): merged as code with its results, not wired into the worker or relay.
+
+**The cluster still runs the previous version.** The university VPN dropped during the afternoon, and
+the workers' two-hour jobs have ended. When the VPN is back, from `ml/recon_change` on the laptop:
+
+    bash iridis/deploy_from_laptop.sh
+
+It copies the files (including `recon_rust.py`), checks that they import, and restarts both workers
+with the item finder's settings. Then restart the relay. Nothing from PRs 28 to 32 has run live.
+
+Finding to design around (PR 31): a position fix does not jump, it goes stale. At one photo every 6 s
+an arrow drawn from the last fix is right 46% of the time between photos; at one photo a second, with
+the steadying, 90%. Guiding a walking person needs about one photo a second or motion sensing in
+between.

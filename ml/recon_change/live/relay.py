@@ -17,6 +17,8 @@ It prints the link to open. The link carries an access key, and every request ne
                                   sees now -> where they are and the way to each named place
                                   (add &view=1 to also get the room as a 3D file with them marked)
     GET  /where?zone=kitchen      the latest position fix for that zone (what the glasses display polls)
+                                  (both replies carry "stable": the steady position made from the stream of
+                                  fixes, with "confidence_pct" and "show", see track.py)
     GET  /waypoints?zone=kitchen  the zone's named places
     POST /waypoint?zone=kitchen&name=pill+box&frame=3&u=0.4&v=0.6   name a spot in baseline picture 3
     POST /waypoint?zone=kitchen&name=pill+box&delete=1
@@ -32,6 +34,20 @@ It prints the link to open. The link carries an access key, and every request ne
     POST /route                   body = {"position": [east, north], "heading_deg": 0, "map": {...}, "waypoints": [...]}
                                   -> the way around furniture from that standpoint (route.py). /locate and
                                   /where carry the same under "route", from the wearer's own position
+    GET  /day?date=YYYY-MM-DD     what the wearer did that day (no date: today): timeline and two summaries
+    GET  /dayview                 the carer's page for one day
+
+What the carer sets once, on /places (the gateway keeps it next to the baseline pictures):
+
+    POST /scale?zone=kitchen&a=pill+box&b=front+door&metres=2.4   the real distance between two named
+                                  places, so distances come out in real metres (&delete=1 removes it;
+                                  GET /waypoints shows it as "scale")
+    POST /watch?zone=kitchen&name=pill+box+shelf&frame=3&u0=0.2&v0=0.3&u1=0.5&v1=0.6
+                                  a box in baseline picture 3 to check for changes (&name=...&delete=1 removes it)
+    GET  /watch?zone=kitchen      the zone's watched spots
+    POST /enroll?name=keys        body = one photo of that exact item (JPEG, PNG or WebP), up to five per item
+    POST /enroll?name=keys&delete=1   forget the item (&n=1 too: only that photo)
+    GET  /enrolled                the items and how many photos each has; a photo is /enrolled/keys/0.jpg
 
 A reminder is shown and spoken on the glasses display when it is due, with the way to its place.
 One for the pill box is done when a sensor reports the box was opened (read from the event API).
@@ -102,6 +118,11 @@ try:
     import recon_change as rc
 except ImportError:  # no OpenCV here: videos are forwarded whole
     cv2 = rc = None
+
+sys.path.insert(0, str(HERE.parent))
+import track  # noqa: E402  the steady position made from the stream of fixes: pure Python, needs nothing
+# ---- day log (JUN-26): what the wearer did through the day. day.py is next to recon_change.py and needs nothing else.
+import day as day_log  # noqa: E402
 
 # --- route finding (route.py): plain Python, so it loads with or without OpenCV ---------------
 try:
@@ -287,6 +308,49 @@ def post_events(url, events):
         return response.status
 
 
+# ---------------------------------------------------------------- what the carer sets once
+# The room's real scale, the spots to watch and the items shown to the camera once. The relay
+# checks what the page sends, and the gateway, which writes the files, checks all of it again.
+ZONE_NAME = r"[a-z0-9_-]{1,32}"
+ITEM_NAME = r"[a-z0-9]+(?:_[a-z0-9]+)*"  # an enrolled item as its folder is named: "remote_control"
+PHOTO_BYTES = 20 * 1024 * 1024  # the largest photo of an item
+
+
+def item_name(text):
+    """"Remote control" -> "remote_control", or "" if it is not a plain name of at most 32 characters."""
+    name = "_".join(text.lower().split())
+    return name if len(name) <= 32 and re.fullmatch(ITEM_NAME, name) else ""
+
+
+def plain_name(text):
+    """A typed name with single spaces, or "" unless it starts with a letter or a digit and goes on
+    with letters, digits, spaces, ' and -, at most 40 characters in all."""
+    name = " ".join(text.split())
+    return name if re.fullmatch(r"[^\W_][\w '-]{0,39}", name) else ""
+
+
+def in_range(text, low, high):
+    """A number from the query string, if it is a finite one from low to high. ValueError otherwise."""
+    value = float(text)
+    if not (math.isfinite(value) and low <= value <= high):
+        raise ValueError(text)
+    return value
+
+
+def item_photo(photo):
+    """A photo of an item as a JPEG with its long side at most BIG_SIDE, so little goes over the SSH
+    connection. Without OpenCV it is passed on as it is, and the gateway shrinks it."""
+    if cv2 is None:
+        return photo
+    frame = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise ValueError("not a picture")
+    scale = BIG_SIDE / max(frame.shape[:2])
+    if scale < 1:
+        frame = cv2.resize(frame, (round(frame.shape[1] * scale), round(frame.shape[0] * scale)), interpolation=cv2.INTER_AREA)
+    return cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+
+
 REPO = "TheTechJumbo/junction-2026"
 
 
@@ -310,6 +374,82 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         seen = json.loads(seen_file.read_text())  # {zone: {item: where and when it was last seen}}
     except (OSError, ValueError):
         seen = {}
+
+    # One tracker per zone turns the stream of fixes into one steady position with a confidence
+    # percentage (track.py). Its state is a little JSON, kept next to where.json across a restart.
+    track_file = evidence_dir / "track.json"
+    try:
+        trackers = {z: track.Tracker(state) for z, state in json.loads(track_file.read_text()).items()}
+    except (OSError, ValueError, AttributeError, TypeError):
+        trackers = {}
+    track_lock = threading.Lock()
+
+    def steady(zone, fix=None, taken_at=None):
+        """The steady position of a zone as of now (the "stable" part of the /locate and /where replies),
+        or None before the zone's first fix. With `fix`, that fix (photo taken at `taken_at`) is taken in first."""
+        try:
+            with track_lock:
+                if fix is not None:
+                    trackers.setdefault(zone, track.Tracker(zone=zone)).update({**fix, "zone": zone}, taken_at)
+                    try:
+                        track_file.write_text(json.dumps({z: t.dump() for z, t in trackers.items()}))
+                    except OSError:
+                        pass
+                return trackers[zone].current(time.time()) if zone in trackers else None
+        except Exception:  # the steady position is an extra: it must never cost the wearer a fix
+            return None
+
+    # ---- day log (JUN-26): one file per day in the evidence folder, no pictures in it. See day.py. ----
+    try:  # BEACON_NEAR_M: how close to a place counts as a visit, in the fix's metres (see eval/DAY_RESULTS.md)
+        near_m = float(os.environ.get("BEACON_NEAR_M") or day_log.ENTER_M)
+    except ValueError:
+        near_m = day_log.ENTER_M
+    log = day_log.DayLog(evidence_dir / "day", clock=home_time, name=os.environ.get("BEACON_WEARER_NAME") or None,
+                         enter=near_m, leave=near_m + day_log.LEAVE_M - day_log.ENTER_M)
+    asked_events = {"at": 0.0}
+
+    def log_fix(zone, fix, result):
+        """Hand a finished position fix to the day log, with the items it placed. When the fix carries the
+        stabiliser's answer under "stable", day.py uses that. Never costs the wearer the fix itself."""
+        try:
+            log.fix(fix)
+            for item in result.get("items") or []:
+                if item.get("position"):
+                    log.item(item["name"], near=(seen.get(zone, {}).get(item["name"]) or {}).get("near", ""), zone=zone, position=item["position"])
+        except Exception as err:  # noqa: BLE001
+            sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
+
+    def log_sensor_events(wait=False):
+        """Read the sensor and camera events the event API has collected since the last one in the day log.
+        In the background after a fix, at most every 15 s; at once for the day page (wait), at most every 3 s.
+        Reads the event list, so no question is logged."""
+        if not api_base or time.time() - asked_events["at"] < (3 if wait else 15):
+            return
+        asked_events["at"] = time.time()
+
+        def pull():
+            start = log.last_event_time() or log.window(log.day_of(time.time()), None)[0]  # else from midnight in the home
+            params = {"since": datetime.fromtimestamp(start, timezone.utc).isoformat(timespec="seconds"), "limit": 100}
+            try:
+                for _ in range(5):
+                    request = urllib.request.Request(f"{api_base}/events?{urlencode(params)}",
+                                                     headers={"Authorization": f"Bearer {api_token}"})
+                    with urllib.request.urlopen(request, timeout=4) as response:
+                        page = json.loads(response.read())
+                    for event in page.get("events", []):
+                        if isinstance(event, dict) and event.get("source") in ("sensor", "vision"):
+                            log.event(event)
+                    if not page.get("events") or not page.get("next_cursor"):
+                        break
+                    params = {"cursor": page["next_cursor"], "limit": 100}
+            except Exception as err:  # noqa: BLE001  the event API being down must not break a page or a fix
+                sys.stderr.write(f"day log: events not read: {type(err).__name__}\n")
+
+        if wait:
+            pull()
+        else:
+            threading.Thread(target=pull, daemon=True).start()
+    # ---- end of the day log's own functions ----
 
     def remember_items(zone, result, images):
         """Keep where each item in this fix was seen. Only with a position: a lost fix places nothing."""
@@ -485,6 +625,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             asked_sensors["at"] = now
         if changed:
             save_reminders()
+        try:  # day log (JUN-26): a reminder becoming due, done or missed is recorded once
+            log.reminders(out, at=now)
+        except Exception as err:  # noqa: BLE001
+            sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
         return out
 
     def keep_evidence(job, blob):
@@ -518,16 +662,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
     # --- route finding (route.py) ---------------------------------------------------------------
     route_cache = {}  # {zone: (what it was worked out for, the routes)}: /where is polled, a fix is routed once
 
-    def routed(fix):
-        """The fix with "route" added: the way around furniture from the wearer to each named place
-        and each item seen (not the ones in doubt). A straight line, with the reason, where the
-        map gives no route. The fix itself is not changed."""
+    def routed(fix, stable=None):
+        """The fix with "route" added: the way around furniture to each named place and each item
+        seen (not the ones in doubt). It starts where the display stands: on the steady pose when
+        there is one, else on the fix itself. A straight line, with the reason, where the map gives
+        no route. The fix itself is not changed."""
         if route_finder is None:
             return fix
+        start = fix
+        if stable and stable.get("position") and stable.get("state") != "lost":
+            start = {**fix, "state": "found", "position": stable["position"], "heading_deg": stable.get("heading_deg") or 0}
         targets = list(fix.get("waypoints") or []) + [s for s in seen.get(fix.get("zone"), {}).values() if not in_doubt(s)]
-        key = (fix.get("job"), fix.get("at"), json.dumps([[t.get("name"), t.get("position")] for t in targets]))
+        key = (fix.get("job"), fix.get("at"), json.dumps([start.get("position"), [[t.get("name"), t.get("position")] for t in targets]]))
         if route_cache.get(fix.get("zone"), (None, None))[0] != key:
-            route_cache[fix.get("zone")] = (key, route_finder.plan(fix, targets))
+            route_cache[fix.get("zone")] = (key, route_finder.plan(start, targets))
         return {**fix, "route": route_cache[fix.get("zone")][1]}
     # --- end route finding ----------------------------------------------------------------------
 
@@ -567,16 +715,47 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if url.path == "/reminders":
                 with reminder_lock:
                     return self.send_json(200, {"ok": True, "reminders": reminder_list(), "sensors": bool(api_base)})
+            # ---- day log (JUN-26): the day as data, and the carer's page for it ----
+            if url.path == "/dayview":
+                return self.send_bytes(200, (HERE / "day.html").read_bytes(), "text/html; charset=utf-8")
+            if url.path == "/day":
+                date = parse_qs(url.query).get("date", [""])[0]
+                try:
+                    datetime.fromisoformat(date + "T12:00:00") if date else None
+                except ValueError:
+                    return self.send_json(400, {"ok": False, "error": "GET /day?date=YYYY-MM-DD (no date: today)"})
+                log_sensor_events(wait=True)
+                with reminder_lock:
+                    reminder_list()  # so a reminder that became due or missed since the last look is in the log
+                return self.send_json(200, {"ok": True, **log.report(date or None)})
+            # ---- end day log ----
             zone = parse_qs(url.query).get("zone", [""])[0]
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:
                     return self.send_json(404, {"ok": False, "error": "No position fix yet. POST a photo to /locate first."})
-                fix = routed(fix)  # --- route finding (route.py): adds "route" to the reply
-                return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1), "seen": seen_list(fix["zone"], fix)})
+                # --- route finding (route.py): adds "route" to the reply, from the pose the display stands on
+                stable = steady(fix["zone"])
+                fix = routed(fix, stable)
+                return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1), "seen": seen_list(fix["zone"], fix),
+                                            "stable": stable})
             if url.path == "/waypoints":
                 header, _ = link.call({"op": "waypoints", "zone": zone})
                 return self.send_json(200 if header.get("ok") else 404, header)
+            if url.path == "/watch":  # the zone's watched spots
+                if not re.fullmatch(ZONE_NAME, zone):
+                    return self.send_json(400, {"ok": False, "error": "GET /watch?zone=NAME"})
+                header, _ = link.call({"op": "watches", "zone": zone})
+                return self.send_json(200 if header.get("ok") else 404, header)
+            if url.path == "/enrolled":  # the items shown to the camera once, for the whole home
+                header, _ = link.call({"op": "enrolled"})
+                return self.send_json(200 if header.get("ok") else 502, header)
+            match = re.fullmatch(rf"/enrolled/({ITEM_NAME})/(\d{{1,2}})\.jpg", url.path)
+            if match and len(match[1]) <= 32:
+                header, picture = link.call({"op": "enrolled_image", "name": match[1], "n": int(match[2])})
+                if header.get("ok"):
+                    return self.send_bytes(200, picture, "image/jpeg")
+                return self.send_json(404, header)
             match = re.fullmatch(r"/baseline/([a-z0-9_-]{1,32})/(\d{1,2})\.jpg", url.path)
             if match:
                 header, picture = link.call({"op": "baseline_image", "zone": match[1], "frame": int(match[2])})
@@ -603,6 +782,21 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if not isinstance(text, str) or not text.strip():
                 return self.send_json(400, {"ok": False, "error": f'POST /{op} with a JSON body: {{"{field}": "..."}}'})
             text = text.strip()[:2000]
+            # ---- day log (JUN-26): every question is logged, and a question about the day ("What did I do
+            # today?", "When was I last in the kitchen?") is answered from the log before the event API is asked.
+            if op == "ask":
+                try:
+                    log.question(text, topic=item_in(text))
+                    about_day = None if item_in(text) else log.answer(text)
+                except Exception as err:  # noqa: BLE001
+                    about_day = None
+                    sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
+                if about_day:
+                    if api_base:  # still counted by the event API, like a lost-item question
+                        threading.Thread(target=log_question, args=(text,), daemon=True).start()
+                    return self.send_json(200, {"ok": True, "question": text, "answer": about_day["answer"], "evidence": [], "point": None,
+                                                "answered_by": "day log", "confidence_pct": about_day.get("confidence_pct")})
+            # ---- end day log ----
             item = item_in(text) if op == "ask" else None
             if item:
                 if api_base:
@@ -671,6 +865,66 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 save_reminders()
                 return self.send_json(200, {"ok": True, "reminders": reminder_list(), "sensors": bool(api_base)})
 
+        def change_setup(self, op, query, zone, size):
+            """What the carer sets once. /scale: the real distance between two named places. /watch: a box
+            in a baseline picture to check for changes. /enroll: a photo of an item to recognise.
+            Everything but the photo is in the query. The gateway checks it all again before it writes."""
+            first = lambda name: query.get(name, [""])[0]  # noqa: E731
+            delete = bool(first("delete"))
+            if op == "enroll":
+                name, photo = item_name(first("name")), b""
+                req = {"op": "enroll", "name": name}
+                if not name:
+                    self.rfile.read(min(size, 65536))
+                    return self.send_json(400, {"ok": False, "error": "Give the item a plain name: letters, digits and spaces, at most 32 characters."})
+                if delete:  # the whole item, or with n= one of its photos
+                    self.rfile.read(min(size, 65536))
+                    req["delete"] = True
+                    if first("n"):
+                        if not re.fullmatch(r"\d{1,2}", first("n")):
+                            return self.send_json(400, {"ok": False, "error": "POST /enroll?name=ITEM&n=PHOTO&delete=1"})
+                        req["n"] = int(first("n"))
+                else:
+                    if not 0 < size <= PHOTO_BYTES:
+                        return self.send_json(400, {"ok": False, "error": f"Send one photo of the item, at most {PHOTO_BYTES >> 20} MB."})
+                    photo = self.rfile.read(size)
+                    try:
+                        if not is_photo(photo):
+                            raise ValueError("not a picture")
+                        photo = item_photo(photo)
+                    except ValueError:
+                        return self.send_json(400, {"ok": False, "error": "That is not a photo. Use a JPEG, PNG or WebP picture."})
+                header, _ = link.call(req, photo)
+                return self.send_json(200 if header.get("ok") else 400, header)
+            self.rfile.read(min(size, 65536))  # scale and watch: everything is in the query
+            if not re.fullmatch(ZONE_NAME, zone):
+                return self.send_json(400, {"ok": False, "error": "Pick a room first."})
+            req = {"op": op, "zone": zone}
+            try:
+                if op == "scale" and delete:
+                    req["delete"] = True
+                elif op == "scale":
+                    a, b = " ".join(first("a").split()), " ".join(first("b").split())
+                    if not a or not b or a == b or max(len(a), len(b)) > 40:
+                        raise ValueError("two different places")
+                    req.update(a=a, b=b, metres=in_range(first("metres"), 0.1, 50))
+                else:
+                    req["name"] = plain_name(first("name"))
+                    if not req["name"]:
+                        raise ValueError("a plain name")
+                    if delete:
+                        req["delete"] = True
+                    else:
+                        if not re.fullmatch(r"\d{1,2}", first("frame")):
+                            raise ValueError("a baseline picture")
+                        req.update(frame=int(first("frame")), box=[in_range(first(k), 0, 1) for k in ("u0", "v0", "u1", "v1")])
+            except ValueError:
+                return self.send_json(400, {"ok": False, "error": {
+                    "scale": "Pick two different places and type the distance between them in metres, from 0.1 to 50.",
+                    "watch": "Give the spot a plain name (letters, digits and spaces) and drag a box in the picture."}[op]})
+            header, _ = link.call(req)
+            return self.send_json(200 if header.get("ok") else 400, header)
+
         def do_POST(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
@@ -717,6 +971,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     return self.send_json(400, {"ok": False, "error": "POST /waypoint?zone=NAME&name=PLACE&frame=N&u=0..1&v=0..1"})
                 header, _ = link.call(req)
                 return self.send_json(200 if header.get("ok") else 400, header)
+            if op in ("scale", "watch", "enroll"):  # what the carer sets once: see change_setup
+                return self.change_setup(op, query, zone, size)
             if op not in FRAMES or not zone or not 0 < size <= MAX_BODY:
                 return self.send_json(400, {"ok": False, "error": "POST /baseline, /check or /locate with ?zone=NAME and a video (or, for /locate, a photo) as the body."})
             t0 = time.time()
@@ -750,14 +1006,22 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 fix = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail, **result,
                        "images": images, "splat": splat_url, "seconds": {**seconds, **result.get("seconds", {})},
                        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "at": time.time()}
+                fix["confidence_pct"] = track.fix_confidence_pct(result)  # this one fix on its own, as a percentage
                 where[zone] = fix
                 try:
                     where_file.write_text(json.dumps(where))
                 except OSError:
                     pass
                 remember_items(zone, result, images)
-                fix = routed(fix)  # --- route finding (route.py): adds "route" to the reply, after the items are remembered
-                return self.send_json(200, {**fix, "age_s": 0.0, "seen": seen_list(zone, fix)})
+                # t0: when the photo reached the relay. The steady position ages from the photo, not from the answer.
+                stable = steady(zone, result, t0)
+                # The day log gets the fix itself, not the steady answer. A found fix is right at the moment of its
+                # photo, which is what a diary needs; the steady answer is cautious about the seconds after it and is
+                # rarely "steady" at one photo every 6 s, so visits would go missing. The two were measured apart.
+                log_fix(zone, fix, result)
+                log_sensor_events()
+                fix = routed(fix, stable)  # --- route finding (route.py): adds "route" to the reply; the day log got the fix without it
+                return self.send_json(200, {**fix, "age_s": 0.0, "seen": seen_list(zone, fix), "stable": stable})
             headline, detail = in_plain_words(result)
             events = to_events(result, zone, images)
             body = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail,
@@ -808,6 +1072,7 @@ def main():
     for address in addresses:
         print(f"  http://{address}:{args.port}/?k={args.token}", flush=True)
     print(f"dashboard: http://127.0.0.1:{args.port}/dashboard?k={args.token}", flush=True)
+    print(f"day log:   http://127.0.0.1:{args.port}/dayview?k={args.token}", flush=True)
     print("questions (/ask, /speak): " + ("passed on to the event API" if event_api and api_token
                                            else "off (EVENT_API_URL and EVENT_API_TOKEN are not both set)"), flush=True)
     print(f"frame picking on this laptop: {'on' if rc else 'off (OpenCV not found)'}; evidence images in {evidence_dir}", flush=True)

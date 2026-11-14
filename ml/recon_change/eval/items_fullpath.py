@@ -148,7 +148,7 @@ def main():
             box = paste(trial, piece, spot[0], spot[1], 80)
             found = [d for d in items.best_per_name(detector.find(trial, names)) if d["name"] == inside_name]
             if found and box[0] <= (found[0]["box"][0] + found[0]["box"][2]) / 2 * 1280 <= box[2]:
-                picture = trial
+                picture, shown = trial, piece
                 break
         if picture is not None:
             break
@@ -163,6 +163,11 @@ def main():
             picture = trial
             break
     cv2.imwrite(str(work / "wearer_picture.jpg"), picture)
+    if os.environ.get("RECON_ITEMS_ENROLLED"):  # show-it-once: the carer's picture of this very thing
+        folder = Path(os.environ["RECON_ITEMS_ENROLLED"]) / inside_name.replace(" ", "_")
+        folder.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(folder / "00.jpg"), shown)
+        print(f"enrolled picture written to {folder}", flush=True)
     small_frame = cv2.resize(picture, (640, 360), interpolation=cv2.INTER_AREA)
     request = {"op": "locate", "zone": args.zone, "file": "clip.zip"}
 
@@ -176,7 +181,7 @@ def main():
 
     def brief(result):
         return {k: result.get(k) for k in ("state", "confidence", "position", "heading_deg", "waypoints", "items", "items_looked_for",
-                                           "items_frame", "items_note", "seconds")}
+                                           "items_candidates", "items_frame", "items_note", "seconds")}
 
     print("\n== 1. same room, big.jpg, items pasted in", flush=True)
     fix("warm", [small_frame], picture)  # the first pass on a device is slower: not timed
@@ -192,6 +197,9 @@ def main():
         else:
             print(f"NOT PLACED {item['name']}: {item.get('note')}", flush=True)
     print("crops written:", sorted(p.name for p in (work / "same_room" / "out").glob("item_*.jpg")), flush=True)
+    print("MATCHED", [(i["name"], i["score"], i.get("matched")) for i in result["items"]],
+          "| CANDIDATES", [(c["name"], c["score"], c["matched"], c["position"]) for c in result.get("items_candidates", [])],
+          "| settings", worker.ITEM_DETECTOR["model"].settings(names), flush=True)
     viewed = fix("same_room_view", [small_frame], picture, view=True)
     print("with the 3D view asked for:", {"gaussians": viewed.get("gaussians"), "seconds": viewed["seconds"]}, flush=True)
 

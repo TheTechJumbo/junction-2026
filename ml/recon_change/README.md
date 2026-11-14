@@ -121,6 +121,36 @@ is the glasses display that draws it: an arrow, a distance and a mini map.
 `/hud?k=KEY&demo=1` is a sample room that needs no relay. A view that does not match the room
 comes back as `lost`. Distances are rough: they assume things are about 2 m away.
 
+**What the carer sets once:** three things the vision stage cannot work out by itself, set on
+`/places?k=KEY` and kept by the gateway. This part only stores them: the position fix, the item
+finder and the change check read the files.
+
+- *The room's real scale.* Pick two named places and type the measured distance between them.
+  Kept as `baselines/<zone>/scale.json`: `{"a": "pill box", "b": "front door", "metres": 2.4}`
+  (0.1 to 50 m). `POST /scale?zone=&a=&b=&metres=`, `POST /scale?zone=&delete=1`; `GET
+  /waypoints` shows it as `scale`, or `null`. Removing one of its two places removes it.
+- *Show an item once.* One to five photos of the exact item (these keys, not any keys), for the
+  whole home. Kept as `enrolled/<item>/00.jpg`, `01.jpg`, ... in the project folder: JPEGs with
+  the long side at most 1280, the item name in lowercase letters and digits with `_` for a
+  space (`remote_control`), at most 12 items. Removing a photo renumbers the rest, so there is
+  never a gap. `POST /enroll?name=` with the photo as the body (JPEG, PNG or WebP, up to 20 MB),
+  `GET /enrolled`, `GET /enrolled/<item>/<n>.jpg`, `POST /enroll?name=&delete=1` (with `&n=`:
+  that photo only).
+- *Spots to watch.* Press "Watch a spot", drag a box on a baseline picture and name it. Kept as
+  `baselines/<zone>/watch.json`: `[{"name": "pill box shelf", "frame": 3, "box": [u0, v0, u1,
+  v1]}]`, the box in fractions of the picture with `u0 < u1` and `v0 < v1`, at most 12 in a
+  room. `POST /watch?zone=&name=&frame=&u0=&v0=&u1=&v1=`, `POST /watch?zone=&name=&delete=1`,
+  `GET /watch?zone=`.
+- A new baseline for a room removes its places, its scale and its watched spots: they were
+  picked in the old pictures. Enrolled items stay.
+- The page also lists the items the relay remembers in the room (`seen` in `/where`), each with
+  a Forget button.
+- The relay checks all of it and the gateway checks it again before it writes anything: names
+  against a pattern, numbers finite and in range, photos by their first bytes and their size.
+- `python live/test_setup_flow.py` tests this offline against the real gateway code in a
+  temporary folder. `python live/dev_setup.py` serves the page with made-up rooms and no
+  cluster, and prints the link (`BEACON_ROOT` or `gateway.set_root()` moves the gateway's folder).
+
 **The way around furniture:** `route.py` turns the floor plan in a fix into a grid of where a
 person can walk and finds the shortest way on it to each place. The relay adds it to every
 `/locate` and `/where` reply under `route`, and the display points its arrow at the next corner
@@ -160,6 +190,14 @@ next to it:
   items, and it misses most things that are small in the picture, so expect it to see keys
   from about a metre, not from across the room (`eval/ITEMS_RESULTS.md`). It adds 0.8 s to a
   fix on the GPU and 5 s on the CPU worker.
+  It can be told to find more, with settings only (all off unless set; "Finding more" in
+  `eval/ITEMS_RESULTS.md` has the measurements and the exact values): a limit per item
+  (`RECON_ITEMS_LIMITS`), a second opinion from another model on weak boxes
+  (`RECON_ITEMS_LOOK_FROM`, `RECON_ITEMS_JUDGE`, `RECON_ITEMS_JUDGE_LIMITS`), a list of weak
+  sightings for the relay to add up over looks (`RECON_ITEMS_CANDIDATES`, result key
+  `items_candidates`), and pictures of the wearer's own things in `enrolled/<item name>/NN.jpg`
+  (result field `matched`: `text` or `enrolled`). Every answer carries `confidence_pct`: how
+  often answers with that kind of evidence were right on the test photos.
   The relay sends the wearer's newest photo at up to 1280 px (`big.jpg`) for it.
   A sighting can go stale (someone picks the keys up), so every later fix is asked to look at
   each remembered spot again. After two clear, close looks from different standpoints with no

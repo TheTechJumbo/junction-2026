@@ -430,6 +430,9 @@ def main():
                 row.update(state=result["state"], match=result["confidence"], position=result["position"],
                            heading_deg=result["heading_deg"], metres_per_unit=result["metres_per_unit"],
                            looks_alike=result.get("looks_alike"), match_by_depth=result.get("match_by_depth"))
+                # Version 2 of locate.py (eval/LOCATE_WALK_RESULTS.md): absent with an older locate.py
+                row.update({k: result[k] for k in ("match_one_frame", "one_frame_only", "up_from", "up_tilt_deg", "up_surface_share",
+                                                   "view_gap_deg", "hint", "metres_from") if k in result})
                 if kind != "wrong":
                     row["pose"] = pose_check(locate.camera, recon.E, [p.name for p in base + [query]], s["truth"], s["size"],
                                              result["metres_per_unit"])

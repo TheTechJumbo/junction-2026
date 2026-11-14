@@ -12,6 +12,10 @@ Four steps, each its own mode:
     (default)     run the fixes on a GPU: one line per fix in results.jsonl, one small .npz each
     --summarise   tables from plan.json and results.jsonl (CPU): see locate_walk_tables.py
 
+To try a change to locate.py without the GPU: --dump DIR saves every pass's reconstruction once
+(GPU, no scoring), --from-dump DIR scores the saved ones on CPU cores (--shard i/n to run n in
+parallel, --locate-args and --known-pair to pass settings to locate()). See locate_v2_eval.py.
+
 A fix is assembled like live/worker.py where(): 24 baseline frames are kept per room (picked
 like recon_change.sample_frames picks from a video: the sharpest of each stretch, then stored
 as JPEG quality 92), 12 of them go through the model together with 1 or 3 frames of the wearer.
@@ -362,15 +366,22 @@ def run(args):
         return img
 
     stored = {}  # baseline frames as the worker stores them: JPEG quality 92
-    for room, r in plan["rooms"].items():
+    for room, r in [] if args.from_dump else plan["rooms"].items():
         stored[room] = [cv2.imdecode(cv2.imencode(".jpg", picture(b["rec"], b["rgb"]), [cv2.IMWRITE_JPEG_QUALITY, 92])[1], cv2.IMREAD_COLOR)
                         for b in r["baseline"]]
 
-    tasks = tasks_for(plan, args.rounds)
+    tasks = [t for t in tasks_for(plan, args.rounds) if not args.frames or f"{t[1]}+{t[2]}" in args.frames]
+    if args.shard:
+        part, parts = (int(v) for v in args.shard.split("/"))
+        tasks = tasks[part::parts]
+    stored_dir = Path(args.dump or args.from_dump) if args.dump or args.from_dump else None
+    if args.dump:
+        stored_dir.mkdir(parents=True, exist_ok=True)
+    extra = json.loads(args.locate_args) if args.locate_args else {}
     path = out / "results.jsonl"
     done = {tuple(json.loads(line)["key"]) for line in path.read_text().splitlines() if line.strip()} if path.exists() else set()
     print(f"{len(tasks)} fixes planned, {len(done)} already done", flush=True)
-    model = rc.load_model()
+    model = None if args.from_dump else rc.load_model()
     with open(path, "a") as sink:
         for kind, n_base, n_new, room, query_room, qi in tasks:
             key = (kind, n_base, n_new, room, query_room, qi)
@@ -380,32 +391,52 @@ def run(args):
                 print(f"Stopping: {args.minutes} minutes used", flush=True)
                 break
             r, q = plan["rooms"][room], plan["rooms"][query_room]["queries"][qi]
+            file = stored_dir / ("_".join(str(v) for v in key) + ".npz") if stored_dir else None
+            if file is not None and file.exists() != bool(args.from_dump):  # --dump: saved already; --from-dump: never saved
+                continue
             # live/worker.py where(): an even pick of the kept frames, plus every frame a place was picked in
             spread = np.linspace(0, len(r["baseline"]) - 1, min(n_base, len(r["baseline"]))).round().astype(int)
             pick = sorted({int(i) for i in spread} | {p["frame"] for p in r["places"]})
             slot = {f: i for i, f in enumerate(pick)}
-            base = [stored[room][i] for i in pick]
             names = (q["earlier"] if n_new == 3 else []) + [q["rgb"]]
-            new = [picture(q["rec"], name) for name in names]
-            row = {"key": list(key), "kind": kind, "n_baseline": len(base), "n_new": len(new), "room": room, "query_room": query_room,
-                   "query": qi, "pick": pick, "sharpness": float(rc.sharpness(new[-1]))}
+            row = {"key": list(key), "kind": kind, "n_baseline": len(pick), "n_new": len(names), "room": room, "query_room": query_room,
+                   "query": qi, "pick": pick}
             try:
-                log = io.StringIO()
-                t0 = time.time()
-                with contextlib.redirect_stdout(log):
-                    recon = rc.reconstruct(model, base + new)
-                row["reconstruct_s"] = round(time.time() - t0, 2)
-                printed = re.search(r"inference ([\d.]+) s", log.getvalue())
-                row["inference_s"] = float(printed.group(1)) if printed else None
-                row["peak_gpu_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 1) if torch.cuda.is_available() else None
+                if args.from_dump:
+                    saved = np.load(file)
+                    recon = rc.Recon(saved["depth"], saved["conf"], saved["K"], saved["E"], None, saved["feat"] if "feat" in saved else None)
+                    row.update(json.loads(str(saved["meta"])))
+                    base, new = pick, names  # only their number is used below
+                else:
+                    base = [stored[room][i] for i in pick]
+                    new = [picture(q["rec"], name) for name in names]
+                    row["sharpness"] = float(rc.sharpness(new[-1]))
+                    log = io.StringIO()
+                    t0 = time.time()
+                    with contextlib.redirect_stdout(log):
+                        recon = rc.reconstruct(model, base + new)
+                    row["reconstruct_s"] = round(time.time() - t0, 2)
+                    printed = re.search(r"inference ([\d.]+) s", log.getvalue())
+                    row["inference_s"] = float(printed.group(1)) if printed else None
+                    row["peak_gpu_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 1) if torch.cuda.is_available() else None
+                if args.dump:  # everything locate reads, without the pictures
+                    part = file.with_suffix(".part.npz")
+                    np.savez(part, depth=recon.depth, conf=recon.conf, K=recon.K, E=recon.E, meta=json.dumps(row),
+                             **({} if recon.feat is None else {"feat": recon.feat}))
+                    part.rename(file)
+                    print(f"{kind} n={len(base)}+{len(new)} {room} <- {query_room}/{q['rec']}/{q['rgb']}: saved, model {row['inference_s']} s", flush=True)
+                    continue
                 t0 = time.time()
                 base_idx = list(range(len(base)))
+                if args.known_pair and len(r["places"]) >= 2:  # one true distance: between the two places farthest apart
+                    a, b = max(((a, b) for i, a in enumerate(r["places"]) for b in r["places"][i + 1:]),
+                               key=lambda ab: np.linalg.norm(np.array(ab[0]["world"]) - np.array(ab[1]["world"])))
+                    extra["known"] = {"a": a["name"], "b": b["name"],
+                                      "metres": float(np.linalg.norm(np.array(a["world"]) - np.array(b["world"])))}
                 result, _, valid = locate.locate(recon, base_idx, list(range(len(base), len(base) + len(new))),
-                                                 [{**p, "frame": slot[p["frame"]]} for p in r["places"]])
+                                                 [{**p, "frame": slot[p["frame"]]} for p in r["places"]], **extra)
                 row["locate_s"] = round(time.time() - t0, 2)
-                for k in ("state", "confidence", "position", "heading_deg", "waypoints", "match_per_frame", "looks_alike", "match_by_depth",
-                          "metres_per_unit"):
-                    row[k] = result[k]
+                row.update({k: v for k, v in result.items() if k not in ("map", "track")})
                 try:  # what the match score is made of, to try other rules without the GPU (see views_shares)
                     row.update(views_shares(locate, rc, recon, valid, base_idx, len(base) + len(new) - 1))
                 except Exception as e:
@@ -414,8 +445,9 @@ def run(args):
                 row["focal"] = [float(recon.K[-1][0, 0]), float(recon.K[-1][1, 1])]
                 row["median_baseline_depth"] = float(np.median(recon.depth[base_idx][valid[base_idx]]))
                 # For trying other ways to get metres without the GPU: the baseline's trusted points, thinned.
-                cloud = np.concatenate([rc.unproject(recon.depth[i], recon.K[i], recon.E[i])[valid[i]][::47] for i in base_idx])
-                np.savez(out / "fix" / ("_".join(str(v) for v in key) + ".npz"), cloud=cloud.astype(np.float32))
+                if not args.from_dump:  # (with a saved reconstruction the points can be made again)
+                    cloud = np.concatenate([rc.unproject(recon.depth[i], recon.K[i], recon.E[i])[valid[i]][::47] for i in base_idx])
+                    np.savez(out / "fix" / ("_".join(str(v) for v in key) + ".npz"), cloud=cloud.astype(np.float32))
                 print(f"{kind} n={len(base)}+{len(new)} {room} <- {query_room}/{q['rec']}/{q['rgb']}: {row['state']} {row['confidence']:.2f} | "
                       f"model {row['inference_s']} s, locate {row['locate_s']} s", flush=True)
             except Exception as e:  # keep going: one bad fix must not lose the rest
@@ -437,6 +469,12 @@ def main():
                     "baseline recording's frame (see --check); only these give queries")
     ap.add_argument("--rounds", type=int, default=40)
     ap.add_argument("--minutes", type=float, default=26, help="stop starting new fixes after this long")
+    ap.add_argument("--dump", help="save each pass's reconstruction in this folder instead of scoring it (about 28 MB per pass at 12 + 1 frames)")
+    ap.add_argument("--from-dump", help="score reconstructions saved with --dump instead of running the model; passes without a file are skipped")
+    ap.add_argument("--frames", nargs="*", default=[], help="only these settings, as baseline+query frames: 12+1 24+1 12+3")
+    ap.add_argument("--shard", help="i/n: take every n-th fix starting at the i-th, to run n processes side by side")
+    ap.add_argument("--locate-args", help="JSON of extra arguments for locate.locate(), for example {\"need\": 1}")
+    ap.add_argument("--known-pair", action="store_true", help="give locate() one true distance: between the two places farthest apart")
     ap.add_argument("--detector-dir", help="folder with locate.py and recon_change.py (default: next to this script, else its parent)")
     ap.add_argument("--detector-commit", default="unknown")
     args = ap.parse_args()

@@ -161,6 +161,87 @@ def main():
     assert len(facts) == 1 and len(left) == 3, (facts, left)
     assert check([], found) == ([], [])
     print("5 ok: remembered spot ->", fact)
+
+    # 6. limits per item and second looks (Detector.candidates), with a stand-in for the model
+    assert items.per_item("Keys = 0.45, glasses=0.3, junk, =1, phone=x") == {"keys": 0.45, "glasses": 0.3}
+    assert items.per_item(None) == {} and items.per_item("") == {}
+    assert items.same_thing([0.1, 0.1, 0.2, 0.2], [0.11, 0.1, 0.21, 0.2])  # overlap
+    assert items.same_thing([0.1, 0.1, 0.3, 0.3], [0.12, 0.12, 0.16, 0.2]) is False  # over 6 times the area: too loose a box
+    assert items.same_thing([0.1, 0.1, 0.2, 0.2], [0.13, 0.13, 0.19, 0.17])  # one key of the bunch
+    assert not items.same_thing([0.1, 0.1, 0.2, 0.2], [0.5, 0.5, 0.6, 0.6])
+    x, y, side = items.crop_around((720, 1280), [0.5, 0.5, 0.55, 0.52], 4.0, 64)
+    assert side == 256 and x == 544 and y == 239, (x, y, side)
+    x, y, side = items.crop_around((720, 1280), [0.0, 0.0, 0.01, 0.01], 4.0, 64)
+    assert (x, y, side) == (0, 0, 64)
+    assert items.crop_around((480, 640), [0.2, 0.2, 0.8, 0.8], 4.0, 64)[2] == 480  # never larger than the picture
+
+    keys_box, glasses_box, phone_box = np.array([[0.30, 0.30, 0.36, 0.36]]), np.array([[0.60, 0.60, 0.70, 0.66]]), np.array([[0.10, 0.70, 0.18, 0.80]])
+    whole = {"keys": (keys_box, np.array([0.40])), "eyeglasses": (glasses_box, np.array([0.35])), "a mobile phone": (phone_box, np.array([0.55])),
+             "a remote control": (phone_box + 0.004, np.array([0.45]))}  # the phone also looks a bit like a remote
+
+    class StandIn(items.Detector):
+        def __init__(self, zoomed):
+            self.score, self.limits, self.look_from, self.look_limits, self.last, self.zoomed, self.asked = 0.5, {}, 0.0, {}, {}, zoomed, []
+            self.enrolled, self.enrolled_score, self.words, self.judge, self.judge_limits = {}, 0.6, {}, None, {}
+
+        def detect(self, image_bgr, phrases, tiles=None, floor=items.FLOOR, batch=4):
+            self.last = {"passes": 1, "seconds": 0.1, "size": [image_bgr.shape[1], image_bgr.shape[0]]}
+            if image_bgr.shape[0] == 720:  # the whole picture
+                return {p: whole.get(p, (np.zeros((0, 4)), np.zeros(0))) for p in phrases}
+            self.asked.append(list(phrases))  # a crop: the thing sits in its middle, with the zoomed score
+            return {p: (np.array([[0.4, 0.4, 0.6, 0.6]]), np.array([self.zoomed])) for p in phrases}
+
+    picture = np.zeros((720, 1280, 3), np.uint8)
+    names = ["keys", "glasses", "phone", "remote control"]
+    plain = StandIn(0.9)
+    got = plain.candidates(picture, names, floor=0.3)
+    assert [(d["name"], d["accepted"]) for d in got] == [("phone", True), ("keys", False), ("glasses", False)], got  # the remote box lost to the phone
+    assert [d["name"] for d in plain.find(picture, names)] == ["phone"] and not plain.asked and "second_looks" not in plain.last
+    assert [d["name"] for d in plain.find(picture, names, score=0.3)] == ["phone", "keys", "glasses"]  # one plain limit, as before
+    limits = StandIn(0.9)
+    limits.limits = {"glasses": 0.3}
+    assert [d["name"] for d in limits.find(picture, names)] == ["phone", "glasses"]
+    looks = StandIn(0.6)
+    looks.look_from, looks.look_limits = 0.25, {"keys": 0.5, "remote control": 0.5}
+    got = looks.candidates(picture, names, floor=0.3)
+    assert [(d["name"], d["accepted"]) for d in got] == [("phone", True), ("keys", True), ("glasses", False)], got
+    assert got[0]["score"] == 0.55 and got[1]["score"] == 0.4 and got[1]["second_look"] == 0.6, got  # the raw score stays
+    assert looks.last["second_looks"] == 1 and looks.last["passes"] == 2, looks.last
+    assert looks.asked == [["keys", "a key"]], looks.asked  # the box on the phone gets no second look as a remote
+    weak = StandIn(0.4)  # the second look does not agree: nothing more is accepted
+    weak.look_from, weak.look_limits = 0.25, {"keys": 0.5}
+    assert [d["name"] for d in weak.find(picture, names)] == ["phone"]
+    class Opinion:  # a stand-in for the judge: it believes in keys and not in glasses
+        model_id = "stand-in"
+
+        def share(self, picture, box, name):
+            return {"keys": 0.8, "glasses": 0.05}.get(name, 0.0)
+
+    judged = StandIn(0.2)  # the zoomed detector would say no (0.2), but only the judge is asked
+    judged.look_from, judged.judge, judged.judge_limits = 0.25, Opinion(), {"keys": 0.7, "glasses": 0.1}
+    got = judged.candidates(picture, names, floor=0.3)
+    assert [(d["name"], d["accepted"]) for d in got] == [("phone", True), ("keys", True), ("glasses", False)], got
+    assert not judged.asked and judged.last["passes"] == 1 and judged.last["second_looks"] == 2, judged.last
+    judged.look_limits = {"keys": 0.5}  # with a look limit as well, both must agree: the zoomed 0.2 is not enough
+    assert [d["name"] for d in judged.find(picture, names)] == ["phone"]
+    by_name = {d["name"]: d for d in got}
+    assert by_name["keys"]["confidence_pct"] == 80 and by_name["glasses"]["confidence_pct"] == 65 and by_name["phone"]["confidence_pct"] == 99, got
+    assert items.confidence_pct({"name": "keys", "score": 0.3}) == 55 and items.confidence_pct({"name": "umbrella", "score": 0.7}) == 97
+    assert items.confidence_pct({"name": "keys", "score": 0.9, "matched": "enrolled", "only_enrolled": True}) == items.CONFIDENCE_ENROLLED
+    shown = StandIn(0.9)  # show-it-once: a picture question that matches the keys box, and one that matches nothing the words found
+    shown.enrolled, shown.enrolled_score = {"keys": ["@keys#0"], "wallet": ["@wallet#0"]}, 0.75
+    whole["@keys#0"] = (keys_box + 0.002, np.array([0.8]))
+    whole["@wallet#0"] = (np.array([[0.80, 0.20, 0.86, 0.26]]), np.array([0.78]))
+    got = shown.candidates(picture, names + ["wallet"], floor=0.3)
+    by_name = {d["name"]: d for d in got}
+    assert by_name["keys"]["matched"] == "enrolled" and by_name["keys"]["score"] == 0.4 and by_name["keys"]["accepted"], by_name["keys"]
+    assert by_name["keys"]["confidence_pct"] == 72 and by_name["phone"]["matched"] == "text", got  # the words' score and confidence stay
+    assert by_name["wallet"]["matched"] == "enrolled" and by_name["wallet"]["accepted"] and by_name["wallet"]["confidence_pct"] == items.CONFIDENCE_ENROLLED
+    assert [d["name"] for d in items.best_per_name([d for d in got if d["accepted"]])] == ["phone", "keys", "wallet"]
+    del whole["@keys#0"], whole["@wallet#0"]
+    placed, _ = items.place([{"name": "keys", "score": 0.4, "box": box}], r, base, q, valid, window, "found")
+    assert placed[0]["confidence_pct"] == 72 and placed[0]["matched"] == "text", placed
+    print("6 ok: limits per item, second looks, a second opinion, stated confidence, and the same answers as before when none is set")
     print("all ok")
 
 

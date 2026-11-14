@@ -60,7 +60,7 @@
   <span class="pill" id="gpu">GPU worker: checking…</span>
   <span class="pill" id="cpu">CPU worker: checking…</span>
   <span class="pill" id="places"></span>
-  <span style="margin-left:auto;display:flex;gap:14px"><a id="places">Places and position</a><a id="hud">Glasses display</a><a id="phone">Phone page</a></span>
+  <span style="margin-left:auto;display:flex;gap:14px"><a id="daylog">Day log</a><a id="places">Places and position</a><a id="hud">Glasses display</a><a id="phone">Phone page</a></span>
 </header>
 <main>
   <div class="col">
@@ -105,6 +105,7 @@ const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', m
 $('phone').href = withKey('/');
 $('places').href = withKey('/places');
 $('hud').href = withKey('/hud');
+$('daylog').href = withKey('/dayview');
 
 let checks = [], selected = null, busy = false;
 

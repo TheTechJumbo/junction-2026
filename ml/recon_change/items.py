@@ -40,6 +40,80 @@ SCORE = float(os.environ.get("RECON_ITEMS_SCORE", "0.5"))
 # is already known, so a weaker box of that name within NEAR_M of it is enough, and the lower limit
 # misses a present item far less often. It never creates a sighting.
 CONFIRM = min(SCORE, float(os.environ.get("RECON_ITEMS_CONFIRM", "0.3")))
+
+
+def per_item(text):
+    """ "keys=0.45, glasses=0.3" -> {"keys": 0.45, "glasses": 0.3}. Anything unreadable is left out."""
+    values = {}
+    for part in (text or "").split(","):
+        name, _, value = part.partition("=")
+        try:
+            values[" ".join(name.lower().split())] = float(value)
+        except ValueError:
+            continue
+    return {name: value for name, value in values.items() if name}
+
+
+# Finding more (eval/ITEMS_RESULTS.md, "Finding more"). All of it is off unless set: without these the
+# finder does exactly what it did before.
+# RECON_ITEMS_LIMITS="glasses=0.3, phone=0.425": a limit of its own for some items; the rest keep SCORE.
+LIMITS = per_item(os.environ.get("RECON_ITEMS_LIMITS"))
+# A second look at a box that scores below its item's limit but at least LOOK_FROM (0 = no second
+# looks): the detector looks again at a square crop around the box, LOOK_ZOOM box sides wide and blown
+# up to its input size. The box is accepted when its item scores at least the item's look limit there
+# (RECON_ITEMS_LOOK_LIMITS, written like LIMITS; an item without one is never accepted this way).
+# Each second look is one more pass, so there are at most LOOK_PER_ITEM per item and LOOK_MAX per picture.
+LOOK_FROM = float(os.environ.get("RECON_ITEMS_LOOK_FROM", "0"))
+LOOK_LIMITS = per_item(os.environ.get("RECON_ITEMS_LOOK_LIMITS"))
+LOOK_MAX = int(os.environ.get("RECON_ITEMS_LOOK_MAX", "6"))
+LOOK_ZOOM, LOOK_PER_ITEM, LOOK_LEAST = 4.0, 2, 64
+# A second opinion on such a weak box from another model: a zero-shot classifier (CLIP, MIT licence) looks
+# at two crops around the box and says how much they look like the item rather than like one of its
+# look-alikes or like scenery (JUDGE_TEXTS). RECON_ITEMS_JUDGE names the model (empty = no judge), and
+# RECON_ITEMS_JUDGE_LIMITS, written like LIMITS, the share an item needs. An item with both a look limit
+# and a judge limit needs both to agree. The judge only knows the five default items.
+JUDGE = os.environ.get("RECON_ITEMS_JUDGE", "")
+JUDGE_LIMITS = per_item(os.environ.get("RECON_ITEMS_JUDGE_LIMITS"))
+JUDGE_CROPS = (1.3, 2.2)  # crop sides, in box long sides
+JUDGE_OF = {"keys": ["keys", "a bunch of keys", "a key", "a key ring"], "glasses": ["eyeglasses", "a pair of glasses", "spectacles"],
+            "wallet": ["a wallet", "a leather wallet"], "phone": ["a mobile phone", "a smartphone", "a cell phone"],
+            "remote control": ["a remote control", "a tv remote"]}
+JUDGE_TEXTS = [t for texts in JUDGE_OF.values() for t in texts] + [
+    "a pen", "a marker pen", "a bottle", "a tube", "a whiteboard eraser", "a computer keyboard", "a computer mouse",
+    "a calculator", "a book", "a notebook", "a card", "coins", "a lock", "a door handle", "a knife", "a spoon", "a watch",
+    "sunglasses", "a drinking glass", "a cup", "a hand", "a face", "a tablet computer", "a laptop", "a game controller",
+    "a tv screen", "a cable", "a box", "a bag", "a piece of paper", "a toy", "food", "a plant", "a chair",
+    "the floor", "a table", "a wall", "something else"]
+# Show it once (enrolment). A folder of pictures of the wearer's own things, <folder>/<item name>/NN.jpg
+# (close-ups or crops, up to 1280 px, written by the gateway). When it is there, every fix also looks for
+# those very things: what the detector saw in each picture becomes one more question to it, next to the
+# words ("image-guided detection"). A box that looks alike to a shown thing at ENROLLED_SCORE or more (cosine
+# similarity of what the detector sees in the two boxes) is accepted
+# and marked "matched": "enrolled". No folder: nothing changes. The folder is read again when a file in it changes.
+ENROLLED = os.environ.get("RECON_ITEMS_ENROLLED") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrolled")
+ENROLLED_SCORE = float(os.environ.get("RECON_ITEMS_ENROLLED_SCORE", "0.75"))
+ENROLLED_PER_ITEM, ENROLLED_ITEMS = 4, 12  # pictures used per item, and items
+ENROLLED_FLOOR = 0.4  # boxes less alike than this to a shown thing are not even kept as candidates
+# RECON_ITEMS_CANDIDATES=0.25: also list every box from that score up that could be placed, accepted or
+# not, as "items_candidates", so that the relay can add up weak sightings of one thing at one place over
+# several looks. 0 = no such list.
+CANDIDATES = float(os.environ.get("RECON_ITEMS_CANDIDATES", "0"))
+# The stated confidence of an answer ("confidence_pct"): of the answers with the same kind of evidence on
+# the tuning half of the test photos, the share that were right. The evidence is the item, the band its
+# score falls in (bands start at these scores) and, for a weak box the judge was asked about, whether the
+# judge agreed. Fitted by eval/items_recall.py --confidence; eval/ITEMS_RESULTS.md has the check on the
+# other half and says where it is thin. A share on test photos, where the item is there in about half of
+# them: at home, where it mostly is not, weak boxes will be right less often than stated.
+CONFIDENCE = {"bands": [0.25, 0.35, 0.5, 0.6], "of": {
+    "keys": {"any": [55, 72, 99, 97], "agreed": [94, 80, 98, 96], "disagreed": [32, 49, 94, 93]},
+    "glasses": {"any": [62, 96, 99, 98], "agreed": [95, 98, 99, 97], "disagreed": [18, 65, 95, 93]},
+    "wallet": {"any": [40, 82, 98, 98], "agreed": [90, 93, 97, 97], "disagreed": [22, 48, 92, 93]},
+    "phone": {"any": [51, 85, 99, 99], "agreed": [92, 92, 99, 98], "disagreed": [36, 56, 96, 93]},
+    "remote control": {"any": [14, 48, 99, 100], "agreed": [90, 93, 97, 99], "disagreed": [10, 38, 96, 98]},
+    "other": {"any": [40, 77, 97, 97], "agreed": [90, 91, 96, 96], "disagreed": [22, 48, 92, 93]}}}
+# A box that only an enrolled picture matched (the words did not find it): in the synthetic test in
+# eval/ITEMS_RESULTS.md 3 of 35 such answers were right at similarity 0.7. Nothing real has measured it.
+CONFIDENCE_ENROLLED = 10
 # Rows of square tiles across the picture's short side, looked at besides the whole picture.
 # 0 = whole picture only (1 pass), 1 = tiles as high as the picture (16:9 and 4:3: 3 passes), 2 = 2 rows.
 TILES = int(os.environ.get("RECON_ITEMS_TILES", "1"))
@@ -157,14 +231,89 @@ def merge(raw, names, limit=None, phrases=phrases_for):
     return [{"name": name, "score": round(score, 3), "box": [round(float(v), 4) for v in box]} for score, name, box in kept]
 
 
+def same_thing(box, other):
+    """Are two boxes on the same thing? They overlap well (intersection over union 0.5), or the
+    middle of `box` lies inside `other`, or the middle of `other` lies inside `box` and `box` is at
+    most 6 times its area. (The looser rule of eval/items_eval.py: a bunch of keys and one key of it.)"""
+    box, other = np.asarray(box, float), np.asarray(other, float)
+    if iou(box, other)[0][0] >= 0.5:
+        return True
+    bx, by, ox, oy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, (other[0] + other[2]) / 2, (other[1] + other[3]) / 2
+    if other[0] <= bx <= other[2] and other[1] <= by <= other[3]:
+        return True
+    area, theirs = (box[2] - box[0]) * (box[3] - box[1]), (other[2] - other[0]) * (other[3] - other[1])
+    return bool(box[0] <= ox <= box[2] and box[1] <= oy <= box[3] and area <= 6 * theirs)
+
+
+def crop_around(shape, box, zoom, least=24):
+    """A square (x, y, side) in pixels around a box (0..1): `zoom` times the box's long side, at
+    least `least` pixels, kept inside the picture."""
+    H, W = shape[:2]
+    x0, y0, x1, y1 = box[0] * W, box[1] * H, box[2] * W, box[3] * H
+    side = int(round(min(max(zoom * max(x1 - x0, y1 - y0), least), min(H, W))))
+    x = int(round(min(max((x0 + x1) / 2 - side / 2, 0), W - side)))
+    y = int(round(min(max((y0 + y1) / 2 - side / 2, 0), H - side)))
+    return x, y, side
+
+
+def confidence_pct(d, judge_limits=None):
+    """How often an answer with this kind of evidence was right in the measurements, 0 to 100 (see CONFIDENCE)."""
+    if d.get("only_enrolled"):
+        return CONFIDENCE_ENROLLED
+    table = CONFIDENCE["of"].get(d["name"], CONFIDENCE["of"]["other"])
+    band = max([i for i, edge in enumerate(CONFIDENCE["bands"]) if d["score"] >= edge], default=0)
+    said = "any"
+    if d.get("judge") is not None and judge_limits and d["name"] in judge_limits:
+        said = "agreed" if d["judge"] >= judge_limits[d["name"]] else "disagreed"
+    return int(table[said][band])
+
+
 def best_per_name(detections):
     """At most one detection per name: the best one."""
     seen, best = set(), []
-    for d in sorted(detections, key=lambda d: -d["score"]):
+    for d in sorted(detections, key=lambda d: (bool(d.get("only_enrolled")), -d["score"])):  # a box the words did not find comes last
         if d["name"] not in seen:
             seen.add(d["name"])
             best.append(d)
     return best
+
+
+# ----------------------------------------------------------------------------- a second opinion
+class Judge:
+    """CLIP as a zero-shot classifier of a crop. share(picture, box, name): how much of its belief
+    goes to the item's texts among all of JUDGE_TEXTS, averaged over two crops around the box."""
+
+    def __init__(self, model_id=JUDGE, device=None):
+        import torch
+        from transformers import AutoTokenizer, CLIPModel
+
+        self.torch, self.model_id = torch, model_id
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        t0 = time.time()
+        self.model = CLIPModel.from_pretrained(model_id, cache_dir=CACHE).to(self.device).eval()
+        tokens = AutoTokenizer.from_pretrained(model_id, cache_dir=CACHE)(
+            [TEMPLATE.format(t) for t in JUDGE_TEXTS], padding=True, truncation=True, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            words = self.model.get_text_features(**tokens).float()
+        self.words = words / words.norm(dim=-1, keepdim=True)
+        self.side, self.scale = int(self.model.config.vision_config.image_size), float(self.model.logit_scale.exp())
+        print(f"Item judge {model_id} loaded in {time.time() - t0:.0f} s on {self.device}", flush=True)
+
+    def share(self, picture, box, name):
+        if name not in JUDGE_OF:
+            return 0.0
+        torch = self.torch
+        crops = []
+        for zoom in JUDGE_CROPS:
+            x, y, side = crop_around(picture.shape, box, zoom)
+            crop = cv2.resize(picture[y:y + side, x:x + side], (self.side, self.side), interpolation=cv2.INTER_CUBIC)
+            crops.append((cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32) / 255 - MEAN) / STD)
+        with torch.no_grad():
+            seen = self.model.get_image_features(pixel_values=torch.from_numpy(np.stack(crops)).permute(0, 3, 1, 2).float().to(self.device)).float()
+            seen = seen / seen.norm(dim=-1, keepdim=True)
+            belief = (self.scale * seen @ self.words.T).softmax(-1)
+        mine = [JUDGE_TEXTS.index(t) for t in JUDGE_OF[name]]
+        return float(belief[:, mine].sum(-1).mean())
 
 
 # ----------------------------------------------------------------------------- detector
@@ -179,6 +328,9 @@ class Detector:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.tiles = TILES if tiles is None else tiles
         self.score = SCORE if score is None else score
+        self.limits, self.look_from, self.look_limits = dict(LIMITS), LOOK_FROM, dict(LOOK_LIMITS)
+        self.enrolled, self.enrolled_files, self.enrolled_score = {}, None, ENROLLED_SCORE  # item -> its picture questions
+        self.judge, self.judge_limits = None, dict(JUDGE_LIMITS)
         self.model_id = model_id
         t0 = time.time()
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=CACHE)
@@ -187,10 +339,27 @@ class Detector:
         self.words = {}  # phrase -> its text embedding, computed once
         self.last = {}  # what the last find() did: passes, seconds
         print(f"Item detector {model_id} loaded in {time.time() - t0:.0f} s on {self.device}", flush=True)
+        if JUDGE and self.judge_limits and self.look_from > 0:
+            self.judge = Judge(JUDGE, self.device)
 
     def settings(self, names):
-        return {"model": self.model_id, "names": list(names), "score": self.score, "confirm_score": min(self.score, CONFIRM),
+        told = {"model": self.model_id, "names": list(names), "score": self.score, "confirm_score": min(self.score, CONFIRM),
                 "tiles": self.tiles, "input": self.side, "device": self.device}
+        if self.limits:
+            told["limits"] = {n: self.limit(n) for n in names}
+        if self.look_from > 0 and (self.look_limits or self.judge):
+            told["second_look"] = {"from": self.look_from, "limits": self.look_limits, "most": LOOK_MAX}
+            if self.judge:
+                told["second_look"].update(judge=self.judge.model_id, judge_limits=self.judge_limits)
+        if self.enrolled:
+            told["enrolled"] = {"pictures": {n: len(q) for n, q in self.enrolled.items()}, "score": self.enrolled_score}
+        if CANDIDATES > 0:
+            told["candidates_from"] = CANDIDATES
+        return told
+
+    def limit(self, name):
+        """The score from which a box of this item is accepted outright."""
+        return self.limits.get(name, self.score)
 
     def text(self, phrases):
         torch = self.torch
@@ -221,6 +390,7 @@ class Detector:
         H, W = image_bgr.shape[:2]
         pieces = [(0, 0, W, H)] + [(x, y, s, s) for x, y, s in tile_layout(H, W, self.tiles if tiles is None else tiles)]
         query = self.text(phrases)
+        shown = [k for k, phrase in enumerate(phrases) if phrase.startswith("@")]  # questions that are pictures (enrol)
         boxes, scores = [], []
         for start in range(0, len(pieces), batch):
             part = pieces[start:start + batch]
@@ -235,9 +405,14 @@ class Detector:
                     maps, _ = self.model.image_embedder(pixel_values=pixels)
                 maps = maps.float()  # the two small heads run in float32: box corners need the precision
                 flat = maps.reshape(maps.shape[0], -1, maps.shape[-1])
-                logits, _ = self.model.class_predictor(flat, query.unsqueeze(0).expand(len(part), -1, -1))
+                logits, looks = self.model.class_predictor(flat, query.unsqueeze(0).expand(len(part), -1, -1))
                 where = self.model.box_predictor(flat, maps)
-            scores.append(logits.float().sigmoid().cpu().numpy())
+                score = logits.float().sigmoid()
+                if shown:  # a picture is answered by how alike a box looks to it (cosine): on the words' scale every box would score 1
+                    looks = looks.float() / (looks.float().norm(dim=-1, keepdim=True) + 1e-6)
+                    asked = query[shown] / (query[shown].norm(dim=-1, keepdim=True) + 1e-6)
+                    score[..., shown] = (looks @ asked.T).clamp(0, 1)
+            scores.append(score.cpu().numpy())
             boxes.append(where.float().cpu().numpy())
         scores, boxes = np.concatenate(scores), np.concatenate(boxes)  # (pieces, patches, phrases), (pieces, patches, 4)
 
@@ -245,7 +420,9 @@ class Detector:
         for k, phrase in enumerate(phrases):
             got_boxes, got_scores = [], []
             for i, (x, y, w, h) in enumerate(pieces):
-                hit = np.flatnonzero(scores[i, :, k] >= floor)
+                hit = np.flatnonzero(scores[i, :, k] >= (max(floor, ENROLLED_FLOOR) if k in shown else floor))
+                if k in shown:  # most boxes look a little like anything: only the most alike are worth keeping
+                    hit = hit[np.argsort(-scores[i, hit, k])[:30]]
                 if not len(hit):
                     continue
                 cx, cy, bw, bh = (boxes[i, hit] * max(w, h)).T  # the model's boxes are centre and size, in the square
@@ -270,10 +447,168 @@ class Detector:
         self.last = {"passes": len(pieces), "seconds": round(time.time() - t0, 3), "size": [W, H]}
         return raw
 
-    def find(self, image_bgr, names, score=None, tiles=None):
-        """Every box of every name at or above the score limit, best first."""
+    def describe(self, picture, phrases):
+        """One pass over a whole picture: every box the model proposes (x0, y0, x1, y1 in 0..1), what
+        each looks like (a unit vector) and its score for each phrase."""
+        torch = self.torch
+        H, W = picture.shape[:2]
+        pixels = torch.from_numpy(self.square(picture)[None]).permute(0, 3, 1, 2).float().to(self.device)
+        query = self.text(list(phrases))
+        with torch.no_grad():
+            if self.device == "cuda":
+                dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+                with torch.autocast("cuda", dtype=dtype):
+                    maps, _ = self.model.image_embedder(pixel_values=pixels)
+            else:
+                maps, _ = self.model.image_embedder(pixel_values=pixels)
+            maps = maps.float()
+            flat = maps.reshape(1, -1, maps.shape[-1])
+            logits, looks = self.model.class_predictor(flat, query.unsqueeze(0))
+            where = self.model.box_predictor(flat, maps)
+        looks = looks[0].float()
+        looks = (looks / (looks.norm(dim=-1, keepdim=True) + 1e-6)).cpu().numpy()
+        cx, cy, bw, bh = (where[0].float().cpu().numpy() * max(H, W)).T
+        boxes = np.stack([(cx - bw / 2) / W, (cy - bh / 2) / H, (cx + bw / 2) / W, (cy + bh / 2) / H], 1)
+        return boxes, looks, logits[0].float().sigmoid().cpu().numpy()
+
+    def enrol(self, name, pictures):
+        """Learn one of the wearer's own things from pictures of it. Each picture gives one question
+        for later: what its box in the picture looks like. The box is the one the words find best
+        there; if they find nothing, the box that fills the picture (as OWLv2's own image-guided
+        detection picks it). Returns how many pictures were used."""
+        for old in self.enrolled.pop(name, []):
+            self.words.pop(old, None)
+        asked = []
+        for picture in pictures[:ENROLLED_PER_ITEM]:
+            boxes, looks, scores = self.describe(picture, phrases_for(name))
+            inside = (boxes[:, 0] > -0.03) & (boxes[:, 1] > -0.03) & (boxes[:, 2] < 1.03) & (boxes[:, 3] < 1.03)  # not out on the grey padding
+            if not inside.any():
+                continue
+            named = scores.max(1) * inside
+            if named.max() >= 0.15:
+                pick = int(np.argmax(named))
+            else:
+                cover = iou(np.array([0.0, 0.0, 1.0, 1.0]), boxes)[0] * inside
+                near = np.flatnonzero(cover >= 0.8 * cover.max())
+                pick = int(near[np.argmin(looks[near] @ looks.mean(0))])
+            key = f"@{name}#{len(asked)}"
+            self.words[key] = self.torch.from_numpy(looks[pick]).float().to(self.device)
+            asked.append(key)
+        if asked:
+            self.enrolled[name] = asked
+        return len(asked)
+
+    def refresh_enrolled(self, folder=None):
+        """Read the folder of enrolled pictures again if anything in it changed. Returns True if it did."""
+        folder = ENROLLED if folder is None else folder
+        files = []
+        if os.path.isdir(folder):
+            for name in sorted(os.listdir(folder))[:ENROLLED_ITEMS]:
+                inside = os.path.join(folder, name)
+                if os.path.isdir(inside):
+                    files += [os.path.join(inside, f) for f in sorted(os.listdir(inside)) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+        seen = tuple((f, os.path.getmtime(f), os.path.getsize(f)) for f in files)
+        if seen == self.enrolled_files:
+            return False
+        self.enrolled_files = seen
+        for name in list(self.enrolled):
+            for old in self.enrolled.pop(name):
+                self.words.pop(old, None)
+        by_item = {}
+        for f in files:
+            by_item.setdefault(" ".join(os.path.basename(os.path.dirname(f)).lower().replace("_", " ").split()), []).append(f)
+        for name, paths in by_item.items():
+            try:
+                pictures = [cv2.imread(f) for f in paths[:ENROLLED_PER_ITEM]]
+                pictures = [cv2.resize(q, None, fx=BIG_SIDE / max(q.shape[:2]), fy=BIG_SIDE / max(q.shape[:2]), interpolation=cv2.INTER_AREA)
+                            if max(q.shape[:2]) > BIG_SIDE else q for q in pictures if q is not None]
+                used = self.enrol(name, pictures)
+                print(f"Enrolled '{name}' from {used} of {len(paths)} pictures", flush=True)
+            except Exception as error:  # one bad picture must not stop the fixes
+                print(f"Could not enrol '{name}': {type(error).__name__}: {error}", flush=True)
+        return True
+
+    def candidates(self, image_bgr, names, floor=None, tiles=None):
+        """Every box of every name, best first, each marked "accepted" or not, and "matched": "text"
+        (found by the words) or "enrolled" (found by a picture of the wearer's own thing).
+        Accepted: a text box that scores at least its item's limit, or at least look_from with a
+        second, zoomed look that agrees (it then carries "second_look", the zoomed score, or "judge", the second opinion; "score" stays the first look's); an
+        enrolled box that scores at least enrolled_score. Boxes that are not accepted are listed
+        down to `floor`, for the look-again check and the candidates list; they are never sightings."""
         phrases = sorted({p for name in names for p in phrases_for(name)})
-        return merge(self.detect(image_bgr, phrases, tiles), names, self.score if score is None else score)
+        shown = [q for name in names for q in self.enrolled.get(name, [])]
+        raw = self.detect(image_bgr, phrases + shown, tiles)
+        first = dict(self.last)
+        H, W = image_bgr.shape[:2]
+        looking = self.look_from > 0
+        got, looks = [], []
+        for name in names:
+            if self.enrolled.get(name):  # this very thing, as it was shown
+                for d in merge(raw, [name], max(ENROLLED_FLOOR, self.enrolled_score - 0.1), phrases=lambda n: self.enrolled[n]):
+                    d["matched"], d["accepted"], d["only_enrolled"] = "enrolled", d["score"] >= self.enrolled_score, True
+                    got.append(d)
+            limit = self.limit(name)
+            start = self.look_from if looking and (name in self.look_limits or (self.judge and name in self.judge_limits)) else limit
+            for d in merge(raw, [name], min(limit, start, limit if floor is None else floor)):
+                d["matched"], d["accepted"] = "text", d["score"] >= limit
+                got.append(d)
+                if not d["accepted"] and d["score"] >= start and sum(1 for other in looks if other["name"] == name) < LOOK_PER_ITEM:
+                    looks.append(d)
+        seconds = first.get("seconds", 0)
+        sure = [d for d in got if d["accepted"]]  # a thing that already has a name gets no second look under another
+        looks = [d for d in looks if not any(k["name"] != d["name"] and iou(np.array(d["box"]), np.array(k["box"]))[0][0] >= 0.6 for k in sure)]
+        looks = sorted(looks, key=lambda d: -d["score"])[:max(0, LOOK_MAX)]
+        passes = 0
+        for d in looks:
+            agreed, t0 = True, time.time()
+            if self.judge and d["name"] in self.judge_limits:  # the other model's opinion: cheap, so it is asked first
+                d["judge"] = round(self.judge.share(image_bgr, d["box"], d["name"]), 3)
+                agreed = d["judge"] >= self.judge_limits[d["name"]]
+                seconds += time.time() - t0
+            if agreed and d["name"] in self.look_limits:  # one more pass: the crop around the box, as large as the detector takes it
+                x, y, side = crop_around(image_bgr.shape, d["box"], LOOK_ZOOM, LOOK_LEAST)
+                again = self.detect(image_bgr[y:y + side, x:x + side], phrases_for(d["name"]), tiles=0, floor=0.1)
+                seconds += self.last["seconds"]
+                passes += 1
+                seen = 0.0
+                for boxes, scores in again.values():
+                    for box, score in zip(boxes, scores):
+                        whole = (box * side + [x, y, x, y]) / [W, H, W, H]
+                        if score > seen and same_thing(whole, d["box"]):
+                            seen = float(score)
+                d["second_look"] = round(seen, 3)
+                agreed = seen >= self.look_limits[d["name"]]
+            d["accepted"] = bool(agreed)
+        if looks:
+            self.last = {**first, "passes": first.get("passes", 0) + passes, "seconds": round(seconds, 3), "second_looks": len(looks)}
+        else:
+            self.last = first
+        for d in got:
+            d["confidence_pct"] = confidence_pct(d, self.judge_limits)
+        got.sort(key=lambda d: (-d["accepted"], "only_enrolled" in d, -d["score"]))  # boxes the words found come first
+        kept = []
+        for d in got:  # one thing gets one name and one entry; a box that is not accepted never pushes an accepted one out
+            if any(k["name"] != d["name"] and iou(np.array(d["box"]), np.array(k["box"]))[0][0] >= 0.6 for k in kept):
+                continue
+            twin = next((i for i, k in enumerate(kept) if k["name"] == d["name"] and ("only_enrolled" in k) != ("only_enrolled" in d)
+                         and same_thing(d["box"], k["box"])), None)
+            if twin is not None:  # found by the words and by its picture: one entry, with the words' box, score and confidence
+                worded, shown = (d, kept[twin]) if "only_enrolled" in kept[twin] else (kept[twin], d)
+                worded["accepted"] = worded["accepted"] or shown["accepted"]
+                if shown["score"] >= self.enrolled_score:
+                    worded["matched"] = "enrolled"
+                kept[twin] = worded
+                continue
+            kept.append(d)
+        return kept
+
+    def find(self, image_bgr, names, score=None, tiles=None):
+        """Every accepted box of every name, best first. With `score`, plainly every box at or above
+        that one limit, with no limits per item and no second looks."""
+        if score is not None:
+            phrases = sorted({p for name in names for p in phrases_for(name)})
+            return merge(self.detect(image_bgr, phrases, tiles), names, score)
+        return [d for d in self.candidates(image_bgr, names, tiles=tiles) if d["accepted"]]
 
 
 def load(device=None, **settings):
@@ -355,7 +690,8 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0, room=None):
     items, marks = [], []
     for d in found:
         item = {"name": d["name"], "score": round(float(d["score"]), 2), "box": [round(float(v), 4) for v in d["box"]],
-                "position": None, "distance_m": None, "bearing_deg": None}
+                "position": None, "distance_m": None, "bearing_deg": None, "matched": d.get("matched", "text"),
+                "confidence_pct": d["confidence_pct"] if "confidence_pct" in d else confidence_pct(d)}
         items.append(item)
         if state == "lost":
             item["note"] = "No position fix, so it is not on the map."
@@ -497,24 +833,38 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
     was cropped for the model; like: a baseline frame (the shape it was cropped to); remembered:
     spots where items were seen before, to look at again (see check).
     Returns (fields to add to the locate result, balls for the 3D view)."""
-    fields = {"items": [], "items_looked_for": list(names), "items_checked": []}
+    if detector.refresh_enrolled():
+        print(f"Enrolled items now: {sorted(detector.enrolled)}", flush=True)
+    names = list(names) + [n for n in detector.enrolled if n not in names]  # a shown thing is looked for, listed or not
+    fields = {"items": [], "items_looked_for": list(names), "items_checked": [], "items_candidates": []}
     picture, saw = big_frame(clip), BIG
     if picture is not None and abs(picture.shape[1] / picture.shape[0] / (newest.shape[1] / newest.shape[0]) - 1) > 0.03:
         picture = None  # not the same picture as the newest frame: its boxes could not be mapped into the fix
         fields["items_note"] = f"{BIG} has another shape than the newest frame, so the small frame was searched."
     if picture is None:
         picture, saw = newest, "newest frame"
-    every = detector.find(picture, names, score=min(detector.score, CONFIRM))  # down to the look-again limit
-    found = best_per_name([d for d in every if d["score"] >= detector.score])  # sightings: the full limit only
+    lowest = min([detector.score, CONFIRM] + ([CANDIDATES] if CANDIDATES > 0 else []))
+    every = detector.candidates(picture, names, floor=lowest)  # down to the look-again and candidates limits
+    found = best_per_name([d for d in every if d["accepted"]])  # sightings: accepted boxes only
     room = locate.map_frame(r, base, valid)
     window = crop_window(newest.shape, like.shape)
     items, marks = place(found, r, base, q, valid, window, state, room=room)
     write_crops(picture, items, out)
     fields["items"] = items
     fields["items_frame"] = {"source": saw, "width": picture.shape[1], "height": picture.shape[0], **detector.last}
+    if CANDIDATES > 0 and state != "lost":  # every box that could be placed, weak ones too, for the relay to add up over looks
+        try:
+            listed, _ = place([d for d in every if d["accepted"] or d.get("only_enrolled") or d["score"] >= CANDIDATES],
+                              r, base, q, valid, window, state, room=room)
+            fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "confidence_pct", "position", "box", "matched", "distance_m", "bearing_deg")}
+                                          for c in listed if c["position"] is not None]
+        except Exception as error:
+            fields["items_note"] = (fields.get("items_note", "") + f" Candidates were not listed: {type(error).__name__}: {error}").strip()[:300]
     if remembered and state != "lost":  # without a fix a remembered spot cannot be found in this frame
         try:
-            rest, _ = place([d for d in every if d not in found], r, base, q, valid, window, state, room=room)
+            floor = min(detector.score, CONFIRM)  # a weaker box than that is no sign the item is still there
+            rest, _ = place([d for d in every if d not in found and (d["accepted"] or (d["score"] >= floor and not d.get("only_enrolled")))],
+                            r, base, q, valid, window, state, room=room)
             fields["items_checked"], left_out = check(remembered, names, items + rest, r, q, valid, window, room, picture.shape,
                                                       detector.side)
             if left_out:
