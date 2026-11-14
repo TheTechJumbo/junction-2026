@@ -2,7 +2,6 @@ package com.junction.glasses.meta
 
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
-import java.nio.ByteBuffer
 import androidx.activity.ComponentActivity
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
@@ -196,7 +195,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         return withContext(Dispatchers.Default) {
             val bitmap = when (photo) {
                 is PhotoData.Bitmap -> photo.bitmap
-                is PhotoData.HEIC -> ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(photo.data))) { decoder, _, _ ->
+                is PhotoData.HEIC -> ImageDecoder.decodeBitmap(ImageDecoder.createSource(photo.data.duplicate())) { decoder, _, _ ->
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                 }
             } ?: return@withContext null
