@@ -40,8 +40,11 @@ MIN_AREA, MIN_SHRINK = 36.0, 0.2  # pixels the spot must cover in a new frame / 
 DEPTH_TOL = 0.04  # depth disagreement (fraction of the distance) that counts as "the surface is elsewhere"
 # Weights of the four kinds of evidence and the scale that puts the limit at 1.0. Chosen on five
 # PASLCD scenes and reported on the other five: see eval/WATCH_RESULTS.md.
+PAIRS = {"colour": ("c_spot", "c_ring"), "structure": ("z_spot", "z_ring"), "feature": ("f_spot", "f_ring"), "depth": ("g_spot", "g_ring")}
+FORMS = {"colour": "ring", "structure": "both", "feature": "both", "depth": "both"}  # see surplus()
 WEIGHTS = {"colour": 1.0, "structure": 0.0, "feature": 0.0, "depth": 0.0}
 SCALE = 6.0
+MAX_ANGLE = None  # degrees between the baseline view and a new view of the spot; beyond it the look does not count
 THRESHOLD = 1.0
 KEYS = ("c_spot", "c_ring", "c_top", "z_spot", "z_ring", "f_spot", "f_ring", "g_spot", "g_ring", "g_far", "g_near")
 
@@ -135,7 +138,7 @@ def view(scene, geo, j):
         u = K[0, 0] * cam[:, 0] / z + K[0, 2] + 0.5  # + 0.5: pixel i covers [i, i + 1)
         v = K[1, 1] * cam[:, 1] / z + K[1, 2] + 0.5
     inside = (z > 1e-6) & (u >= 0) & (u < W) & (v >= 0) & (v < H)
-    out = {"frame": int(j), "inside": float(inside.mean()), "box": None, "area": 0.0, "blocked": 0.0, "quality": 0.0}
+    out = {"frame": int(j), "inside": float(inside.mean()), "box": None, "area": 0.0, "blocked": 0.0, "angle": None, "quality": 0.0}
     if out["inside"] < MIN_INSIDE:
         return {**out, "why": "out of view"}
     ui, vi = u[inside], v[inside]
@@ -149,11 +152,14 @@ def view(scene, geo, j):
     to_here = geo["centroid"] - scene.centre[j]
     to_base = geo["centroid"] - scene.centre[geo["frame"]]
     cos = float(to_here @ to_base / (np.linalg.norm(to_here) * np.linalg.norm(to_base) + 1e-9))
+    out["angle"] = float(np.degrees(np.arccos(np.clip(cos, -1, 1))))  # between the two viewing directions
     out["quality"] = out["inside"] * (1 - out["blocked"]) * min(1.0, out["area"] / geo["area"]) ** 0.5 * max(cos, 0.0)
     if out["area"] < MIN_AREA or out["area"] < MIN_SHRINK * geo["area"]:
         return {**out, "why": "too small in view"}
     if 1 - out["blocked"] < MIN_CLEAR:
         return {**out, "why": "blocked"}
+    if MAX_ANGLE is not None and out["angle"] > MAX_ANGLE:
+        return {**out, "why": "seen from another side"}
     return {**out, "why": None}
 
 
@@ -308,18 +314,28 @@ def typical(rows):
     return out
 
 
-def surplus(new, own, a, b):
-    """How much more the spot differs than its ring in the new frame, beyond the same contrast
-    between baseline frames. Missing ring or baseline measurements count as zero."""
+def surplus(new, own, a, b, form="both"):
+    """One kind of evidence from a new-frame comparison and the baseline's own (typical).
+    a and b name the measurement inside the spot and in the ring. Forms:
+      plain  the difference inside the spot
+      ring   minus the difference in the ring (what a lighting change or a pose error does to both)
+      own    minus what baseline frames differ by on the spot
+      both   (spot - ring) in the new frame minus (spot - ring) between baseline frames
+    Missing measurements count as zero."""
     def val(d, k):
         return 0.0 if d is None or d.get(k) is None or not np.isfinite(d[k]) else d[k]
-    return (val(new, a) - val(new, b)) - max(val(own, a) - val(own, b), 0.0)
+    if form == "plain":
+        return val(new, a)
+    if form == "ring":
+        return val(new, a) - val(new, b)
+    if form == "own":
+        return val(new, a) - val(own, a)
+    return (val(new, a) - val(new, b)) - (val(own, a) - val(own, b))
 
 
 def evidence(new, own):
-    """The four kinds of evidence for one new frame, each a surplus (see surplus)."""
-    return {"colour": surplus(new, own, "c_spot", "c_ring"), "structure": surplus(new, own, "z_spot", "z_ring"),
-            "feature": surplus(new, own, "f_spot", "f_ring"), "depth": surplus(new, own, "g_spot", "g_ring")}
+    """The kinds of evidence for one new frame, each in its form (FORMS)."""
+    return {kind: surplus(new, own, a, b, FORMS[kind]) for kind, (a, b) in PAIRS.items()}
 
 
 def score_of(new, own, weights=None, scale=None):
