@@ -10,10 +10,10 @@ photo at a time goes through the model together with the baseline, exactly as in
 
   same                 a photo from the later capture of the same scene: should be "found"
   wrong                a photo from the later capture of another scene: must be "lost"
-  same_other_instance  indoor scenes only: a photo from the scene's second PASLCD instance
-                       (another day, lighting may differ). No pose truth for these.
+  same_other_light     indoor scenes only: the baseline is the reference capture of the scene's
+                       second PASLCD instance, taken under different lighting than the query
 
-For "same" queries the answer is checked against the dataset's COLMAP poses: our baseline
+For same-room queries the answer is checked against the dataset's COLMAP poses: our baseline
 cameras are fitted to theirs with a similarity transform (scale, rotation, shift), and the
 query camera's position and viewing direction are compared after that fit. COLMAP has no
 real-world scale, so the position error is given as a share of the baseline cameras' spread.
@@ -165,20 +165,24 @@ def tables(rows, meta):
         L += [f"- {r['query_scene']} photo {r['query']} on {r['scene']} baseline of {r['n_baseline']}: "
               f"{r['state']}, match {r['match']:.2f}" for r in not_lost[:30]]
 
-    other = pick(rows, "same_other_instance", top)
-    if other:
-        L += ["", f"### 2b. Same room on another day ({top} baseline photos; query from the scene's second PASLCD instance)", "",
-              "| Scene | Queries | Found | Unsure | Lost | Match min | Match median | Match max |", "| --- | --- | --- | --- | --- | --- | --- | --- |"]
-        for label, got in groups("same_other_instance", top):
-            if "Outdoor" in label or "All" in label:
-                continue
-            f, u, lo = states(got)
-            m = [r["match"] for r in got]
-            L.append(f"| {label} | {len(got)} | {share(f, len(got))} | {share(u, len(got))} | {share(lo, len(got))} | "
-                     f"{num(m, 'min')} | {num(m, 'median')} | {num(m, 'max')} |")
-
     def pose(got, key, scale=1.0):
         return [r["pose"][key] * scale for r in got if r.get("pose")]
+
+    other = [r for r in rows if r["kind"] == "same_other_light"]
+    if other:
+        L += ["", "### 2b. Same room, baseline taken under different lighting (indoor scenes, PASLCD instance 2)", "",
+              "| Baseline photos | Scene | Queries | Found | Unsure | Lost | Match min | Match median | Position error % median | max | "
+              "Heading error deg median | max |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+        for n in sizes:
+            for label, got in groups("same_other_light", n):
+                if "Outdoor" in label or "All" in label:
+                    continue
+                f, u, lo = states(got)
+                m = [r["match"] for r in got]
+                e, h = pose(got, "position_error_share", 100), pose(got, "heading_error_deg")
+                L.append(f"| {n} | {label} | {len(got)} | {share(f, len(got))} | {share(u, len(got))} | {share(lo, len(got))} | {num(m, 'min')} | "
+                         f"{num(m, 'median')} | {num(e, 'median', 1)} | {num(e, 'max', 1)} | {num(h, 'median', 1)} | {num(h, 'max', 1)} |")
 
     L += ["", f"### 3. Is the position right? (same-room queries, {top} baseline photos, against COLMAP poses)", "",
           "Position error is a percentage of the largest distance between two baseline cameras. "
@@ -218,7 +222,7 @@ def tables(rows, meta):
           "### 5. Match scores and thresholds", "",
           "Share of queries with a match at or above each value. Same room should be high, wrong room should be zero.", "",
           "| Match at or above | " + " | ".join(f"Same room, {n}" for n in sizes) + " | " + " | ".join(f"Wrong room, {n}" for n in sizes)
-          + (" | Same room on another day, " + str(top) if other else "") + " |",
+          + (" | Same room, other lighting, all sizes" if other else "") + " |",
           "| --- |" + " --- |" * (2 * len(sizes) + (1 if other else 0))]
     for t in SWEEP:
         cells = []
@@ -249,6 +253,7 @@ def main():
     ap.add_argument("--out", default="out")
     ap.add_argument("--scenes", nargs="*")
     ap.add_argument("--n-baseline", nargs="*", type=int, default=[24, 12, 8])
+    ap.add_argument("--kinds", nargs="*", default=["same", "wrong", "same_other_light"], choices=["same", "wrong", "same_other_light"])
     ap.add_argument("--rounds", type=int, default=9, help="query photos per scene and kind (9 covers every other scene once)")
     ap.add_argument("--minutes", type=float, default=36, help="stop starting new passes after this long")
     ap.add_argument("--detector-dir", help="folder with locate.py and recon_change.py (default: next to this script, else its parent)")
@@ -289,16 +294,27 @@ def main():
     info = {}
     for scene in scenes:
         base, query, _, _ = rb.scene_pairs(args.data, scene, 1, 24, 12)
-        folder2 = Path(args.data) / scene / "Instance_2" / "images"
-        other = rb.pick_even(sorted(p for p in folder2.iterdir() if "_test_" in p.name), 12) if folder2.is_dir() else []
         pose_file = Path(args.poses) / f"{scene}_inst1.json" if args.poses else None
         truth = json.loads(pose_file.read_text()) if pose_file and pose_file.exists() else None
         have = truth is not None and all(p.name in truth for p in base)
-        info[scene] = {"base": base, "query": query, "other": other, "truth": truth if have else None,
+        info[scene] = {"base": base, "query": query, "truth": truth if have else None,
                        "size": spread(truth, [p.name for p in base]) if have else None,
                        "setting": "indoor" if scene in rb.INDOOR else "outdoor"}
-        print(f"{scene}: {len(base)} baseline, {len(query)} query, {len(other)} from instance 2, pose truth "
+        print(f"{scene}: {len(base)} baseline, {len(query)} query, pose truth "
               f"{'yes' if have else 'NO'}" + (f" for {sum(p.name in truth for p in query)}/{len(query)} queries" if have else ""), flush=True)
+        # Instance 2 (indoor scenes): its reference capture was taken under different lighting.
+        # Its query photos are the same pictures as instance 1's.
+        if "same_other_light" in args.kinds and (Path(args.data) / scene / "Instance_2" / "images").is_dir():
+            try:
+                base2, query2, _, _ = rb.scene_pairs(args.data, scene, 2, 24, 12)
+                pose_file = Path(args.poses) / f"{scene}_inst2.json" if args.poses else None
+                truth2 = json.loads(pose_file.read_text()) if pose_file and pose_file.exists() else None
+                have2 = truth2 is not None and all(p.name in truth2 for p in base2)
+                info[scene]["light2"] = {"base": base2, "query": query2, "truth": truth2 if have2 else None,
+                                         "size": spread(truth2, [p.name for p in base2]) if have2 else None}
+                print(f"{scene} instance 2: {len(base2)} baseline, {len(query2)} query, pose truth {'yes' if have2 else 'NO'}", flush=True)
+            except Exception as e:
+                print(f"{scene} instance 2 skipped: {type(e).__name__}: {e}", flush=True)
 
     # Photos are shrunk once to the size the model works at (the same resize reconstruct does).
     shapes, small = {}, {}
@@ -319,10 +335,11 @@ def main():
 
     t0 = time.time()
     for scene in scenes:
-        s = info[scene]
-        s["hw"] = load(s["base"][0])
-        with ThreadPoolExecutor(4) as pool:
-            list(pool.map(lambda p: load(p, s["hw"]), s["base"][1:] + s["query"] + s["other"]))
+        used = [info[scene]] if set(args.kinds) - {"same_other_light"} else []
+        for s in used + ([info[scene]["light2"]] if "light2" in info[scene] else []):
+            s["hw"] = load(s["base"][0])
+            with ThreadPoolExecutor(4) as pool:
+                list(pool.map(lambda p, hw=s["hw"]: load(p, hw), s["base"][1:] + s["query"]))
     print(f"Read {len(small)} photos in {time.time() - t0:.0f} s", flush=True)
 
     tasks = []
@@ -330,13 +347,15 @@ def main():
         for n in args.n_baseline:
             for i, scene in enumerate(scenes):
                 s = info[scene]
-                tasks.append(("same", n, scene, scene, s["query"][ORDER[k % 12] % len(s["query"])], k))
-                if len(scenes) > 1:
+                if "same" in args.kinds:
+                    tasks.append(("same", n, scene, scene, s["query"][ORDER[k % 12] % len(s["query"])], k))
+                if len(scenes) > 1 and "wrong" in args.kinds:
                     wrong = scenes[(i + 1 + k % (len(scenes) - 1)) % len(scenes)]
                     photos = info[wrong]["query"]
                     tasks.append(("wrong", n, scene, wrong, photos[(ORDER[k % 12] + i) % len(photos)], k))
-                if s["other"]:
-                    tasks.append(("same_other_instance", n, scene, scene, s["other"][ORDER[k % 12] % len(s["other"])], k))
+                if "light2" in s:
+                    photos = s["light2"]["query"]
+                    tasks.append(("same_other_light", n, scene, scene, photos[ORDER[k % 12] % len(photos)], k))
     rows = read_rows(out)
     done = {(r["kind"], r["n_baseline"], r["scene"], r["round"]) for r in rows}
     print(f"{len(tasks)} passes planned, {len(done)} already done", flush=True)
@@ -349,9 +368,9 @@ def main():
             if time.time() - started > args.minutes * 60:
                 print(f"Stopping: {args.minutes} minutes used", flush=True)
                 break
-            s = info[scene]
+            s = info[scene]["light2"] if kind == "same_other_light" else info[scene]
             base = rb.pick_even(s["base"], n)
-            row = {"kind": kind, "n_baseline": len(base), "scene": scene, "setting": s["setting"],
+            row = {"kind": kind, "n_baseline": len(base), "scene": scene, "setting": info[scene]["setting"],
                    "query_scene": query_scene, "query": query.name, "round": k}
             try:
                 frames = [photo(p, s["hw"]) for p in base + [query]]
@@ -370,7 +389,7 @@ def main():
                 row["locate_s"] = round(time.time() - t0, 2)
                 row.update(state=result["state"], match=result["confidence"], position=result["position"],
                            heading_deg=result["heading_deg"], metres_per_unit=result["metres_per_unit"])
-                if kind == "same":
+                if kind != "wrong":
                     row["pose"] = pose_check(locate.camera, recon.E, [p.name for p in base + [query]], s["truth"], s["size"],
                                              result["metres_per_unit"])
                 shown = f" | position error {100 * row['pose']['position_error_share']:.1f}%, heading error " \
