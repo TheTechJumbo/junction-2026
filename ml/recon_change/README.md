@@ -151,6 +151,16 @@ finder and the change check read the files.
   temporary folder. `python live/dev_setup.py` serves the page with made-up rooms and no
   cluster, and prints the link (`BEACON_ROOT` or `gateway.set_root()` moves the gateway's folder).
 
+**The way around furniture:** `route.py` turns the floor plan in a fix into a grid of where a
+person can walk and finds the shortest way on it to each place. The relay adds it to every
+`/locate` and `/where` reply under `route`, and the display points its arrow at the next corner
+of that way and shows the walking distance. Where the map gives no way, the arrow points straight
+at the place as before, and `route.to[place].why` says why. `python eval/test_route.py` tests it
+offline on a made-up room; `python live/route_demo.py` shows it on the display without the
+cluster. `/hud?k=KEY&route=0` is the straight arrow as before. What it does on real rooms, and
+what it cannot know, is in `eval/ROUTE_RESULTS.md`: with today's floor plan what is shown is clear of
+true obstacles for 29% of the ways, against 13% for the straight arrow.
+
 **Questions, reminders and lost items (the demo flow):** the glasses display also asks and
 reminds. Start the relay with the team's event API (the backend that holds the sensor events)
 next to it:
