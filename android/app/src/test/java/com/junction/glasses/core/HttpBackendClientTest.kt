@@ -55,4 +55,19 @@ class HttpBackendClientTest {
         }
         try { HttpBackendClient("http://localhost:8000", "token"); fail("accepted implicit HTTP") } catch (_: IllegalArgumentException) { }
     }
+    @Test fun cancellationCompletesWithoutLeakingTransportDetails() = server { s, c ->
+        s.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE))
+        val latch = CountDownLatch(1); var failure: Throwable? = null
+        val operation = c.ask("q") { failure = it.exceptionOrNull(); latch.countDown() }
+        s.takeRequest(2, TimeUnit.SECONDS); operation.cancel()
+        assertTrue(latch.await(2, TimeUnit.SECONDS))
+        assertEquals("cancelled", (failure as BackendFailure).kind)
+        assertFalse(failure.toString().contains("test-session"))
+    }
+    @Test fun authenticationErrorNeverIncludesServerBody() = server { s, c ->
+        s.enqueue(MockResponse().setResponseCode(401).setBody("private session-token details"))
+        val error = await<Answer> { c.ask("q", it) }.exceptionOrNull() as BackendFailure
+        assertEquals(401, error.status); assertFalse(error.toString().contains("session-token"))
+    }
+
 }
