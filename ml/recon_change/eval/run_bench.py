@@ -38,6 +38,7 @@ INDOOR = ["Cantina", "Lounge", "Printing_area", "Lunch_room", "Meeting_room"]
 OUTDOOR = ["Garden", "Pots", "Zen", "Playground", "Porch"]
 IMG_EXT = {".jpg", ".jpeg", ".png"}
 HIDDEN = 0.10  # a gone point is hidden in a query photo if that photo's surface is this much nearer
+SIZES = [(50, 200), (200, 800), (800, None)]  # ground-truth region sizes, in pixels at model resolution
 YELLOW = (0, 230, 255)  # BGR
 
 
@@ -118,17 +119,15 @@ def predicted_masks(recon, detail, fill):
 
 
 def gt_regions(gt, pred, min_px, hit_share):
-    """Connected regions of the ground truth in one photo, and how many the prediction touches.
+    """Connected regions of the ground truth in one photo: [[area in pixels, hit (0 or 1)], ...].
     A region is hit when at least hit_share of its pixels are predicted."""
     n, labels, stats, _ = cv2.connectedComponentsWithStats(gt.astype(np.uint8), connectivity=8)
-    total = hit = 0
+    regions = []
     for i in range(1, n):
         area = int(stats[i, cv2.CC_STAT_AREA])
-        if area < min_px:
-            continue
-        total += 1
-        hit += int((pred & (labels == i)).sum() >= hit_share * area)
-    return total, hit
+        if area >= min_px:
+            regions.append([area, int((pred & (labels == i)).sum() >= hit_share * area)])
+    return regions
 
 
 def scores(tp, fp, fn):
@@ -193,10 +192,10 @@ def run_pair(rc, model, torch, name, baseline, query, mask_paths, out_dir, args)
         tp, fp, fn = tp + f_tp, fp + f_fp, fn + f_fn
         tp_app, tp_gone = tp_app + int((a & gt).sum()), tp_gone + int((g & gt).sum())
         px_app, px_gone = px_app + int(a.sum()), px_gone + int(g.sum())
-        n, hit = gt_regions(gt, p, args.min_region_px, args.hit_share)
-        regions, regions_hit = regions + n, regions_hit + hit
+        found_regions = gt_regions(gt, p, args.min_region_px, args.hit_share)
+        regions, regions_hit = regions + len(found_regions), regions_hit + sum(h for _, h in found_regions)
         per_frame.append({"photo": query[q - len(baseline)].name, "tp": f_tp, "fp": f_fp, "fn": f_fn,
-                          "gt_regions": n, "gt_regions_hit": hit})
+                          "regions": found_regions})
     out_dir.mkdir(parents=True, exist_ok=True)
     for q in pick_even(list(after), args.overlays):
         a, g = pred[q]
@@ -265,6 +264,15 @@ def tables(results):
                              f"{fmt(o['f1'])} | {fmt(o['iou'])} | {o['gt_regions_hit']}/{o['gt_regions']} | {o['clusters']} | | | | | |")
                 lines.append(f"| **{label}, mean over scenes** | | | {fmt(o['mean_scene_f1'])} | "
                              f"{fmt(o['mean_scene_iou'])} | | | | | | | |")
+        lines += ["", "### Ground-truth regions hit, by region size", "",
+                  "| Region size (pixels at model resolution) | Indoor | Outdoor | All |", "| --- | --- | --- | --- |"]
+        groups = [[r for r in changed if r["setting"] == "indoor"], [r for r in changed if r["setting"] == "outdoor"], changed]
+        for lo, hi in SIZES:
+            cells = []
+            for rows in groups:
+                picked = [h for r in rows for f in r["per_frame"] for a, h in f["regions"] if a >= lo and (hi is None or a < hi)]
+                cells.append(f"{sum(picked)}/{len(picked)} ({100 * sum(picked) / len(picked):.0f}%)" if picked else "-")
+            lines.append(f"| {lo} to {hi - 1} | " + " | ".join(cells) + " |" if hi else f"| {lo} and larger | " + " | ".join(cells) + " |")
         lines.append("")
     unchanged = [r for r in results if r.get("kind") == "unchanged" and "error" not in r]
     if unchanged:

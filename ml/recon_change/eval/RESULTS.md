@@ -4,8 +4,13 @@
 - **Detector:** `ml/recon_change/recon_change.py` at commit `636cc94f5f441fe9c6e40899c61a3d4efa776054`,
   default settings, imported unmodified (`import recon_change as rc`). SHA-256 of the file as run:
   `76b4a39de5190ffbc247542c743cf3256f0a3a736f08b7bb5865902655f035af`.
-- **Hardware:** one NVIDIA L4 on Iridis (`ecsstudents_l4`). Slurm jobs 2217759 (changed pairs,
-  2 min 22 s) and 2217760 (unchanged pairs, 2 min 13 s).
+- **Hardware:** one NVIDIA L4 on Iridis (`ecsstudents_l4`). Slurm jobs 2217849 (changed pairs,
+  2 min 21 s), 2217760 (unchanged pairs, 2 min 13 s) and 2217821 (different lighting, indoor,
+  2 min 10 s). Job 2217759 was an earlier run of the changed pairs: its pixel counts are
+  identical to 2217849 in every scene. The unchanged job ran with the harness one commit
+  earlier; the only change since then is the table by region size.
+- The deployed copy in `/scratch/ase1g23/junction-recon/recon_change.py` was changed by other
+  work during this session. These numbers are for the commit above, not for that copy.
 
 ## Headline
 
@@ -15,6 +20,8 @@ what changed**:
 - Pixel precision 0.92, recall 0.24, F1 0.38, IoU 0.24 (all 10 scenes, pixels pooled).
 - Indoor scenes are harder: IoU 0.17 indoors against 0.36 outdoors.
 - It touches 253 of 682 ground-truth regions (37%): 89 of 398 indoors, 164 of 284 outdoors.
+- Size decides: it hits 67% of large regions (800 pixels or more), 46% of medium ones and 5%
+  of small ones. Indoors, medium regions are hit only 20% of the time.
 - Every changed pair got the verdict PASS, and every unchanged pair got NO CHANGE FOUND with
   zero flagged pixels. The unchanged test is a weak one: see "What this does not show".
 
@@ -46,16 +53,16 @@ Localization with Zero Labels" (Galappaththige et al., CVPR 2025).
 
 | Scene | Precision | Recall | F1 | IoU | GT regions hit | Clusters (appeared + gone) | Verdict | Noise between clips | Inference s | Detect s | Peak GPU GB |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Cantina (indoor) | 0.885 | 0.113 | 0.200 | 0.111 | 21/118 | 1 + 3 | PASS | 0.019 | 6.0 | 4.8 | 9.4 |
+| Cantina (indoor) | 0.885 | 0.113 | 0.200 | 0.111 | 21/118 | 1 + 3 | PASS | 0.019 | 6.1 | 4.8 | 9.4 |
 | Lounge (indoor) | 0.832 | 0.379 | 0.520 | 0.352 | 31/63 | 1 + 3 | PASS | 0.007 | 5.0 | 4.8 | 9.4 |
-| Printing_area (indoor) | 0.897 | 0.237 | 0.374 | 0.230 | 22/90 | 0 + 4 | PASS | 0.018 | 5.0 | 5.0 | 9.4 |
-| Lunch_room (indoor) | 1.000 | 0.039 | 0.075 | 0.039 | 4/58 | 1 + 0 | PASS | 0.020 | 5.0 | 4.8 | 9.4 |
+| Printing_area (indoor) | 0.897 | 0.237 | 0.374 | 0.230 | 22/90 | 0 + 4 | PASS | 0.018 | 5.0 | 4.8 | 9.4 |
+| Lunch_room (indoor) | 1.000 | 0.039 | 0.075 | 0.039 | 4/58 | 1 + 0 | PASS | 0.020 | 5.0 | 4.6 | 9.4 |
 | Meeting_room (indoor) | 0.827 | 0.098 | 0.175 | 0.096 | 11/69 | 1 + 1 | PASS | 0.014 | 5.0 | 4.5 | 9.4 |
-| Garden (outdoor) | 0.891 | 0.324 | 0.475 | 0.312 | 30/58 | 1 + 2 | PASS | 0.009 | 5.0 | 5.3 | 9.4 |
-| Pots (outdoor) | 0.999 | 0.339 | 0.507 | 0.339 | 36/56 | 3 + 0 | PASS | 0.010 | 5.0 | 4.7 | 9.4 |
-| Zen (outdoor) | 1.000 | 0.313 | 0.476 | 0.313 | 48/66 | 4 + 0 | PASS | 0.011 | 5.0 | 4.9 | 9.4 |
-| Playground (outdoor) | 0.799 | 0.244 | 0.374 | 0.230 | 11/36 | 0 + 1 | PASS | 0.024 | 5.0 | 4.2 | 9.4 |
-| Porch (outdoor) | 0.939 | 0.443 | 0.602 | 0.430 | 39/68 | 2 + 2 | PASS | 0.010 | 5.0 | 4.8 | 9.4 |
+| Garden (outdoor) | 0.891 | 0.324 | 0.475 | 0.312 | 30/58 | 1 + 2 | PASS | 0.009 | 5.0 | 5.4 | 9.4 |
+| Pots (outdoor) | 0.999 | 0.339 | 0.507 | 0.339 | 36/56 | 3 + 0 | PASS | 0.010 | 5.0 | 5.4 | 9.4 |
+| Zen (outdoor) | 1.000 | 0.313 | 0.476 | 0.313 | 48/66 | 4 + 0 | PASS | 0.011 | 5.0 | 5.5 | 9.4 |
+| Playground (outdoor) | 0.799 | 0.244 | 0.374 | 0.230 | 11/36 | 0 + 1 | PASS | 0.024 | 5.0 | 4.9 | 9.4 |
+| Porch (outdoor) | 0.939 | 0.443 | 0.602 | 0.430 | 39/68 | 2 + 2 | PASS | 0.010 | 5.0 | 6.0 | 9.4 |
 | **Indoor, pixels pooled (5 scenes)** | 0.879 | 0.176 | 0.293 | 0.172 | 89/398 | 15 | | | | | |
 | **Indoor, mean over scenes** | | | 0.269 | 0.166 | | | | | | | |
 | **Outdoor, pixels pooled (5 scenes)** | 0.954 | 0.365 | 0.528 | 0.359 | 164/284 | 15 | | | | | |
@@ -75,6 +82,18 @@ How to read the columns:
 
 107 of the 120 query photos have at least one correctly flagged pixel.
 
+### Ground-truth regions hit, by region size
+
+| Region size (pixels at 518 x 294) | Indoor | Outdoor | All |
+| --- | --- | --- | --- |
+| 50 to 199 | 4/168 (2%) | 7/62 (11%) | 11/230 (5%) |
+| 200 to 799 | 27/136 (20%) | 101/145 (70%) | 128/281 (46%) |
+| 800 and larger | 58/94 (62%) | 56/77 (73%) | 114/171 (67%) |
+
+Rough guide, not measured: with a 70 degree wide lens, a fist-sized object (10 cm) at 2 m
+covers about 350 pixels. A region is a blob of the mask, not an object: one blob can hold
+several objects, and a flat sheet of paper counts the same as a box.
+
 ### Unchanged pairs (the same 24 baseline photos against 12 other photos of the same capture)
 
 | Scene | Clusters (appeared + gone) | Flagged pixels, % of query photos | Verdict | Noise between clips |
@@ -93,8 +112,9 @@ How to read the columns:
 
 ## What the overlays showed
 
-Looked at 12 overlays and 3 detector contact sheets, at least one overlay for each of the 10
-scenes (`bench/out/paslcd/<scene>_inst1_changed/` on Iridis).
+Looked at 12 of the 30 overlays and 3 detector contact sheets, at least one overlay for each
+of the 10 scenes (`bench/out/paslcd/<scene>_inst1_changed/` on Iridis), plus 2 overlays of the
+different-lighting run.
 
 - **Where the false alarms come from.** Nearly all wrongly flagged pixels belong to "gone"
   objects (13,347 of 13,367). In the overlays they sit on the rim of an object that was found:
@@ -128,10 +148,12 @@ scenes (`bench/out/paslcd/<scene>_inst1_changed/` on Iridis).
   the precision on the changed pairs, where the two captures follow independent paths.
 - **Video.** These are sharp 12 MP stills. Motion blur, rolling shutter and the glasses' camera
   are not covered.
-- **Recall by object size.** The masks mix fist-sized objects with flat and tiny ones. The
-  harness does not yet split the hit rate by size, so "it finds 37% of regions" understates
-  how it does on the fist-sized objects the README asks for.
-- **Run-to-run spread.** One run per pair. Not repeated.
+- **Recall on objects it is meant to find.** The masks mix solid objects with flat things
+  (paper, stickers, spills) that a geometry-only detector cannot see, and PASLCD does not say
+  which is which. The size table is the nearest thing available. Nobody has sorted the misses
+  into "flat" and "solid but missed".
+- **Run-to-run spread.** The changed pairs were run twice with identical pixel counts. The
+  other pairs were run once.
 - **The paper's own numbers** are not comparable: its method trains a 3D model per scene and
   is scored on all 25 masks at full resolution. For orientation only, the paper reports mIoU
   0.46 and F1 0.61 on PASLCD (read from the arXiv page, not re-checked against the table).
@@ -176,12 +198,33 @@ half shows hits in green, false alarms in red and misses in blue.
 The harness loads `recon_change.py` from its own folder if there is one, otherwise from the
 parent folder, so the deployed copy is never touched. Use `--detector-dir` to point elsewhere.
 
-## Different lighting (`Instance_2`): not run yet
+## Different lighting (`Instance_2`, indoor scenes only)
 
-`Instance_2` pairs the same query photos with a reference capture taken in different lighting.
-The indoor scenes are downloaded (`fetch_paslcd.py --instances 2 --scenes Cantina Lounge
-Printing_area Lunch_room Meeting_room`) and job 2217821 was queued behind other GPU work, but
-it had not started when this was written. To run it:
+`Instance_2` pairs the same query photos with another reference capture, taken in different
+lighting and on another path. Its masks differ slightly from `Instance_1` in some scenes.
+Job 2217821, same detector commit.
+
+| Scene | Precision | Recall | F1 | IoU | GT regions hit | Clusters (appeared + gone) | Verdict | Noise between clips | IoU with same lighting |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Cantina | 0.885 | 0.226 | 0.360 | 0.220 | 22/118 | 1 + 2 | PASS | 0.016 | 0.111 |
+| Lounge | 0.779 | 0.409 | 0.537 | 0.367 | 31/65 | 1 + 3 | PASS | 0.008 | 0.352 |
+| Printing_area | 0.870 | 0.230 | 0.364 | 0.222 | 21/100 | 1 + 3 | PASS | 0.018 | 0.230 |
+| Lunch_room | 1.000 | 0.010 | 0.020 | 0.010 | 0/58 | 2 + 0 | PASS | 0.021 | 0.039 |
+| Meeting_room | 1.000 | 0.026 | 0.051 | 0.026 | 6/69 | 1 + 0 | PASS | 0.014 | 0.096 |
+| **Indoor, pixels pooled** | 0.861 | 0.200 | 0.325 | 0.194 | 80/410 | 14 | | | 0.172 |
+| **Indoor, mean over scenes** | | | 0.266 | 0.169 | | | | | 0.166 |
+
+- Regions hit by size: 4/178 small (2%), 26/138 medium (19%), 50/94 large (53%).
+- The 5 unchanged pairs: no cluster, no flagged pixel, NO CHANGE FOUND.
+- Overall it is about the same as with matching lighting, but single scenes move both ways
+  (Cantina up, Meeting_room and Lunch_room down). The reference capture differs in path as
+  well as in lighting, so this does not isolate the effect of lighting.
+- In Lunch_room the two reported clusters lie inside ground-truth regions but cover too
+  little of any region to count as a hit. The verdict is still PASS.
+
+```bash
+.venv-recon/bin/python -I bench/fetch_paslcd.py --out bench/data/PASLCD --instances 2 --scenes Cantina Lounge Printing_area Lunch_room Meeting_room
+```
 
 ```bash
 sbatch bench/bench.slurm --out bench/out/paslcd_inst2 --instance 2 --scenes Cantina Lounge Printing_area Lunch_room Meeting_room --detector-commit <commit>

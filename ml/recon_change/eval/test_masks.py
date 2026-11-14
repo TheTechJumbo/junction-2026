@@ -39,8 +39,8 @@ def main():
         tp, fp, fn = tp + int((p & gt).sum()), fp + int((p & ~gt).sum()), fn + int((~p & gt).sum())
         app_on_b, app_px = app_on_b + int((a & at_b).sum()), app_px + int(a.sum())
         gone_on_a, gone_px = gone_on_a + int((g & at_a).sum()), gone_px + int(g.sum())
-        n, h = run_bench.gt_regions(gt, p, 50, 0.10)
-        regions, hit = regions + n, hit + h
+        found = run_bench.gt_regions(gt, p, 50, 0.10)
+        regions, hit = regions + len(found), hit + sum(h for _, h in found)
     s = run_bench.scores(tp, fp, fn)
     print(f"precision {s['precision']:.3f} recall {s['recall']:.3f} F1 {s['f1']:.3f} IoU {s['iou']:.3f} | "
           f"regions hit {hit}/{regions}")
