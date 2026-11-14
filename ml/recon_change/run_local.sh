@@ -50,4 +50,6 @@ echo "worker: starting, log in $BEACON_ROOT/worker.log (the model takes up to a 
 PYTHONPATH="$WORKER_PATH" "$PY" -u live/worker.py > "$BEACON_ROOT/worker.log" 2>&1 &
 WORKER=$!
 trap 'touch "$BEACON_ROOT/STOP"; kill "$WORKER" 2>/dev/null || true' EXIT
-python -u live/relay.py --local "$BEACON_ROOT" --quick "${@:3}"
+# Recordings (POST /recording) are trained into a splat on this SSH host (empty: never). Needs the VPN; see video_map.py.
+BEACON_TRAIN_HOST="${BEACON_TRAIN_HOST-iridis}"
+python -u live/relay.py --local "$BEACON_ROOT" --quick ${BEACON_TRAIN_HOST:+--train-host "$BEACON_TRAIN_HOST"} "${@:3}"

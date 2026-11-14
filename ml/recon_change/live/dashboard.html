@@ -119,6 +119,11 @@
       <div class="strip" id="baseStrip"><span class="empty">No baseline for this room yet.</span></div>
     </div>
     <div class="card">
+      <h2>Recording (POST /recording)</h2>
+      <div class="meta" id="recNote">No recording of this room yet.</div>
+      <ul id="recFacts"></ul>
+    </div>
+    <div class="card">
       <h2>Moved while the camera stood still (cheap gate)</h2>
       <ul id="gateList"><li class="empty">Nothing yet.</li></ul>
       <div class="meta" id="gateCounts"></div>
@@ -486,13 +491,29 @@ async function refreshLog() {
     : /peak GPU memory|loaded|ready/.test(l) ? el('b', { textContent: l }) : l, '\n']));
   $('workerLog').scrollTop = $('workerLog').scrollHeight;
 }
-$('liveZone').onchange = () => { refreshLive(); refreshGate(); };
+async function refreshRecording() {  // the room's newest recording: chunks, frames, room map updates, Iridis training
+  if (!live.zone) return;
+  const r = await getOr(`/recording?zone=${encodeURIComponent(live.zone)}`);
+  if (!r || !r.ok) { $('recNote').textContent = `No recording of "${live.zone}" yet.`; $('recFacts').replaceChildren(); return; }
+  const tr = r.training || {}, t = (s) => s ? new Date(s * 1000).toLocaleTimeString() : '–';
+  $('recNote').textContent = `session ${r.session} · ${r.final ? 'ended' : 'recording'} · last chunk ${t(r.last_chunk_at)} (${r.age_s} s ago)`;
+  $('recFacts').replaceChildren(...[
+    `${r.frames} frames in ${r.chunks} chunks` + ((r.missing || []).length ? ` · missing chunks ${r.missing.join(', ')}` : ''),
+    `room map: ${r.map_state}, updated ${r.map_updates || 0} times (last at ${t(r.map_at)}, ${r.map_keyframes || '–'} keyframes)` + (r.map_error ? ` · ${r.map_error}` : ''),
+    `training on Iridis: ${tr.state || 'none'}` + (tr.job ? ` · job ${tr.job}` : '') + (tr.started_at ? ` · started ${t(tr.started_at)}` : '')
+      + (tr.state === 'done' ? ` · ${tr.psnr} dB, ${tr.keyframes} keyframes, ${(tr.gaussians || 0).toLocaleString('en-US')} Gaussians` : '')
+      + (tr.error ? ` · ${tr.error}` : ''),
+  ].map(text => el('li', { className: 'meta', textContent: text })));
+}
+$('liveZone').onchange = () => { refreshLive(); refreshGate(); refreshRecording(); };
 // ---------------------------------------------------------------- end of the live section
 
 refreshStatus(); refreshHistory(); refreshWork(); refreshLive(); refreshGate(); refreshLog();
 setInterval(refreshLive, 3000);
 setInterval(refreshGate, 5000);
 setInterval(refreshLog, 4000);
+setInterval(refreshRecording, 4000);
+refreshRecording();
 setInterval(refreshStatus, 8000);
 setInterval(refreshHistory, 5000);
 setInterval(refreshWork, 60000);

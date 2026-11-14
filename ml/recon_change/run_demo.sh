@@ -42,5 +42,6 @@ cd ml/recon_change
 if [ "${1:-}" = "--local" ]; then
     bash run_local.sh "${2:?give the Python that has torch and vggt}" "${3:-$HOME/beacon-local}" --host 0.0.0.0 --port 8090 --token "$RELAY_KEY"
 else
-    python -u live/relay.py --host 0.0.0.0 --port 8090 --token "$RELAY_KEY"
+    # the models on Iridis (VPN): instant fixes here, recordings trained there
+    python -u live/relay.py --host 0.0.0.0 --port 8090 --token "$RELAY_KEY" --quick --train-host "${BEACON_TRAIN_HOST-iridis}"
 fi

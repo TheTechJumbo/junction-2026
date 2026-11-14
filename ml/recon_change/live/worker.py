@@ -206,6 +206,66 @@ def qmul(a, b):
                      w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2], -1)
 
 
+REC_PICTURES = int(os.environ.get("RECON_REC_PICTURES") or 48)  # the room's pictures taken from a recording, at most
+
+
+def pick_keyframes(frames, most, change=0.9):
+    """[(number, picture)] from an iterable of (number, picture) in time order: the sharpest picture since the last
+    keyframe, taken once the view has moved on (cosine similarity of small grey copies of the middle squares under
+    `change`), so neighbouring keyframes overlap a lot. At most `most`, spread over the whole run. video_map.py and
+    recordings (recording_map) both pick with this."""
+    def small(frame):
+        g = cv2.cvtColor(cv2.resize(square_up(frame), (48, 48), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY).astype(np.float32)
+        g -= g.mean()
+        return (g / (np.linalg.norm(g) + 1e-6)).ravel()
+
+    picked, since, last = [], [], None
+    for number, frame in frames:
+        if frame is None:
+            continue
+        since.append((rc.sharpness(frame), number, frame))
+        if last is None or float(small(frame) @ last) < change:
+            _, best_number, best = max(since, key=lambda s: s[0])
+            picked.append((best_number, best))
+            last = small(best)
+            since = []
+        elif len(since) > 90:  # a long stretch with nothing new: only the newest frames stay candidates
+            since = since[-30:]
+    if len(picked) > most:
+        keep = np.linspace(0, len(picked) - 1, most).round().astype(int)
+        picked = [picked[i] for i in sorted(set(keep))]
+    return picked
+
+
+def recording_map(model, job, req):
+    """A room recorded as a stream of frames (relay POST /recording, stored under recordings/<zone>/<session>/frames):
+    the keyframes of everything so far become the zone's pictures (square, see square_up), then its room map is built
+    (room_map). Called again as the recording grows. Places named in the zone's old pictures no longer apply."""
+    folder = DATA / "recordings" / req["zone"] / req["session"] / "frames"
+    paths = sorted(folder.glob("*.jpg"))
+    if len(paths) < 6:
+        raise RuntimeError(f"Only {len(paths)} frames recorded so far: the room map needs a few more.")
+    t0 = time.time()
+    picked = pick_keyframes(((i, cv2.imread(str(p))) for i, p in enumerate(paths)), REC_PICTURES)
+    zone = BASELINES / req["zone"]
+    zone.mkdir(parents=True, exist_ok=True)
+    for old in zone.glob("*.jpg"):
+        old.unlink()
+    for chosen in ("waypoints.json", "watch.json", "scale.json"):
+        (zone / chosen).unlink(missing_ok=True)
+    for k, (_, frame) in enumerate(picked):
+        square = square_up(frame)
+        side = min(518, square.shape[1])
+        cv2.imwrite(str(zone / f"{k:02d}.jpg"), cv2.resize(square, (side, side * square.shape[0] // square.shape[1]),
+                                                           interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    chosen_s = round(time.time() - t0, 2)
+    result = room_map(model, job, req)
+    result.update(session=req["session"], recorded_frames=len(paths), keyframes=len(picked),
+                  keyframe_numbers=[n for n, _ in picked])
+    result["seconds"]["keyframes"] = chosen_s
+    return result
+
+
 def room_map(model, job, req):
     """The zone's baseline pictures in one pass (up to MAP_FRAMES, plus every picture a place was named in), as one
     splat in map axes: x east, y north, z up, in metres from the first baseline camera, the same axes the position
@@ -561,6 +621,14 @@ def main():
             print(f"Item detector NOT loaded: {traceback.format_exc()}", flush=True)
     (DATA / f"worker{LANE}.json").write_text(json.dumps(INFO))
     print("worker ready", flush=True)
+
+    def beat():  # the heartbeat also while a long job runs (a room map on a hot laptop card took minutes)
+        while not stop.exists():
+            alive.touch()
+            time.sleep(5)
+
+    import threading
+    threading.Thread(target=beat, daemon=True).start()
     while not stop.exists():
         alive.touch()  # heartbeat: the gateway reads this file's age, and reports "offline" when it goes stale
         for ready in sorted(QUEUE.glob("*/READY")):
@@ -572,7 +640,7 @@ def main():
             try:
                 req = json.loads((job / "request.json").read_text())
                 run = {"baseline": lambda: set_baseline(job, req), "locate": lambda: where(model, job, req),
-                       "map": lambda: room_map(model, job, req)}
+                       "map": lambda: room_map(model, job, req), "recording_map": lambda: recording_map(model, job, req)}
                 result = run.get(req["op"], lambda: check(model, job, req))()
                 memory = ""
                 if on_gpu:  # the most this job held at once (the model's weights included), for the dashboard

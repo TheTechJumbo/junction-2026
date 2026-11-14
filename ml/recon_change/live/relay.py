@@ -32,6 +32,12 @@ It prints the link to open. The link carries an access key, and every request ne
     GET  /viewer?live=kitchen     the room in 3D with the wearer moving in it, live (needs the room map below)
     POST /map?zone=kitchen        build the room map: the baseline pictures in one pass, as one splat (10 to 20 s)
     POST /locate?...&quick=0      with --quick: ask the model (or the cheap gate), not the instant fix
+    POST /recording?zone=Z&session=S&seq=N&final=0|1   one chunk of a room recorded continuously by the phone or the
+                                  glasses: a zip of frames NNNNNN_<ms>.jpg (or a video). A chunk sent twice counts once.
+                                  Every REC_MAP_EVERY new frames the room map is built again from the recording's
+                                  keyframes; at final=1, and every REC_TRAIN_EVERY_S while it runs, a splat is trained
+                                  on Iridis (--train-host) and /viewer?live=Z shows it
+    GET  /recording?zone=Z        the newest session: chunks, frames, gaps, room map updates, training
     GET  /room?zone=kitchen       the room map: its splat (/evidence/.../room.splat), places and baseline cameras
     GET  /frame?zone=kitchen      the newest photo that reached /locate, as it came (the dashboard's camera view)
     GET  /worker_log?lines=60     the end of the worker's log: model load, timings and peak GPU memory per job
@@ -486,11 +492,14 @@ def item_photo(photo):
 REPO = "TheTechJumbo/junction-2026"
 
 
+REC_MAP_EVERY = 60         # a recording's room map is built again after this many new frames
+REC_TRAIN_EVERY_S = 600    # and a splat trained on Iridis this often while it runs (and when it ends)
+SESSION_NAME = r"[A-Za-z0-9_-]{1,64}"
 AUTO_SPLATS_KEPT = 12  # with --splat-every-fix, only the newest few of those 3D files stay on disk (each about 4 MB)
 
 
 def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None, api_token=None,
-                 splat_every_fix=False, quick=False):
+                 splat_every_fix=False, quick=False, train_host=None, bg_link=None, remote_root=None):
     # The event API's address without the /events at its end: where /ask and /speak live.
     api_base = re.sub(r"/events/?$", "", event_api).rstrip("/") if event_api and api_token else None
     history_file = evidence_dir / "history.json"
@@ -890,14 +899,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         fix["headline"], fix["detail"] = where_in_plain_words(fix)
         return fix
 
-    def build_room(zone):
-        """Ask the worker for the zone's room map (see worker.room_map) and keep it. Returns the reply header."""
+    def build_room(zone, op="map", session=None):
+        """Ask the worker for the zone's room map (worker.room_map, or recording_map from a recording) and keep it.
+        A splat trained on the same recording stays with the room. Returns the reply header."""
         t0 = time.time()
-        header, blob = link.call({"op": "map", "zone": zone, "device": "gpu"})
+        # Its own connection to the gateway when there is one: a room map takes seconds to minutes, and photos for fixes
+        # and recording chunks must not wait behind it (one connection answers one request at a time).
+        header, blob = (bg_link or link).call({"op": op, "zone": zone, "device": "gpu", **({"session": session} if session else {})})
         if header.get("ok"):
             _, splat_url = keep_evidence(header["job"], blob)
             result = header["result"]
-            rooms[zone] = {**result, "zone": zone, "job": header["job"], "splat": splat_url, "at": time.time(),
+            trained = (rooms.get(zone) or {}).get("trained")
+            if trained and trained.get("session") != result.get("session"):
+                trained = None
+            rooms[zone] = {**result, "zone": zone, "job": header["job"], "splat": splat_url, "at": time.time(), "trained": trained,
                            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                            "seconds": {**result.get("seconds", {}), "total": round(time.time() - t0, 2)}}
             try:
@@ -926,6 +941,102 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 building.pop(zone, None)
 
         threading.Thread(target=run, daemon=True).start()
+
+    # ---- recordings (POST /recording): the room recorded continuously, mapped as it comes, trained on Iridis ----
+    recs_file = evidence_dir / "recordings.json"
+    try:
+        recs = json.loads(recs_file.read_text())  # {zone: the newest session's progress}
+    except (OSError, ValueError):
+        recs = {}
+    rec_lock = threading.Lock()
+
+    def save_recs():
+        try:
+            recs_file.write_text(json.dumps(recs))
+        except OSError:
+            pass
+
+    def rec_map(zone, session, frames):
+        """Build the room map from the recording so far (in the background)."""
+        try:
+            header = build_room(zone, "recording_map", session)
+        except Exception as err:  # noqa: BLE001
+            header = {"ok": False, "error": f"{type(err).__name__}: {err}"}
+        with rec_lock:
+            rec = recs.get(zone)
+            if rec and rec.get("session") == session:
+                rec["map_state"] = "done" if header.get("ok") else "failed"
+                if header.get("ok"):
+                    rec.update(map_frames=frames, map_updates=rec.get("map_updates", 0) + 1, map_at=time.time(),
+                               map_keyframes=(header.get("result") or {}).get("keyframes"))
+                rec["map_error"] = None if header.get("ok") else header.get("error")
+                again = rec["map_state"] == "done" and rec.get("frames", 0) - frames >= REC_MAP_EVERY
+                save_recs()
+            else:
+                again = False
+        if again:
+            start_map(zone, session)
+
+    def start_map(zone, session):
+        with rec_lock:
+            rec = recs.get(zone)
+            if not rec or rec.get("map_state") == "running":
+                return
+            rec["map_state"] = "running"
+            frames = rec.get("frames", 0)
+        threading.Thread(target=rec_map, args=(zone, session, frames), daemon=True).start()
+
+    def rec_train(zone, session):
+        """Train a splat of the recording so far on Iridis and make the room show it (in the background)."""
+        import remote_train
+        local = os.environ.get("BEACON_ROOT")  # --local: the frames are on this laptop; else the gateway keeps them remotely
+        root = Path(local or ".")
+        remote = None if local else f"{remote_root or remote_train.DEFAULT_ROOT}/recordings/{zone}/{session}/frames"
+        while True:
+            with rec_lock:
+                tr = recs[zone]["training"]
+                runs = tr.get("runs", 0) + 1
+                tr.update(state="running", started_at=time.time(), runs=runs, again=False, error=None)
+                save_recs()
+            out = evidence_dir / f"train-{zone}-{session}-{runs}"
+            try:
+                got = remote_train.train(root / "recordings" / zone / session / "frames", f"{zone}-{session}", out, host=train_host,
+                                         root=remote_root, remote_frames=remote,
+                                         log=lambda text: sys.stderr.write(f"training {zone}/{session}: {text}" + chr(10)))
+            except Exception as err:  # noqa: BLE001  Iridis unreachable, the job refused: say so on the page
+                got = {"state": "failed", "error": f"{type(err).__name__}: {err}"[:300]}
+            summary = got.get("summary") or {}
+            with rec_lock:
+                tr = recs[zone]["training"]
+                tr.update(state=got["state"], finished_at=time.time(), job=got.get("job"), error=got.get("error"),
+                          psnr=summary.get("psnr_median"), keyframes=summary.get("keyframes"), gaussians=summary.get("trained_gaussians"),
+                          frames=summary.get("frames"))
+                if got["state"] == "done":
+                    room = rooms.setdefault(zone, {"zone": zone, "job": None, "at": time.time()})
+                    room["trained"] = {"splat": f"/evidence/{out.name}/trained.splat", "session": session, "at": time.time(),
+                                       "psnr": summary.get("psnr_median"), "keyframes": summary.get("keyframes"),
+                                       "gaussians": summary.get("trained_gaussians"), "median_depth": summary.get("median_depth"),
+                                       "fov_deg": summary.get("fov_deg")}
+                    try:
+                        rooms_file.write_text(json.dumps(rooms))
+                    except OSError:
+                        pass
+                    tr["splat"] = room["trained"]["splat"]
+                repeat = tr.get("again")
+                if not repeat:
+                    tr["state"] = got["state"]
+                save_recs()
+            if not repeat:
+                return
+
+    def start_training(zone, session):
+        with rec_lock:
+            tr = recs[zone]["training"]
+            if tr.get("state") == "running":
+                tr["again"] = True  # once more when this one ends: the recording has moved on
+                return
+            tr["state"] = "running"
+        threading.Thread(target=rec_train, args=(zone, session), daemon=True).start()
 
     def pull_requests():
         """The repo's pull requests, for the dashboard's work panel. Asked from `gh` at most once a minute."""
@@ -1014,6 +1125,15 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200, {"ok": True, **log.report(date or None)})
             # ---- end day log ----
             zone = parse_qs(url.query).get("zone", [""])[0]
+            if url.path == "/recording":  # the zone's newest recording session
+                with rec_lock:
+                    rec = recs.get(zone)
+                    if rec:
+                        return self.send_json(200, {"ok": True, "zone": zone, **rec, "viewer": f"/viewer?live={zone}",
+                                                    "age_s": round(time.time() - rec.get("last_chunk_at", time.time()))})
+                header, _ = link.call({"op": "recording_status", "zone": zone}) if re.fullmatch(ZONE_NAME, zone) else ({"ok": False}, b"")
+                return self.send_json(200 if header.get("ok") else 404, header if header.get("ok") else
+                                      {"ok": False, "error": f"No recording of '{zone}' yet."})
             if url.path == "/room":  # the room map of a zone (POST /map makes it), for the live 3D page
                 got = rooms.get(zone)
                 if not got or not got.get("splat") or not (evidence_dir / got["job"] / "room.splat").exists():
@@ -1276,6 +1396,48 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200 if header.get("ok") else 400, header)
             if op in ("scale", "watch", "enroll"):  # what the carer sets once: see change_setup
                 return self.change_setup(op, query, zone, size)
+            if op == "recording":  # one chunk of a continuous recording
+                first = lambda name, default="": query.get(name, [default])[0]  # noqa: E731
+                session, final = first("session"), first("final", "0") == "1"
+                try:
+                    seq = int(first("seq"))
+                except ValueError:
+                    seq = -1
+                if not re.fullmatch(ZONE_NAME, zone) or not re.fullmatch(SESSION_NAME, session) or seq < 0 or not 0 <= size <= MAX_BODY \
+                        or (size == 0 and not final):
+                    self.rfile.read(min(size, 65536))
+                    return self.send_json(400, {"ok": False, "error": "POST /recording?zone=ROOM&session=NAME&seq=N&final=0|1 "
+                                                "with a zip of frames NNNNNN_<ms>.jpg (or a video) as the body"})
+                blob = self.rfile.read(size) if size else b""
+                header, _ = link.call({"op": "recording", "zone": zone, "session": session, "seq": seq, "final": final}, blob)
+                if not header.get("ok"):
+                    return self.send_json(400, header)
+                now = time.time()
+                with rec_lock:
+                    rec = recs.get(zone)
+                    if not rec or rec.get("session") != session:
+                        rec = recs[zone] = {"session": session, "started_at": now, "map_frames": 0, "map_updates": 0, "map_state": "none",
+                                            "training": {"state": "none", "runs": 0}}
+                    rec.update(frames=header["frames_total"], chunks=header["chunks"], missing=header["missing"], final=header["final"],
+                               last_chunk_at=now, last_seq=seq)
+                    need_map = rec["frames"] >= 6 and rec["map_state"] != "running" and (
+                        rec["frames"] - rec["map_frames"] >= REC_MAP_EVERY or (header["final"] and rec["frames"] > rec["map_frames"]))
+                    tr = rec["training"]
+                    since = now - (tr.get("started_at") or rec["started_at"])
+                    need_train = bool(train_host) and rec["frames"] >= 20 and (
+                        (header["final"] and not tr.get("final_started")) or (not header["final"] and since >= REC_TRAIN_EVERY_S))
+                    if need_train and header["final"]:
+                        tr["final_started"] = True
+                    save_recs()
+                if need_map:
+                    start_map(zone, session)
+                if need_train:
+                    start_training(zone, session)
+                with rec_lock:
+                    state = {"map": rec["map_state"], "training": rec["training"]["state"]}
+                return self.send_json(200, {"ok": True, "session": session, "seq": seq, "frames_total": header["frames_total"],
+                                            "status": "final" if header["final"] else "receiving", "viewer": f"/viewer?live={zone}",
+                                            "duplicate": header.get("duplicate"), "missing": header.get("missing"), **state})
             if op == "map":  # the room map: the zone's baseline pictures in one pass, as one splat in map axes
                 self.rfile.read(min(size, 65536))
                 if not re.fullmatch(ZONE_NAME, zone):
@@ -1440,6 +1602,9 @@ def main():
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets a phone on the same network reach the relay")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--token", default=secrets.token_urlsafe(9), help="access key; a random one is made if not given")
+    ap.add_argument("--train-host", help="train splats of recordings (POST /recording) on this SSH host, e.g. iridis "
+                    "(live/remote_train.py: video_map.py deployed there with the workers; BEACON_TRAIN_LAUNCH=direct for a "
+                    "machine without Slurm)")
     ap.add_argument("--quick", action="store_true", help="place photos instantly by cosine similarity to the room map's "
                     "pictures (POST /map), with the model at least every 4 s")
     ap.add_argument("--splat-every-fix", action="store_true", help="every position fix also builds the room as a 3D file, "
@@ -1451,14 +1616,17 @@ def main():
         Path(args.local).mkdir(parents=True, exist_ok=True)
         os.environ["BEACON_ROOT"] = str(Path(args.local).resolve())
         link = Link([sys.executable, "-u", str(HERE / "gateway.py")], name="the local gateway")
+        bg_link = Link([sys.executable, "-u", str(HERE / "gateway.py")], name="the local gateway (room maps)")
     else:
         link = Link(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
                      "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, remote_command(args.remote_root)])
     evidence_dir = Path(tempfile.gettempdir()) / "beacon-evidence"
     evidence_dir.mkdir(exist_ok=True)
     event_api, api_token = os.environ.get("EVENT_API_URL"), os.environ.get("EVENT_API_TOKEN")
-    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, splat_every_fix=args.splat_every_fix,
-                           quick=args.quick)
+    if not args.local:
+        bg_link = Link(link.argv, name="Iridis (room maps)")
+    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, splat_every_fix=args.splat_every_fix, bg_link=bg_link,
+                           quick=args.quick, train_host=args.train_host, remote_root=args.remote_root)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     addresses = ["127.0.0.1"]
     if args.host == "0.0.0.0":
@@ -1481,6 +1649,7 @@ def main():
         pass
     finally:
         link.close()
+        bg_link.close()
 
 
 if __name__ == "__main__":

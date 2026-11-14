@@ -70,7 +70,7 @@ const live = q.get('live');  // ?live=ZONE&k=KEY: follow the newest position fix
 if (!live) {
   try {
     const { mesh, count } = await load(q.get('src'));
-    note.textContent = `${count.toLocaleString('en-US')} Gaussians, built on a CPU with no training`;
+    note.textContent = `${count.toLocaleString('en-US')} Gaussians` + (/trained/.test(q.get('src')) ? ', trained on Iridis' : ', built on a CPU with no training');
     window.__viewer = { mesh, camera, controls, count };
   } catch (err) {
     note.textContent = `Could not load the 3D view: ${err.message || err}`;
@@ -111,6 +111,22 @@ if (!live) {
     }
     const info = await reply.json();
     room = info;
+    const trained = info.trained && info.trained.splat;
+    if (trained) {  // a splat trained on Iridis from a recording: it looks like the pictures. Its axes are the recording's
+      // first camera (as each fix's own file), not the room map's, so the wearer's cone is not drawn on it.
+      if (trained === roomJob) return true;
+      const { mesh } = await load(api(trained));
+      if (roomMesh) { scene.remove(roomMesh); roomMesh.dispose && roomMesh.dispose(); }
+      if (current) { scene.remove(current); current.dispose && current.dispose(); current = null; shown = ''; }
+      // Start exactly where the first keyframe was taken, with its field of view: a trained splat looks like the photos
+      // from where they were taken, and grows stray Gaussians a step away from them.
+      const d = info.trained.median_depth || 1;
+      camera.fov = info.trained.fov_deg || 58;
+      camera.position.set(0, 0, 0); controls.target.set(0, 0, -d);
+      camera.near = d * 0.005; camera.far = d * 200; camera.updateProjectionMatrix(); controls.update();
+      roomMesh = mesh; roomJob = trained;
+      return true;
+    }
     if (info.job === roomJob) return true;
     const { mesh } = await load(api(info.splat));
     mesh.quaternion.set(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);  // map axes -> three.js axes, as toThree
@@ -130,7 +146,7 @@ if (!live) {
   }
 
   function showFix(fix) {  // the wearer's cone, trail and the places, in the room map's axes
-    const ok = fix.state !== 'lost' && fix.position && !fix.unusable;
+    const ok = fix.state !== 'lost' && fix.position && !fix.unusable && !(room && room.trained && room.trained.splat);
     marker.visible = !!ok;
     if (ok) {
       marker.position.copy(toThree(fix.position));
@@ -160,7 +176,10 @@ if (!live) {
       const cover = fix && fix.coverage ? ` · ${Math.round(100 * fix.coverage.mapped_share)}% of this view mapped` : '';
       if (fix && fix.picture_added && fix.picture_added.name !== added) added = fix.picture_added.name;
       const growing = room && room.building ? ' · map growing…' : '';
-      const map = haveRoom ? `room map: ${room.frames} of ${room.of} pictures, ${(room.gaussians || 0).toLocaleString('en-US')} Gaussians` : '';
+      const map = !haveRoom ? '' : room.trained && room.trained.splat
+        ? `trained splat (Iridis): ${(room.trained.gaussians || 0).toLocaleString('en-US')} Gaussians from ${room.trained.keyframes} keyframes, `
+          + `${room.trained.psnr} dB on its pictures, ${new Date(room.trained.at * 1000).toLocaleTimeString()} (wearer not drawn: other axes)`
+        : `room map: ${room.frames} of ${room.of} pictures, ${(room.gaussians || 0).toLocaleString('en-US')} Gaussians`;
       if (!fix) { note.textContent = `Room "${live}": no position fix yet. Send photos from the phone.${map ? ' · ' + map : ''}`; return; }
       const when = new Date(fix.at * 1000).toLocaleTimeString();
       const words = `${fix.headline || fix.state} · ${fix.state} · photo at ${when}${fix.reused ? ' (same view)' : ''}${cover}`;
