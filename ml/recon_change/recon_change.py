@@ -20,6 +20,12 @@ not proof. When the clips line up worse with each other than frames of one clip 
 lands in a slightly different place and looks like "gone here, appeared there". The look-alike
 check removes that: a flagged surface is dropped when the other clip has a surface that looks the
 same (DINOv2 patch features, which VGGT computes anyway) within reach of it.
+
+Geometry cannot see flat or small things (a sheet of paper, a sticker, a spill, a pen). A second
+kind of evidence covers those and is reported on its own, as "looks_different": places where the
+after clip shows something that looks different from what every before frame showed there
+(colour and patch features), by much more than the after clip differs from itself. It does not
+change "appeared", "gone" or the verdict.
 """
 import argparse
 import json
@@ -42,6 +48,13 @@ WINDOW = 15
 # below one and a half image patches, which switches the check off, so nothing changes for them.
 REACH_PER_SIGMA, REACH_MAX = 15.0, 0.15
 FEAT_DIM = 256  # patch features are reduced to this many dimensions before they are stored
+# "Looks different" check. Appearance is compared on a grid of CELL x CELL pixel cells (half an
+# image patch). A cell is flagged when its score is above the limit: LOOK_MARGIN times the lowest
+# limit at which the unchanged control reports nothing, and at least LOOK_Z robust standard
+# deviations. Flagged cells must form a group of LOOK_MIN_VOXELS touching voxels, each seen in
+# two frames.
+CELL, LOOK_Z, LOOK_MARGIN, LOOK_MIN_VOXELS = 7, 8.0, 1.5, 8
+LOOK_SHIFTS = ((0, 0), (-4, 0), (4, 0), (0, -4), (0, 4))  # pixels: the best of these is the colour match
 GREEN, RED = (60, 220, 60), (60, 60, 235)  # BGR
 
 
@@ -420,11 +433,217 @@ def cluster(points, frames, voxel, min_voxels, min_frames):
     return [clusters[i] for i in order], remap[member]
 
 
+# ----------------------------------------------------------------------------- appearance
+def bilinear(img, x, y):
+    """Values of img (h, w, C) at fractional positions x, y -> (N, C)."""
+    h, w = img.shape[:2]
+    x, y = np.clip(x, 0, w - 1), np.clip(y, 0, h - 1)
+    x0 = np.minimum(np.floor(x).astype(np.int64), w - 2)
+    y0 = np.minimum(np.floor(y).astype(np.int64), h - 2)
+    fx, fy = (x - x0)[:, None].astype(np.float32), (y - y0)[:, None].astype(np.float32)
+    return ((1 - fx) * (1 - fy) * img[y0, x0] + fx * (1 - fy) * img[y0, x0 + 1]
+            + (1 - fx) * fy * img[y0 + 1, x0] + fx * fy * img[y0 + 1, x0 + 1])
+
+
+def colour_maps(rgb):
+    """Smoothed Lab colour of every frame. Lightness counts half: shadows change it the most."""
+    lab = [cv2.GaussianBlur(cv2.cvtColor(im, cv2.COLOR_RGB2LAB).astype(np.float32), (0, 0), 2.0) for im in rgb]
+    return np.stack(lab) * np.float32([0.5, 1.0, 1.0])
+
+
+def cells_of(r, valid, q):
+    """The CELL x CELL pixel cells of frame q that have enough trusted depth:
+    cell index, centre pixel (u, v) and the world point of the surface (median depth)."""
+    H, W = r.depth.shape[1:]
+    gh, gw = H // CELL, W // CELL
+    d = np.where(valid[q], r.depth[q], np.nan)[:gh * CELL, :gw * CELL]
+    d = d.reshape(gh, CELL, gw, CELL).transpose(0, 2, 1, 3).reshape(gh * gw, CELL * CELL)
+    cell = np.flatnonzero(np.isfinite(d).sum(1) >= CELL * CELL // 4)
+    z = np.nanmedian(d[cell], 1)
+    u, v = (cell % gw + 0.5) * CELL - 0.5, (cell // gw + 0.5) * CELL - 0.5
+    K, E = r.K[q], r.E[q]
+    cam = np.stack([(u - K[0, 2]) / K[0, 0] * z, (v - K[1, 2]) / K[1, 1] * z, z], -1)
+    return cell, u, v, ((cam - E[:, 3]) @ E[:, :3]).astype(np.float32)
+
+
+def best_match(r, lab, valid, pts, feat, colour, others, tol, beyond):
+    """Compare surface points (with their own patch feature and colour) with what each of the
+    frames `others` shows at that place. A frame counts when it has a trusted view of the same
+    surface, or (beyond=True) of something behind it: then it looked through the place, and what
+    it saw there is still what the place looked like. Something in front hides the place.
+    Returns the best feature similarity, the smallest colour difference and the number of
+    frames that counted, for each point."""
+    H, W = r.depth.shape[1:]
+    sim = np.full(len(pts), -1.0, np.float32)
+    diff = np.full(len(pts), np.inf, np.float32)
+    n = np.zeros(len(pts), np.int32)
+    for j in others:
+        K, E = r.K[j], r.E[j]
+        cam = pts @ E[:, :3].T + E[:, 3]
+        z = cam[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = K[0, 0] * cam[:, 0] / z + K[0, 2]
+            v = K[1, 1] * cam[:, 1] / z + K[1, 2]
+        inside = (z > 1e-6) & (u >= 0) & (u <= W - 1) & (v >= 0) & (v <= H - 1)
+        ui = np.clip(np.rint(np.nan_to_num(u)), 0, W - 1).astype(np.int64)
+        vi = np.clip(np.rint(np.nan_to_num(v)), 0, H - 1).astype(np.int64)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            gap = (r.depth[j][vi, ui] - z) / z
+        same = inside & valid[j][vi, ui] & (np.abs(gap) < tol)
+        ok = same | (inside & valid[j][vi, ui] & (gap > 0)) if beyond else same
+        idx = np.flatnonzero(ok)
+        if not len(idx):
+            continue
+        seen = np.stack([bilinear(lab[j], u[idx] + du, v[idx] + dv) for du, dv in LOOK_SHIFTS])
+        # Exposure and white balance drift between frames: remove the typical colour offset.
+        on_same = same[idx]
+        offset = np.median(colour[idx][on_same] - seen[0][on_same], 0) if on_same.sum() >= 50 else 0.0
+        diff[idx] = np.minimum(diff[idx], np.linalg.norm(colour[idx][None] - seen - offset, axis=-1).min(0))
+        if feat is not None:
+            h, w = r.feat.shape[1:3]
+            f = bilinear(r.feat[j], (u[idx] + 0.5) * w / W - 0.5, (v[idx] + 0.5) * h / H - 0.5)
+            f /= np.linalg.norm(f, axis=1, keepdims=True) + 1e-6
+            sim[idx] = np.maximum(sim[idx], np.einsum("ij,ij->i", feat[idx], f))
+        n[idx] += 1
+    return sim, diff, n
+
+
+def appearance(r, lab, valid, query, ref, tol, beyond=True):
+    """For every cell of the query frames: how much more it differs from the ref frames' view of
+    its place than from the other query frames' view of it. A cell on an edge, a reflection or
+    fine texture differs from every other view, its own clip included, so only the surplus counts.
+    Returns frame, cell, world point, colour surplus and feature surplus of each comparable cell."""
+    H, W = r.depth.shape[1:]
+    need = 2 if len(ref) >= 3 else 1
+    out = {k: [] for k in ("frame", "cell", "point", "colour", "feature")}
+    for q in query:
+        cell, u, v, pts = cells_of(r, valid, q)
+        colour = bilinear(lab[q], u, v)
+        feat = None
+        if r.feat is not None:
+            h, w = r.feat.shape[1:3]
+            feat = bilinear(r.feat[q], (u + 0.5) * w / W - 0.5, (v + 0.5) * h / H - 0.5)
+            feat /= np.linalg.norm(feat, axis=1, keepdims=True) + 1e-6
+        s_own, c_own, n_own = best_match(r, lab, valid, pts, feat, colour, [j for j in query if j != q], tol, False)
+        s_ref, c_ref, n_ref = best_match(r, lab, valid, pts, feat, colour, ref, tol, beyond)
+        ok = (n_own >= 1) & (n_ref >= need)
+        out["frame"].append(np.full(int(ok.sum()), q))
+        out["cell"].append(cell[ok])
+        out["point"].append(pts[ok])
+        out["colour"].append((c_ref - c_own)[ok])
+        out["feature"].append((s_own - s_ref)[ok] if feat is not None else np.zeros(int(ok.sum()), np.float32))
+    return {k: np.concatenate(v) if len(v) else np.zeros(0) for k, v in out.items()}
+
+
+def spread(x):
+    """Median and robust standard deviation."""
+    if not len(x):
+        return 0.0, 0.0
+    med = float(np.median(x))
+    return med, float(1.4826 * np.median(np.abs(x - med)))
+
+
+def look_scores(found, control):
+    """One score per cell: colour surplus plus feature surplus, each in robust standard
+    deviations. The scale is the wider of the two clips' own spread and the control's, with a
+    floor, so a noisy scene or a change of lighting makes the check less sensitive, not wrong.
+    Returns (scores of found, scores of control, scales)."""
+    scales = {}
+    score, score0 = np.zeros(len(found["frame"]), np.float32), np.zeros(len(control["frame"]), np.float32)
+    for key, floor in (("colour", 1.0), ("feature", 0.02)):
+        med, sd = spread(found[key])
+        med0, sd0 = spread(control[key])
+        scales[key] = max(sd, sd0, floor)
+        score += (found[key] - med) / scales[key]
+        score0 += (control[key] - med0) / scales[key]
+    return score, score0, scales
+
+
+def voxel_ids(points, size):
+    """One integer per point: the voxel of that size it falls in."""
+    k = np.floor(np.asarray(points, np.float64) / size).astype(np.int64) + (1 << 20)
+    return (k[:, 0] << 42) | (k[:, 1] << 21) | k[:, 2]
+
+
+def looks_clusters(r, valid, found, score, limit, voxel, min_voxels=LOOK_MIN_VOXELS, skip_points=None):
+    """Cells over the limit -> their trusted pixels -> groups of touching voxels, like the
+    geometry hits. Cells at a place the geometry already reports (skip_points) are left out, and
+    a group next to such a place is marked, so one object is not announced twice unknowingly."""
+    H, W = r.depth.shape[1:]
+    gh, gw = H // CELL, W // CELL
+    hit = score > limit
+    known = np.unique(voxel_ids(skip_points, 3 * voxel)) if skip_points is not None and len(skip_points) else np.zeros(0, np.int64)
+    if len(known):
+        hit &= ~np.isin(voxel_ids(found["point"], 3 * voxel), known)
+    points, frames, pixels = [], [], []
+    for q in np.unique(found["frame"][hit]):
+        grid = np.zeros(gh * gw, bool)
+        grid[found["cell"][hit & (found["frame"] == q)]] = True
+        mask = np.zeros((H, W), bool)
+        mask[:gh * CELL, :gw * CELL] = np.repeat(np.repeat(grid.reshape(gh, gw), CELL, 0), CELL, 1)
+        pix = np.flatnonzero(mask & valid[q])
+        points.append(unproject(r.depth[q], r.K[q], r.E[q]).reshape(-1, 3)[pix])
+        frames.append(np.full(len(pix), q))
+        pixels.append(pix)
+    out = {"points": np.concatenate(points) if points else np.zeros((0, 3), np.float32),
+           "frames": np.concatenate(frames) if frames else np.zeros(0, np.int64),
+           "pixels": np.concatenate(pixels) if pixels else np.zeros(0, np.int64)}
+    min_frames = 2 if len(np.unique(found["frame"])) >= 3 else 1
+    out["clusters"], out["member"] = cluster(out["points"], out["frames"], voxel, min_voxels, min_frames)
+    if len(known):
+        # neighbouring voxels of the geometry hits, one voxel of 3 x voxel around them
+        steps = np.array([(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1)], np.float64) * 3 * voxel
+        around = np.unique(np.concatenate([voxel_ids(np.asarray(skip_points, np.float64) + s, 3 * voxel) for s in steps]))
+    for i, c in enumerate(out["clusters"]):
+        c["next_to_geometry_change"] = bool(len(known) and np.isin(voxel_ids(out["points"][out["member"] == i], 3 * voxel), around).any())
+    return out
+
+
+def calm_limit(r, valid, unchanged, score0, voxel, min_voxels=LOOK_MIN_VOXELS):
+    """The lowest limit at which the control (the before clip against itself, where nothing
+    changed) reports no group at all. Raising the limit only removes cells, so a bisection over
+    the control's own scores finds it."""
+    over = np.sort(score0[score0 > LOOK_Z])
+    if not len(over) or not looks_clusters(r, valid, unchanged, score0, LOOK_Z, voxel, min_voxels)["clusters"]:
+        return LOOK_Z
+    lo, hi = 0, len(over) - 1  # with the highest score as the limit no cell is left
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if looks_clusters(r, valid, unchanged, score0, float(over[mid]), voxel, min_voxels)["clusters"]:
+            lo = mid + 1
+        else:
+            hi = mid
+    return float(over[lo])
+
+
+def find_looks_different(r, valid, reference, control, after, tol, voxel, skip_points=None, beyond=True):
+    """The "looks different" check: see the top of this file. r.feat must be unit length or None.
+    Returns (hits like compare() gives them, a summary for the report, the per-cell evidence)."""
+    lab = colour_maps(r.rgb)
+    found = appearance(r, lab, valid, after, reference, tol, beyond)
+    unchanged = appearance(r, lab, valid, control, reference, tol, beyond)
+    if len(found["frame"]) < 200 or len(unchanged["frame"]) < 200:
+        return None, {"active": False}, None
+    score, score0, scales = look_scores(found, unchanged)
+    calm = calm_limit(r, valid, unchanged, score0, voxel)
+    limit = max(LOOK_Z, LOOK_MARGIN * calm)
+    hits = looks_clusters(r, valid, found, score, limit, voxel, skip_points=skip_points)
+    info = {"active": True, "cells_compared": int(len(score)), "cells_over_limit": int((score > limit).sum()),
+            "limit": round(limit, 2), "control_calm_at": round(calm, 2),
+            "colour_scale": round(scales["colour"], 2), "feature_scale": round(scales["feature"], 3)}
+    return hits, info, {"found": found, "score": score, "unchanged": unchanged, "score_control": score0, "limit": limit}
+
+
 # ----------------------------------------------------------------------------- analysis
-def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WINDOW, cross=True, lookalike=True, reach=None):
+def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WINDOW, cross=True, lookalike=True, reach=None,
+            looks_different=True):
     """Find what appeared and what is gone between the first n_before frames and the rest.
-    lookalike=False switches the look-alike check off; reach overrides how far it searches."""
+    lookalike=False switches the look-alike check off; reach overrides how far it searches.
+    looks_different=False switches off the separate report of places that look different."""
     S = len(r.depth)
+    if r.feat is not None:  # unit length, so a dot product is a cosine similarity
+        unit = r.feat.astype(np.float32)
+        r = Recon(r.depth, r.conf, r.K, r.E, r.rgb, unit / (np.linalg.norm(unit, axis=-1, keepdims=True) + 1e-6))
     reference = list(range(0, n_before, 2))  # half of the before clip
     control = list(range(1, n_before, 2))  # the other half: same scene, nothing changed
     after = list(range(n_before, S))
@@ -446,8 +665,6 @@ def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WIND
             reach = min(REACH_PER_SIGMA * float(np.sqrt(max(sigma_cross ** 2 - sigma ** 2, 0.0))), REACH_MAX)
         patch_reach = 1.5 * (r.depth.shape[2] // r.feat.shape[2]) / float(np.median(r.K[:, 0, 0]))  # 1.5 patches, as a fraction of distance
         if reach >= patch_reach:
-            unit = r.feat.astype(np.float32)
-            r = Recon(r.depth, r.conf, r.K, r.E, r.rgb, unit / (np.linalg.norm(unit, axis=-1, keepdims=True) + 1e-6))
             typical = same_place_similarity(r, patch_table(r, valid, after), patch_table(r, valid, reference))
             look = (float(reach), float(np.clip(0.7 if typical is None else typical, 0.6, 0.85)))
 
@@ -460,8 +677,14 @@ def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WIND
     appeared, gone = run(after, reference, look), run(reference, after, look)
     false_a, false_b = run(control, reference), run(reference, control)
 
+    # Second kind of evidence, reported on its own: the place looks different.
+    looks, looks_info, looks_evidence = None, {"active": False}, None
+    if looks_different and len(control) >= 2 and len(after) >= 2:
+        known = np.concatenate([f["points"][f["member"] >= 0] for f in (appeared, gone)])
+        looks, looks_info, looks_evidence = find_looks_different(r, valid, reference, control, after, tol_agree, voxel, known)
+
     to_cm = 100 * typical_m / scale  # scene units -> cm, if a typical viewing distance is typical_m
-    for found in (appeared, gone, false_a, false_b):
+    for found in (appeared, gone, false_a, false_b) + ((looks,) if looks else ()):
         for c in found["clusters"]:
             c["size_cm_approx"] = [round(s * to_cm) for s in c["size"]]
     real = appeared["clusters"] + gone["clusters"]
@@ -490,8 +713,14 @@ def analyse(r, n_before, conf_pct=25.0, typical_m=2.0, min_voxels=8, window=WIND
                             "min_similarity": round(look[1], 3) if look else None,
                             "pixels_dropped": appeared["dropped"] + gone["dropped"]},
         "appeared": appeared["clusters"], "gone": gone["clusters"], "false_alarms_in_control": false,
+        # Not part of the verdict: places that look different although the geometry found no change there.
+        "looks_different_check": looks_info, "looks_different": looks["clusters"] if looks else [],
     }
-    return report, {"valid": valid, "appeared": appeared, "gone": gone, "reference": reference, "after": after}
+    detail = {"valid": valid, "appeared": appeared, "gone": gone, "reference": reference, "after": after,
+              "control": control, "voxel": voxel, "tol_agree": tol_agree}
+    if looks:
+        detail["looks_different"], detail["looks_evidence"] = looks, looks_evidence
+    return report, detail
 
 
 # ----------------------------------------------------------------------------- outputs
@@ -558,9 +787,9 @@ def print_report(report):
     print(report["verdict"])
     print(f"Self-consistency {report['self_consistency']:.0%} | depth noise {report['depth_noise_sigma']:.1%} | "
           f"smallest step it can see: about {report['smallest_detectable_step_cm_at_1m']} cm at 1 m")
-    for name in ("appeared", "gone", "false_alarms_in_control"):
-        print(f"{name.replace('_', ' ')}: {len(report[name])}")
-        for c in report[name][:6]:
+    for name in ("appeared", "gone", "false_alarms_in_control", "looks_different"):
+        print(f"{name.replace('_', ' ')}: {len(report.get(name, []))}")
+        for c in report.get(name, [])[:6]:
             print(f"   {c['voxels']:4d} voxels, about {'x'.join(map(str, sorted(c['size_cm_approx'], reverse=True)))} cm, "
                   f"seen in {c['frames']} frames")
     print("=" * 78)
@@ -577,6 +806,7 @@ def main():
     ap.add_argument("--conf-pct", type=float, default=25.0, help="drop this percentage of least-confident pixels")
     ap.add_argument("--save-recon", action="store_true", help="also save depth and cameras to recon.npz")
     ap.add_argument("--no-lookalike", action="store_true", help="switch off the look-alike check (see the top of this file)")
+    ap.add_argument("--no-looks-different", action="store_true", help="switch off the report of places that look different")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -598,7 +828,8 @@ def main():
         raise SystemExit("Give --before and --after, or --from-recon.")
 
     t0 = time.time()
-    report, detail = analyse(recon, n_before, args.conf_pct, args.typical_distance_m, lookalike=not args.no_lookalike)
+    report, detail = analyse(recon, n_before, args.conf_pct, args.typical_distance_m, lookalike=not args.no_lookalike,
+                             looks_different=not args.no_looks_different)
     print(f"Change detection: {time.time() - t0:.1f} s")
     (out / "report.json").write_text(json.dumps(report, indent=2))
     contact_sheet(recon, detail, out / "changes.jpg")

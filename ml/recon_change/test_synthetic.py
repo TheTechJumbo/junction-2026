@@ -6,6 +6,8 @@ the detector should report one thing gone near A, one thing appeared near B, and
 alarms in the control. A second scene with nothing moved must report no change. A third scene
 has the box rebuilt 20 cm off in the second clip, which is what misaligned clips do to a tall
 object: the look-alike check must drop it, and must still let a box that moved far through.
+A fourth scene has a flat sticker on the floor in the second clip: geometry cannot see it, the
+"looks different" check must, and it must report nothing when nothing changed.
 
     python test_synthetic.py
 """
@@ -22,7 +24,8 @@ BOX_A = np.array([-0.6, 1.2, 0.15])  # box centre before
 BOX_B = np.array([0.7, 1.7, 0.15])  # box centre after
 TARGET = np.array([0.0, 1.5, 0.2])  # every camera looks here
 K = np.array([[FOCAL, 0, W / 2], [0, FOCAL, H / 2], [0, 0, 1]], np.float32)
-BOX_RGB, ROOM_RGB = (200, 120, 40), (150, 150, 150)
+BOX_RGB, ROOM_RGB, STICKER_RGB = (200, 120, 40), (150, 150, 150), (40, 90, 200)
+STICKER = np.array([0.3, 0.9, 0.0])  # centre of a flat 30 cm square on the floor
 
 
 def camera(pos):
@@ -36,8 +39,9 @@ def camera(pos):
     return np.concatenate([R, (-R @ pos)[:, None]], 1).astype(np.float32)
 
 
-def render(E, box_centre, box_size, rng, noise):
-    """Exact z-depth of floor (z = 0), back wall (y = 3) and one axis-aligned box, plus noise."""
+def render(E, box_centre, box_size, rng, noise, sticker=False):
+    """Exact z-depth of floor (z = 0), back wall (y = 3) and one axis-aligned box, plus noise.
+    sticker=True colours a flat square on the floor: no depth changes."""
     R, t = E[:, :3], E[:, 3]
     origin = -R.T @ t
     u, v = np.meshgrid(np.arange(W), np.arange(H))
@@ -53,6 +57,11 @@ def render(E, box_centre, box_size, rng, noise):
     hit = np.isfinite(depth)
     depth = np.where(hit, depth * (1 + noise * rng.standard_normal(depth.shape)), 0.0)
     colour = np.where(depth[..., None] == 0, 0, np.where((box <= np.minimum(floor, wall))[..., None], BOX_RGB, ROOM_RGB))
+    if sticker:
+        with np.errstate(invalid="ignore"):
+            on_floor = origin + rays * np.where(np.isfinite(floor), floor, 0.0)[..., None]
+        inside = (floor < np.minimum(wall, box)) & (np.abs(on_floor[..., :2] - STICKER[:2]) < 0.15).all(-1)
+        colour = np.where(inside[..., None], STICKER_RGB, colour)
     return depth.astype(np.float32), hit, colour.astype(np.uint8)
 
 
@@ -62,7 +71,7 @@ def patch_features(colour):
     return kinds.astype(np.float32).reshape(H // 14, 14, W // 14, 14, 3).mean((1, 3))
 
 
-def scene(box_after, box_size=0.3, noise=0.01, seed=1, features=False):
+def scene(box_after, box_size=0.3, noise=0.01, seed=1, features=False, sticker=False):
     rng = np.random.default_rng(seed)
     size = np.full(3, box_size)
     # 24 "before" views then 12 "after" views, on an arc in front of the scene at about head height
@@ -71,7 +80,7 @@ def scene(box_after, box_size=0.3, noise=0.01, seed=1, features=False):
     for i, a in enumerate(angles):
         pos = np.array([2.2 * np.sin(a), 1.5 - 2.2 * np.cos(a), 1.5 + 0.1 * np.sin(3 * a)])
         e = camera(pos)
-        d, hit, c = render(e, BOX_A if i < 24 else box_after, size, rng, noise)
+        d, hit, c = render(e, BOX_A if i < 24 else box_after, size, rng, noise, sticker and i >= 24)
         depth.append(d)
         conf.append(np.where(hit, 2.0 + rng.random(d.shape), 1.0))  # misses get the lowest confidence
         E.append(e)
@@ -116,6 +125,18 @@ def main():
     print(f"  verdict: {report['verdict']}")
     check(report["verdict"].startswith("NO CHANGE"), "verdict is NO CHANGE")
     check(not report["appeared"] and not report["gone"], "nothing reported")
+    check(report["looks_different_check"]["active"] and not report["looks_different"], "nothing looks different")
+
+    print("Flat sticker (30 cm) on the floor in the second clip, nothing else changed:")
+    report, _ = analyse(scene(BOX_A, sticker=True), 24, conf_pct=0, typical_m=2.5)
+    print(f"  verdict: {report['verdict']}")
+    print(f"  looks different: {[(c['voxels'], c['size_cm_approx']) for c in report['looks_different']]}")
+    check(not report["appeared"] and not report["gone"], "geometry reports nothing")
+    check(len(near(report["looks_different"], STICKER, 0.2)) >= 1, "the sticker is reported as looks_different")
+    check(len(near(report["looks_different"], STICKER, 0.2)) == len(report["looks_different"]), "nothing else looks different")
+    check(report["verdict"].startswith("NO CHANGE"), "the verdict still comes from geometry alone")
+    report, _ = analyse(scene(BOX_A, sticker=True), 24, conf_pct=0, typical_m=2.5, looks_different=False)
+    check(not report["looks_different"] and not report["looks_different_check"]["active"], "looks_different=False switches it off")
 
     print("Box rebuilt 20 cm off in the second clip (misaligned clips), look-alike check:")
     shifted = scene(BOX_A + np.array([0.2, 0.0, 0.0]), features=True)
