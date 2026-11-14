@@ -20,10 +20,11 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
+from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.middleware.cors import CORSMiddleware
 
 from backend.storage import (
@@ -143,10 +144,19 @@ def verify_image(data, claimed_type):
             # verify() alone does not fully decode JPEG pixel data.
             with Image.open(io.BytesIO(data)) as img:
                 img.load()
+                # Normalize orientation and retain pixels only, never EXIF/GPS/comments.
+                pixels = ImageOps.exif_transpose(img).convert("RGB")
+                clean = Image.new("RGB", pixels.size)
+                clean.paste(pixels)
+                output = io.BytesIO()
+                clean.save(output, "JPEG" if detected == "image/jpeg" else "PNG")
+                normalized = output.getvalue()
+                if len(normalized) > MAX_EVIDENCE_BYTES:
+                    raise APIError(413, "too_large", "Normalized evidence exceeds 5 MiB.")
     except (UnidentifiedImageError, OSError, ValueError,
             Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise APIError(415, "unsupported_media", "Supply a valid JPEG or PNG.") from exc
-    return detected
+    return normalized, detected
 
 
 def create_app(settings=None, *, clock=None, engine=None, speech=None, store=None):
@@ -318,23 +328,32 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
         body = await bounded_body(request, MAX_EVIDENCE_BYTES + 65536)
         if content_type == "multipart/form-data":
-            # Reuse bounded bytes so the multipart parser cannot spool an unbounded request.
-            request._body = body
+            # The bounded entire body fits in RAM; raw uploads must never spool to disk.
+            class MemoryMultipartParser(MultiPartParser):
+                spool_max_size = MAX_EVIDENCE_BYTES + 65537
+
+            async def chunks():
+                yield body
             try:
-                async with request.form(max_files=1, max_fields=0,
-                                        max_part_size=MAX_EVIDENCE_BYTES) as form:
+                form = await MemoryMultipartParser(
+                    request.headers, chunks(), max_files=1, max_fields=0,
+                    max_part_size=MAX_EVIDENCE_BYTES,
+                ).parse()
+                try:
                     upload = form.get("file")
                     if upload is None or not hasattr(upload, "read") or len(form) != 1:
                         raise APIError(400, "invalid_input", "Use one multipart field named file.")
                     data = await upload.read(MAX_EVIDENCE_BYTES + 1)
                     media_type = upload.content_type
-            except HTTPException as exc:
+                finally:
+                    await form.close()
+            except MultiPartException as exc:
                 raise APIError(400, "invalid_input", "Invalid multipart upload.") from exc
         elif content_type in ("image/jpeg", "image/png"):
             data, media_type = body, content_type
         else:
             raise APIError(415, "unsupported_media", "Supply JPEG, PNG or a multipart file.")
-        media_type = await run_in_threadpool(verify_image, data, media_type)
+        data, media_type = await run_in_threadpool(verify_image, data, media_type)
         url = await run_in_threadpool(store.attach_evidence, event_id, data, media_type,
                                      now() + timedelta(seconds=settings.evidence_retention_seconds))
         return EvidenceResponse(evidence_url=url)

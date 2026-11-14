@@ -47,11 +47,13 @@ class SQLiteStore:
         self.database_url = database_url
         self._lock = threading.RLock()
         self._replication_lock = threading.Lock()
+        self._evidence_checkpoint_pending = True
         self.db = sqlite3.connect(self.path, check_same_thread=False, timeout=5)
         self.path.chmod(0o600)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
+        self.db.execute("PRAGMA secure_delete=ON")
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS events (
@@ -189,7 +191,22 @@ class SQLiteStore:
             return url
 
     def expire_evidence(self, now):
-        with self._lock, self.db:
+        with self._lock:
+            changed = self._expire_evidence(now)
+            self._evidence_checkpoint_pending |= changed
+            # Retry even without newly expired rows: another reader may have prevented
+            # truncation on an earlier pass. This removes historical WAL image frames.
+            if self._evidence_checkpoint_pending:
+                # An external reader must not stall answer requests for the DB timeout.
+                self.db.execute("PRAGMA busy_timeout=0")
+                try:
+                    busy, _, _ = self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                    self._evidence_checkpoint_pending = bool(busy)
+                finally:
+                    self.db.execute("PRAGMA busy_timeout=5000")
+
+    def _expire_evidence(self, now):
+        with self.db:
             rows = self.db.execute("SELECT id,event_id FROM evidence WHERE expires<=?",
                                    (stamp(now),)).fetchall()
             for row in rows:
@@ -210,6 +227,7 @@ class SQLiteStore:
                         self.db.execute("UPDATE replay SET event=? WHERE seq=?",
                                         (previous.model_dump_json(), entry["seq"]))
                 self.db.execute("DELETE FROM evidence WHERE id=?", (row["id"],))
+        return bool(rows)
 
     def get_evidence(self, evidence_id, now):
         self.expire_evidence(now)
