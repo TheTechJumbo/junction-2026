@@ -157,7 +157,9 @@ person can walk and finds the shortest way on it to each place. The relay adds i
 of that way and shows the walking distance. Where the map gives no way, the arrow points straight
 at the place as before, and `route.to[place].why` says why. `python eval/test_route.py` tests it
 offline on a made-up room; `python live/route_demo.py` shows it on the display without the
-cluster. What it does on real rooms, and what it cannot know, is in `eval/ROUTE_RESULTS.md`.
+cluster. `/hud?k=KEY&route=0` is the straight arrow as before. What it does on real rooms, and
+what it cannot know, is in `eval/ROUTE_RESULTS.md`: with today's floor plan what is shown is clear of
+true obstacles for 29% of the ways, against 13% for the straight arrow.
 
 **Questions, reminders and lost items (the demo flow):** the glasses display also asks and
 reminds. Start the relay with the team's event API (the backend that holds the sensor events)

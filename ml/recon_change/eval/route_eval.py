@@ -52,8 +52,9 @@ BRUSH_M = 0.15              # a line that is never deeper than this inside somet
 SETTINGS = [
     ("default settings", "", "shipped", {}),
     ("lone points do not count", "", "shipped", {"keep_lone": False}),
-    ("unseen floor costs 2", "", "shipped", {"unseen_cost": 2.0}),
+    ("unseen floor costs 0.5", "", "shipped", {"unseen_cost": 0.5}),
     ("unseen floor costs 5", "", "shipped", {"unseen_cost": 5.0}),
+    ("unseen floor costs 10", "", "shipped", {"unseen_cost": 10.0}),
     ("only within 1.0 m of the walked line", "", "shipped", {"corridor": 1.0}),
     ("only within 0.6 m of the walked line", "", "shipped", {"corridor": 0.6}),
     ("no extra cost near things", "", "shipped", {"near_cost": 0.0}),
@@ -255,15 +256,16 @@ def judge(truth, xy, skip_end=0.0):
             "deep_m": round(float(deep.max()), 2)}
 
 
-def true_walk(truth, stretch=2.0):
+def true_walk(truth, stretch=2.0, step=0.5):
     """The yardstick's own ceiling. The Kinect was truly carried along its recorded path, so a
     person truly got through there. Cut that path into stretches and judge each like a route: what
-    is not clear here is the hand-held camera passing over an edge, or the truth being too fat."""
+    is not clear here is the hand-held camera passing over an edge, or the truth being too fat.
+    The stretches are `stretch` metres long and start every `step` metres, so they overlap."""
     xy = truth["walked"]
     far = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
     out = []
-    for k in range(int(far[-1] // stretch)):
-        piece = xy[(far >= k * stretch) & (far < (k + 1) * stretch)]
+    for k in range(int(max(0.0, far[-1] - stretch) // step) + 1):
+        piece = xy[(far >= k * step) & (far < k * step + stretch)]
         m = judge(truth, piece[::3]) if len(piece) > 6 else None
         if m:
             out.append(m)
@@ -458,7 +460,7 @@ def main():
 
     walks = {room: true_walk(truths[room]) for room in rooms}
     for room, w in walks.items():
-        log(f"  {room}: the path the Kinect was truly carried along, in {len(w)} stretches of 2 m: clear {pct(sum(clear(m) for m in w), len(w))}, "
+        log(f"  {room}: the path the Kinect was truly carried along, in {len(w)} overlapping stretches of 2 m: clear {pct(sum(clear(m) for m in w), len(w))}, "
             f"brushes an edge {pct(sum(not clear(m) and not through(m) for m in w), len(w))}, goes through something {pct(sum(through(m) for m in w), len(w))}, "
             f"truly blocked share {mean_pct([m['blocked'] for m in w])}, never measured share {mean_pct([m['unknown'] for m in w])}")
     results = {name: [] for name, _, _, _ in SETTINGS}

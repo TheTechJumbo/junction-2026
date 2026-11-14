@@ -91,10 +91,15 @@ def check_room():
     print(f"table in the way: {way['length_m']:.2f} m on foot for {way['straight_m']:.2f} m straight, {way['corners']} corner(s), "
           f"never closer than {closest:.2f} m to the table, first leg {way['next']['bearing_deg']} degrees, {out['ms']} ms")
 
-    # 2. Without the table the route is the straight line.
-    out = route.plan(fix_of(walls(), {"pill box": PILL_BOX}))
-    way = out["to"]["pill box"]
+    # 2. Without the table, and with a baseline camera that walked straight up the room, the route is the straight line.
+    middle = [[0.0, -0.2], [0.0, 1.4], [0.0, 3.0], [0.0, 4.2]]
+    way = route.plan(fix_of(walls(), {"pill box": PILL_BOX}, cameras=middle))["to"]["pill box"]
     assert way["way"] == "route" and way["corners"] == 0 and way["length_m"] <= way["straight_m"] * 1.02, way
+    # 2b. The price of not knowing the floor: the baseline camera only walked along the walls (LOOP), so the
+    # middle of the empty room is floor nobody was seen on, and the route keeps towards the walked line. It
+    # may do so for a fifth more walking, not more.
+    way = route.plan(fix_of(walls(), {"pill box": PILL_BOX}))["to"]["pill box"]
+    assert way["way"] == "route" and way["length_m"] <= way["straight_m"] * 1.2 and way["corners"] <= 3, way
 
     # 3. A place ON the table: the route ends beside the table, within reach of the place.
     out = route.plan(fix_of(room, {"cup": [0.0, 2.0, 0.0]}))
@@ -112,7 +117,7 @@ def check_room():
 
     # 4b. A floor plan that misses the table (as today's can) leads straight through it. If the fix
     # also carries "obstacles", the plan cut for walking, the route is made on that one.
-    blind = fix_of(walls(), {"pill box": PILL_BOX})
+    blind = fix_of(walls(), {"pill box": PILL_BOX}, cameras=middle)
     assert route.plan(blind)["to"]["pill box"]["corners"] == 0
     blind["map"]["obstacles"] = [[round(x, 2), round(y, 2)] for x, y in room]
     assert route.plan(blind)["to"]["pill box"]["corners"] >= 1
