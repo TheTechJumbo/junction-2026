@@ -1,6 +1,7 @@
 """Actual teammate source plus combined local HTTP boundaries, never live credentials.
 
-Git objects are pinned; missing objects skip explicitly rather than substitute a mock.
+Historical Git objects are pinned; the merged relay is also loaded from the working tree.
+Missing historical objects skip explicitly rather than substitute a mock.
 Servers use disposable synthetic data and loopback sockets only.
 """
 import asyncio
@@ -48,9 +49,9 @@ def source_at(ref, path):
 
 
 def teammate_module(ref, path, tmp_path):
-    source = source_at(ref, path)
+    source = (ROOT / path).read_text() if ref == "working-tree" else source_at(ref, path)
     module = types.ModuleType("synthetic_teammate_review")
-    module.__file__ = str(tmp_path / Path(path).name)
+    module.__file__ = str(ROOT / path) if ref == "working-tree" else str(tmp_path / Path(path).name)
     previous_path = list(sys.path)
     try:
         exec(compile(source, f"{ref}:{path}", "exec"), module.__dict__)
@@ -139,8 +140,9 @@ def test_actual_unoq_export_to_api_answer_and_summary(app_context, tmp_path):
         assert len(client.get("/timeline").json()["events"]) == 3
 
 
-def test_actual_relay_vision_conversion_ingests_without_ground_truth(app_context, tmp_path):
-    relay = teammate_module(RELAY_REF, "ml/recon_change/live/relay.py", tmp_path)
+@pytest.mark.parametrize("relay_ref", [RELAY_REF, "working-tree"])
+def test_actual_relay_vision_conversion_ingests_without_ground_truth(app_context, tmp_path, relay_ref):
+    relay = teammate_module(relay_ref, "ml/recon_change/live/relay.py", tmp_path)
     report = {"verdict": "PASS synthetic", "appeared": [{"size_cm_approx": [20, 30, 40]}],
               "gone": [{"size_cm_approx": [30, 40, 50]}]}
     payload = relay.to_events(report, "kitchen", {"now": "/evidence/synthetic/now.jpg",
@@ -159,8 +161,9 @@ def test_actual_relay_vision_conversion_ingests_without_ground_truth(app_context
         assert answer["evidence"] == [] and "cannot confirm" in answer["answer"]
 
 
-def test_actual_relay_cache_navigation_never_requests_gpu(app_context, tmp_path):
-    relay = teammate_module(RELAY_REF, "ml/recon_change/live/relay.py", tmp_path)
+@pytest.mark.parametrize("relay_ref", [RELAY_REF, "working-tree"])
+def test_actual_relay_cache_navigation_never_requests_gpu(app_context, tmp_path, relay_ref):
+    relay = teammate_module(relay_ref, "ml/recon_change/live/relay.py", tmp_path)
     class NoGPU:
         def call(self, *args, **kwargs):
             pytest.fail("cached navigation must never request the GPU")
@@ -194,8 +197,9 @@ def test_actual_relay_cache_navigation_never_requests_gpu(app_context, tmp_path)
         server.server_close()
 
 
-def test_relay_egress_requires_central_authentication(app_context, tmp_path):
-    relay = teammate_module(RELAY_REF, "ml/recon_change/live/relay.py", tmp_path)
+@pytest.mark.parametrize("relay_ref", [RELAY_REF, "working-tree"])
+def test_relay_egress_requires_central_authentication(app_context, tmp_path, relay_ref):
+    relay = teammate_module(relay_ref, "ml/recon_change/live/relay.py", tmp_path)
     with server_for(app_context.app) as origin:
         from urllib.error import HTTPError
         # Existing teammate egress sends only Content-Type, so direct integration is rejected.

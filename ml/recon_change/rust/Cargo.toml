@@ -1,0 +1,20 @@
+[package]
+name = "recon_fast"
+version = "0.1.0"
+edition = "2021"
+description = "Rust versions of the per-pixel loops in recon_change.py (JUN-28)"
+publish = false
+
+[lib]
+name = "recon_fast"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module"] }
+numpy = "0.25"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

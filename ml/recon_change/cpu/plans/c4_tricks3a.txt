@@ -1,0 +1,2 @@
+--clips cpu/clips/after.mp4 cpu/clips/after_box.mp4 --frames 12+6 --long-side 294 --point-head
+--clips cpu/clips/after.mp4 cpu/clips/after_box.mp4 --frames 12+6 --long-side 294 --attn-chunk-mb 0

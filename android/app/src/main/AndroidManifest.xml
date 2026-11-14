@@ -12,8 +12,8 @@
     <application android:label="Memory with receipts" android:allowBackup="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:networkSecurityConfig="@xml/network_security_config">
-        <meta-data android:name="com.meta.wearable.mwdat.APPLICATION_ID" android:value="" />
-        <meta-data android:name="com.meta.wearable.mwdat.CLIENT_TOKEN" android:value="" />
+        <meta-data android:name="com.meta.wearable.mwdat.APPLICATION_ID" android:value="0" />
+        <meta-data android:name="com.meta.wearable.mwdat.CLIENT_TOKEN" android:value="0" />
         <meta-data android:name="com.meta.wearable.mwdat.ANALYTICS_OPT_OUT" android:value="true" />
         <meta-data android:name="com.meta.wearable.mwdat.CRASH_REPORTING_OPT_OUT" android:value="true" />
         <activity android:name=".MainActivity" android:exported="true">
