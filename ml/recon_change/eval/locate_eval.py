@@ -254,7 +254,8 @@ def main():
     ap.add_argument("--scenes", nargs="*")
     ap.add_argument("--n-baseline", nargs="*", type=int, default=[24, 12, 8])
     ap.add_argument("--kinds", nargs="*", default=["same", "wrong", "same_other_light"], choices=["same", "wrong", "same_other_light"])
-    ap.add_argument("--rounds", type=int, default=9, help="query photos per scene and kind (9 covers every other scene once)")
+    ap.add_argument("--rounds", type=int, default=9, help="query photos per scene and kind. 9 covers every other scene once; same-room kinds stop after "
+                         "12 rounds (12 query photos per scene), wrong-room queries repeat after 36")
     ap.add_argument("--minutes", type=float, default=36, help="stop starting new passes after this long")
     ap.add_argument("--detector-dir", help="folder with locate.py and recon_change.py (default: next to this script, else its parent)")
     ap.add_argument("--detector-commit", default="unknown")
@@ -347,13 +348,13 @@ def main():
         for n in args.n_baseline:
             for i, scene in enumerate(scenes):
                 s = info[scene]
-                if "same" in args.kinds:
+                if "same" in args.kinds and k < min(12, len(s["query"])):  # no photo is used twice
                     tasks.append(("same", n, scene, scene, s["query"][ORDER[k % 12] % len(s["query"])], k))
                 if len(scenes) > 1 and "wrong" in args.kinds:
                     wrong = scenes[(i + 1 + k % (len(scenes) - 1)) % len(scenes)]
                     photos = info[wrong]["query"]
                     tasks.append(("wrong", n, scene, wrong, photos[(ORDER[k % 12] + i) % len(photos)], k))
-                if "light2" in s:
+                if "light2" in s and k < min(12, len(s["light2"]["query"])):
                     photos = s["light2"]["query"]
                     tasks.append(("same_other_light", n, scene, scene, photos[ORDER[k % 12] % len(photos)], k))
     rows = read_rows(out)
