@@ -23,6 +23,7 @@ same (DINOv2 patch features, which VGGT computes anyway) within reach of it.
 """
 import argparse
 import json
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +31,22 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import recon_rust  # Rust versions of depth_gap and votes when built, else these NumPy ones run
+try:
+    import recon_rust
+except ModuleNotFoundError as exc:
+    if exc.name != "recon_rust":
+        raise
+    # A partially deployed checkout still serves the NumPy implementation.
+    print("recon_rust missing; using NumPy", file=sys.stderr)
+    class _NoRust:
+        @staticmethod
+        def enabled():
+            return False
+        @staticmethod
+        def fallback(*args, **kwargs):
+            return None
+        unproject = depth_gap = votes = patch_median = nearest = lookalike_count = fallback
+    recon_rust = _NoRust()
 
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 EDGE = 0.04  # neighbouring pixels whose depth differs by more than this fraction are an edge
