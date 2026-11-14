@@ -29,6 +29,9 @@ It prints the link to open. The link carries an access key, and every request ne
     GET  /reminders               the reminders, each with its state today: later, due, done or missed
     POST /reminder                body = {"text": "Time to take your pills", "time": "14:00", "place": "pill box"}
     POST /reminder?id=ID&now=1    show it now (also &done=1: finished by hand, &delete=1)
+    POST /route                   body = {"position": [east, north], "heading_deg": 0, "map": {...}, "waypoints": [...]}
+                                  -> the way around furniture from that standpoint (route.py). /locate and
+                                  /where carry the same under "route", from the wearer's own position
 
 A reminder is shown and spoken on the glasses display when it is due, with the way to its place.
 One for the pill box is done when a sensor reports the box was opened (read from the event API).
@@ -99,6 +102,15 @@ try:
     import recon_change as rc
 except ImportError:  # no OpenCV here: videos are forwarded whole
     cv2 = rc = None
+
+# --- route finding (route.py): plain Python, so it loads with or without OpenCV ---------------
+try:
+    if str(HERE.parent) not in sys.path:
+        sys.path.insert(0, str(HERE.parent))
+    import route as route_finder
+except ImportError:  # route.py is missing: fixes go out without a route, the display points straight
+    route_finder = None
+# --- end route finding --------------------------------------------------------------------------
 
 
 class Link:
@@ -503,6 +515,22 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 work["pull_requests"] = []
         return work["pull_requests"]
 
+    # --- route finding (route.py) ---------------------------------------------------------------
+    route_cache = {}  # {zone: (what it was worked out for, the routes)}: /where is polled, a fix is routed once
+
+    def routed(fix):
+        """The fix with "route" added: the way around furniture from the wearer to each named place
+        and each item seen (not the ones in doubt). A straight line, with the reason, where the
+        map gives no route. The fix itself is not changed."""
+        if route_finder is None:
+            return fix
+        targets = list(fix.get("waypoints") or []) + [s for s in seen.get(fix.get("zone"), {}).values() if not in_doubt(s)]
+        key = (fix.get("job"), fix.get("at"), json.dumps([[t.get("name"), t.get("position")] for t in targets]))
+        if route_cache.get(fix.get("zone"), (None, None))[0] != key:
+            route_cache[fix.get("zone")] = (key, route_finder.plan(fix, targets))
+        return {**fix, "route": route_cache[fix.get("zone")][1]}
+    # --- end route finding ----------------------------------------------------------------------
+
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, code, data, content_type):
             self.send_response(code)
@@ -544,6 +572,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:
                     return self.send_json(404, {"ok": False, "error": "No position fix yet. POST a photo to /locate first."})
+                fix = routed(fix)  # --- route finding (route.py): adds "route" to the reply
                 return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1), "seen": seen_list(fix["zone"], fix)})
             if url.path == "/waypoints":
                 header, _ = link.call({"op": "waypoints", "zone": zone})
@@ -653,6 +682,19 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.answer_service(op, self.rfile.read(min(size, 65536)), zone)
             if op == "reminder":
                 return self.change_reminder(query, zone, self.rfile.read(min(size, 65536)))
+            # --- route finding (route.py): the way from any standpoint on a map, without a new photo
+            if op == "route":
+                try:
+                    ask = json.loads(self.rfile.read(min(size, 262144)))
+                    asked = {"state": "found", "position": ask["position"], "heading_deg": ask.get("heading_deg", 0), "map": ask["map"]}
+                    targets = [{"name": str(t["name"]), "position": t["position"]} for t in ask.get("waypoints") or []]
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    return self.send_json(400, {"ok": False, "error": 'POST /route with a JSON body: {"position": [east, north], '
+                                                '"heading_deg": 0, "map": {"points": [...], "cameras": [...]}, "waypoints": [...]}'})
+                if route_finder is None:
+                    return self.send_json(503, {"ok": False, "error": "route.py is not next to the relay."})
+                return self.send_json(200, {"ok": True, "route": route_finder.plan(asked, targets)})
+            # --- end route finding
             if op == "forget":  # drop what is remembered about one item in a zone, or about all of them
                 self.rfile.read(min(size, 65536))
                 name, spots = query.get("name", [""])[0], seen.get(zone, {})
@@ -714,6 +756,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 except OSError:
                     pass
                 remember_items(zone, result, images)
+                fix = routed(fix)  # --- route finding (route.py): adds "route" to the reply, after the items are remembered
                 return self.send_json(200, {**fix, "age_s": 0.0, "seen": seen_list(zone, fix)})
             headline, detail = in_plain_words(result)
             events = to_events(result, zone, images)

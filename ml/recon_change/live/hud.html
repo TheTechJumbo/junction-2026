@@ -21,6 +21,11 @@
   everything under it is for the demo only (on the glasses, the question comes from the
   microphone). Black is "off" on a see-through display, so the square stays mostly black.
 
+  Route finding: a fix carries, under "route", the way around furniture to each place (route.py
+  on the relay). The arrow then points at the next corner of that way and the distance is the
+  walk, not the straight line; the small map shows the way as a dotted line. Without a route for
+  a place (too few map points, no way through) the arrow points straight at it, as before.
+
   /hud?k=KEY            live, from the relay
   /hud?k=KEY&demo=1     sample room, no relay needed: arrow keys or the buttons turn and walk,
                         and the answers, the reminder and the pill box are stand-ins
@@ -132,8 +137,57 @@ function fromMe(position) {  // metres, and degrees from straight ahead (+ to th
   return [Math.hypot(east, north), wrap(Math.atan2(east, north) * 180 / Math.PI - me.heading)];
 }
 
+// ---------------------------------------------------------------- route finding (route.py on the relay)
+// Where the route to a place leads next from where the wearer is now: the bearing of the next
+// corner, the metres still to walk along the route ("left", the last reach to the place included)
+// and the metres up to the spot where the wearer will stand ("walk"). null when the fix has no
+// route for the place or the wearer has left it: then the arrow points straight at the place.
+function nextLeg(to) {
+  const way = fix && fix.route && fix.route.to && fix.route.to[to.name];
+  if (!way || way.way !== 'route' || !way.points || way.points.length < 2) return null;
+  const P = way.points, last = P.length - 1;
+  let on = 0, off = Infinity;  // the stretch of the route the wearer is on: the nearest one
+  for (let i = 0; i < last; i++) {
+    const ax = P[i][0], ay = P[i][1], bx = P[i + 1][0] - ax, by = P[i + 1][1] - ay;
+    const t = Math.max(0, Math.min(1, ((me.x - ax) * bx + (me.y - ay) * by) / (bx * bx + by * by || 1)));
+    const d = Math.hypot(me.x - ax - t * bx, me.y - ay - t * by);
+    if (d < off - 1e-6) { off = d; on = i; }
+  }
+  if (off > 1) return null;
+  let k = on + 1;
+  while (k < last && Math.hypot(P[k][0] - me.x, P[k][1] - me.y) < 0.4) k++;  // a corner that is reached: on to the next
+  const [toCorner, bearing] = fromMe(P[k]);
+  let left = toCorner;
+  for (let i = k; i < last; i++) left += Math.hypot(P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1]);
+  const line = [[me.x, me.y], ...P.slice(k)].map(q => `${(q[0] * 26).toFixed(1)},${(-q[1] * 26).toFixed(1)}`).join(' ');
+  return { bearing, left, walk: Math.max(0, left - (way.reach_m || 0)), turns: last - k - (way.reach_m ? 1 : 0), line };
+}
+
+// The sample room has no relay fixes, so the relay is asked for the route from where the wearer
+// now stands (POST /route, no cluster needed). Without a relay the sample room keeps its straight arrow.
+let routeFrom = '', routeBusy = false;
+async function sampleRoute() {
+  const stamp = `${me.x.toFixed(2)} ${me.y.toFixed(2)}`;
+  if (!demo || !fix || routeBusy || stamp === routeFrom) return;
+  routeBusy = true; routeFrom = stamp;
+  try {
+    const ask = { position: [me.x, me.y], heading_deg: me.heading, map: fix.map, waypoints: spots().map(q => ({ name: q.name, position: q.position })) };
+    const reply = await fetch(api('/route'), { method: 'POST', body: JSON.stringify(ask) });
+    if (reply.ok && demo && fix) fix.route = (await reply.json()).route;
+  } catch { /* no relay: the straight arrow */ }
+  routeBusy = false;
+  draw();
+}
+
+function furnished(room) {  // the sample room gets a table between the wearer and the pill box, and a walked line
+  for (let x = 0; x <= 1.2; x += 0.1) for (let y = 1.4; y <= 2.2; y += 0.1) room.map.points.push([x, y]);
+  room.map.cameras = [[-1, -0.4], [-1.2, 1], [-1.2, 2.6], [-0.4, 3.2], [1, 3], [1.6, 1.8], [1.4, 0.2], [0.4, -0.5]];
+  return room;
+}
+
 // ---------------------------------------------------------------- drawing
 function draw() {
+  sampleRoute();  // route finding: only does something in the sample room
   const places = spots();
   // A due reminder points the arrow at its place once, as soon as the display knows that place.
   if (due && due.place && guidedFor !== due.id + due.due_at && places.some(p => p.name === due.place)) {
@@ -145,8 +199,11 @@ function draw() {
   $('going').textContent = due ? due.text.toUpperCase().slice(0, 34) : to && to.item ? `LAST SEEN ${to.time || ''}` : 'GOING TO';
   $('going').setAttribute('fill', due ? '#ffd23f' : '#7fd6a4');
   $('going').setAttribute('visibility', to || due ? 'visible' : 'hidden');
-  const [far, bearing] = to ? fromMe(to.position) : [0, 0];
-  const there = !!to && !lost && far < 0.8;
+  const [direct, straightOn] = to ? fromMe(to.position) : [0, 0];
+  // route finding: with a route, the arrow points at its next corner and the distance is the walk
+  const leg = to && !lost ? nextLeg(to) : null;
+  const far = leg ? leg.left : direct, bearing = leg ? leg.bearing : straightOn;
+  const there = !!to && !lost && (leg ? leg.walk < 0.4 || leg.left < 0.8 : direct < 0.8);
   show('arrow', !lost && !!to && !there);
   show('there', there);
   show('lost', lost && !!fix);
@@ -156,11 +213,16 @@ function draw() {
     : off <= 15 ? 'Straight ahead' : off <= 60 ? `Slightly ${side}` : off <= 135 ? `Turn ${side}` : 'Turn around';
   $('far').textContent = lost || !to || there ? '' : `about ${far < 3 ? (Math.round(far * 2) / 2 || 0.5) : Math.round(far)} m`;
   $('age').textContent = !fix ? '' : demo ? 'sample room' : `${fix.state === 'unsure' ? 'rough fix, ' : ''}updated ${Math.round((Date.now() - gotAt) / 1000 + (fix.age_s || 0))} s ago`;
+  // route finding: say which kind of arrow this is (a route around things, or the straight line and why)
+  const way = to && !lost && fix && fix.route && fix.route.to ? fix.route.to[to.name] : null;
+  if (to && !lost && !there) $('age').textContent += leg ? (leg.turns > 0 ? ` · ${leg.turns} turn${leg.turns > 1 ? 's' : ''} on the way` : ' · clear way')
+    : way && way.why ? ` · straight line: ${way.why}` : '';
 
   // Mini map, heading up: 1 m = 26 px, the wearer at the centre. Places are yellow, items are blue.
   const dots = fix ? fix.map.points.map(p => `<rect x="${(p[0] * 26).toFixed(1)}" y="${(-p[1] * 26).toFixed(1)}" width="2.4" height="2.4" fill="#2f7d55"/>`).join('') : '';
   const pins = places.map(p => `<circle cx="${p.position[0] * 26}" cy="${-p.position[1] * 26}" r="${p === to ? 8 : 5}" fill="${p.item ? (p === to ? '#7fb8ff' : '#3d6fa8') : (p === to ? '#ffd23f' : '#8a7a2a')}"/>`).join('');
-  setHTML('map', dots + pins);
+  const path = leg && !there ? `<polyline points="${leg.line}" fill="none" stroke="#3ddc84" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 7"/>` : '';  // route finding
+  setHTML('map', dots + path + pins);
   $('map').setAttribute('transform', `rotate(${(-me.heading).toFixed(1)}) translate(${(-me.x * 26).toFixed(1)} ${(me.y * 26).toFixed(1)})`);
 
   setHTML('targets', places.map(p => `<button class="${p === to ? 'on' : ''}${p.item ? ' item' : ''}" data-to="${encodeURIComponent(p.name)}">${esc(p.name)}${p.item ? ` · seen ${esc(p.time || '')}` : ''}</button>`).join(''));
@@ -290,10 +352,10 @@ function sampleRoom() {
   for (let t = -2; t <= 2; t += 0.12) points.push([t, 4.2], [t, -1.2]);
   for (let t = -1.2; t <= 4.2; t += 0.12) points.push([-2, t], [2, t]);
   for (let t = 0; t <= 1; t += 0.12) points.push([0.6 + t, 3.4], [0.6 + t, 4.0], [-1.9, 0.2 + t]);
-  return { state: 'found', confidence: 1, position: [0, 0, 0], heading_deg: 0, ts: 'sample', job: '', map: { points },
+  return furnished({ state: 'found', confidence: 1, position: [0, 0, 0], heading_deg: 0, ts: 'sample', job: '', map: { points },
            waypoints: [{ name: 'pill box', position: [1.2, 3.6, 0] }, { name: 'bathroom door', position: [-1.9, 2.4, 0] },
                        { name: 'front door', position: [0.4, -1.1, 0] }],
-           seen: [sample.keys] };
+           seen: [sample.keys] });  // route finding: furnished() adds a table to walk around
 }
 
 function sampleAnswer(question) {  // stand-ins with the wording of the real answers
