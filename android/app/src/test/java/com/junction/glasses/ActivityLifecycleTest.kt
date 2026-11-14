@@ -42,6 +42,7 @@ class ActivityLifecycleTest {
         // These tests drive the manual controls; an automatic launch permission request would
         // otherwise be in flight and cancel the microphone request they exercise.
         MainActivity.automaticSetup = false
+        MainActivity.alwaysOnAutoStart = false
         val app = RuntimeEnvironment.getApplication()
         shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
         shadowOf(app.packageManager).addResolveInfoForIntent(
@@ -76,6 +77,7 @@ class ActivityLifecycleTest {
         owner.destroy()
         drain()
         MainActivity.automaticSetup = true
+        MainActivity.alwaysOnAutoStart = true
     }
 
     @Test fun stopRejectsAlreadyQueuedRecognitionAndErrorCallbacks() {

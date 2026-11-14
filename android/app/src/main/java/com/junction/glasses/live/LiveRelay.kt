@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import com.junction.glasses.core.LocalHosts
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl
@@ -18,8 +19,10 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import java.io.File
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -102,8 +105,11 @@ internal data class LocateReply(
     }
 }
 
-/** A relay or network failure, worded for the screen. Never contains the key. */
-internal class RelayFailure(message: String) : IOException(message)
+/**
+ * A relay or network failure, worded for the screen. Never contains the key. [status] is the HTTP
+ * status when the relay answered; [unreachable] means no answer at all (cable out, wrong address).
+ */
+internal class RelayFailure(message: String, val status: Int? = null, val unreachable: Boolean = false) : IOException(message)
 
 /** A camera problem, worded for the screen. */
 internal class CameraFailure(message: String) : Exception(message)
@@ -117,7 +123,7 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
     private val base: HttpUrl = baseUrl.trim().toHttpUrl().also {
         require(it.username.isEmpty() && it.password.isEmpty() && it.query == null && it.fragment == null) { "Use a relay address without credentials, query or fragment" }
         require(it.encodedPath == "/") { "Use the relay origin without a path" }
-        require(it.isHttps || (allowLocalHttp && it.host in LOOPBACK)) { "HTTPS required except debug loopback" }
+        require(it.isHttps || LocalHosts.cleartextAllowed(it.host, allowLocalHttp)) { "HTTPS required except debug loopback or LAN" }
     }
     init {
         require(key.isNotBlank() && key.none { it == '\n' || it == '\r' }) { "A relay key is required" }
@@ -169,6 +175,30 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
             .build()
     }
 
+    /**
+     * One chunk of an always-on recording: POST {relay}/recording?zone=&session=&seq=&final=0|1 with a
+     * zip of NNNNNN_<epochMillis>.jpg frames (empty only for a final chunk with no new frames).
+     */
+    fun chunkRequest(zone: String, session: String, seq: Int, final: Boolean, zip: File): Request {
+        require(ZONE.matches(zone)) { "Zone names use a-z, 0-9, _ and -" }
+        require(SESSION.matches(session)) { "Session names use A-Z, a-z, 0-9, _ and -" }
+        require(seq >= 0) { "Chunks count from 0" }
+        return Request.Builder()
+            .url(base.newBuilder().addPathSegment("recording").addQueryParameter("zone", zone)
+                .addQueryParameter("session", session).addQueryParameter("seq", seq.toString())
+                .addQueryParameter("final", if (final) "1" else "0").build())
+            .header("X-Key", key)
+            .header("Accept", "application/json")
+            .post(zip.asRequestBody(ZIP))
+            .build()
+    }
+
+    suspend fun uploadChunk(zone: String, session: String, seq: Int, final: Boolean, zip: File): RecordingReply =
+        RecordingReply.parse(send(videoHttp, chunkRequest(zone, session, seq, final, zip)))
+
+    /** Where this client sends, for the screen: the address without the key. */
+    val address: String get() = base.toString().trimEnd('/')
+
     /** The laptop's status for the zone's latest video: GET {relay}/recording?zone={zone}. */
     fun recordingStatusRequest(zone: String): Request {
         require(ZONE.matches(zone)) { "Zone names use a-z, 0-9, _ and -" }
@@ -197,7 +227,7 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         cont.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                cont.resumeWithException(RelayFailure("Relay unreachable (${e.javaClass.simpleName}). Check the relay address, Wi-Fi or adb reverse."))
+                cont.resumeWithException(RelayFailure("Relay unreachable (${e.javaClass.simpleName}). Check the relay address, Wi-Fi or adb reverse.", unreachable = true))
             }
             override fun onResponse(call: Call, response: Response) {
                 val outcome = runCatching { response.use { read(it) } }
@@ -210,12 +240,12 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
     }
 
     private fun read(response: Response): String {
-        val body = response.body ?: throw RelayFailure("Relay HTTP ${response.code}: empty reply.")
+        val body = response.body ?: throw RelayFailure("Relay HTTP ${response.code}: empty reply.", status = response.code)
         val source = body.source()
         if (source.request(MAX_REPLY_BYTES + 1)) throw RelayFailure("Relay reply too large.")
         val text = source.buffer.readUtf8()
         if (!response.isSuccessful) {
-            throw RelayFailure("Relay HTTP ${response.code}" + (LocateReply.errorText(text)?.let { ": $it" } ?: "."))
+            throw RelayFailure("Relay HTTP ${response.code}" + (LocateReply.errorText(text)?.let { ": $it" } ?: "."), status = response.code)
         }
         return text
     }
@@ -227,7 +257,6 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         private val JPEG = "image/jpeg".toMediaType()
         private val ZIP = "application/zip".toMediaType()
         val VIDEO_MP4 = "video/mp4".toMediaType()
-        private val LOOPBACK = setOf("localhost", "127.0.0.1", "::1", "10.0.2.2")
         private val ZONE = Regex("[a-z0-9_-]{1,32}")
         /** The relay's SESSION_NAME. */
         private val SESSION = Regex("[A-Za-z0-9_-]{1,64}")

@@ -140,7 +140,57 @@ adb shell am start -n com.junction.glasses/.MainActivity --es relay_key REPLACE_
 Frames go only to the configured relay and nothing is saved on the phone: photos stay
 in memory. Debug builds remember the relay address, key and zone, encrypted like the
 backend token; Forget saved backend clears them too. Release builds ignore these extras.
-Debug builds may use cleartext loopback; any other relay address must be HTTPS.
+Debug builds may use cleartext to loopback and to private LAN addresses (10/8,
+172.16/12, 192.168/16); any other relay or backend address must be HTTPS, and release
+builds are HTTPS-only.
+
+**Cable out: the relay over Wi-Fi.** The relay listens on all interfaces, so on the same
+Wi-Fi the phone can reach `http://<laptop LAN IP>:8090`. Give that address once with
+`--es relay_lan_url http://192.168.1.20:8090` (remembered, encrypted). The always-on
+recording then tries 127.0.0.1 (adb reverse) first and switches to the Wi-Fi address
+when the USB address does not answer, trying USB first again 30 s later; the card says
+"(Wi-Fi)" next to the last upload while it uses it.
+
+### Record room at 10 frames per second
+
+Record room takes the newest frame of the selected camera 10 times a second for 10 to
+60 s (the glasses camera delivers 15 decoded frames per second; the phone's ImageAnalysis
+more). A tick with no new frame is skipped and counted, never filled with a repeat, and
+never waits for the camera. The zip holds up to 1200 frames or 120 MB, named `0000.jpg`
+onward, and replaces the zone's baseline on the relay.
+
+## Always-on recording (screen off, until Stop)
+
+The **Always-on recording** card records the room for the laptop all the time: with the
+screen off, in other apps, and after the app's screen is closed, until **Stop** on the
+card or in the notification. It runs as a foreground service with a persistent
+notification, "Recording the room for the laptop", showing the frames sent, the glasses
+state, the last upload and the battery, with a **Stop** button. Leaving the app does not
+stop it.
+
+- **Start**: automatic when the app opens with a relay key set (debug extras above),
+  unless Stop was tapped in this run of the app; or tap **Start recording**. The first
+  start asks once to allow notifications.
+- **Camera**: the glasses (the session stays up in the background; if they are not
+  registered or asleep the card says what it is waiting for), or the phone's back camera
+  only if you pick Phone. It never switches by itself.
+- **Frames and chunks**: the newest frame 10 times a second (none repeated), upright
+  JPEG, long side 960, quality 80. Every 10 s or 100 frames the frames go to the laptop as
+  one chunk: a zip of `NNNNNN_<epochMillis>.jpg`, `POST {relay}/recording?zone=&session=&seq=&final=0`
+  with the `X-Key` header, `final=1` on Stop. The newest frame also goes to `/locate` for
+  an instant fix, one request at a time.
+- **Upload failures**: chunks wait in the app's private storage (at most 300 MB; above
+  that the oldest are dropped) and are retried in order, after 2 s, 5 s, 10 s, 30 s, then
+  every 60 s. A chunk the relay refuses as malformed (HTTP 400 or 413) is dropped. After
+  Stop the app keeps sending for up to 60 s; anything left goes with the next recording.
+- **Battery and heat**: the card and notification show the battery; above 45 °C (the
+  phone's battery temperature) capture pauses, with a message, until it is below 43 °C.
+- **While it runs**, Live camera and Record room are unavailable (one camera user at a
+  time); the always-on recording already sends instant fixes.
+
+Privacy: frames go only to the configured relay. Chunks are kept on the phone only until
+the relay has them, in the app's own storage (no other app can read it; backup is
+disabled). Nothing is recorded without the notification showing.
 
 ## First phone-only test
 

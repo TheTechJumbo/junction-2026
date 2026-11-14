@@ -14,7 +14,8 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.SystemClock
 import android.util.Size
-import androidx.activity.ComponentActivity
+import android.content.Context
+import androidx.lifecycle.LifecycleOwner
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -31,12 +32,13 @@ import kotlin.coroutines.resumeWithException
 
 /**
  * The phone's back camera as a CameraX ImageAnalysis stream (keep only the latest frame), bound to
- * the Activity lifecycle. Created only when a frame is first wanted. A frame is encoded only when the
+ * [owner]'s lifecycle (the Activity, or the recording service so it keeps running with the screen off). Created only when a frame is first wanted. A frame is encoded only when the
  * send loop asks for one, so the photo sent is always the newest; while the gyroscope shows fast
  * turning, frames are skipped for up to 1 s. Frames stay in memory; nothing is written to storage.
  */
 internal class PhoneCamera(
-    private val activity: ComponentActivity,
+    private val context: Context,
+    private val owner: LifecycleOwner,
     private val encoder: FrameEncoder = FrameEncoder(),
 ) : FrameCamera<CameraFrame> {
     private val slot = FrameSlot<CameraFrame>(SystemClock::elapsedRealtimeNanos)
@@ -45,7 +47,7 @@ internal class PhoneCamera(
     private var provider: ProcessCameraProvider? = null
     private var analysis: ImageAnalysis? = null
     private var analyzerThread: ExecutorService? = null
-    private val sensors: SensorManager? = activity.getSystemService(SensorManager::class.java)
+    private val sensors: SensorManager? = context.getSystemService(SensorManager::class.java)
     private val gyroscope = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent?) {
             val values = event?.values ?: return
@@ -77,10 +79,10 @@ internal class PhoneCamera(
     // The caller only creates this class after the CAMERA permission is granted; checked again here.
     @SuppressLint("MissingPermission")
     private suspend fun bind() {
-        if (activity.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             throw CameraFailure("The phone camera needs the camera permission. Allow it, then start again.")
         }
-        val future = ProcessCameraProvider.getInstance(activity)
+        val future = ProcessCameraProvider.getInstance(context)
         val cameraProvider = suspendCancellableCoroutine<ProcessCameraProvider> { cont ->
             future.addListener({
                 try {
@@ -89,7 +91,7 @@ internal class PhoneCamera(
                 } catch (e: Exception) {
                     if (cont.isActive) cont.resumeWithException(e)
                 }
-            }, activity.mainExecutor)
+            }, context.mainExecutor)
         }
         val thread = Executors.newSingleThreadExecutor()
         val stream = ImageAnalysis.Builder()
@@ -102,7 +104,7 @@ internal class PhoneCamera(
             )
             .build()
         stream.setAnalyzer(thread) { image -> analyze(image) }
-        cameraProvider.bindToLifecycle(activity, CameraSelector.DEFAULT_BACK_CAMERA, stream)
+        cameraProvider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, stream)
         val manager = sensors
         val gyro = manager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         if (manager != null && gyro != null) manager.registerListener(gyroscope, gyro, SensorManager.SENSOR_DELAY_GAME)

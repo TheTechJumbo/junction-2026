@@ -46,6 +46,17 @@ internal class BackendMemory(
         true
     } catch (_: Exception) { false }
 
+    /** The relay's Wi-Fi address (the laptop's LAN IP), tried when the USB address does not answer. */
+    fun saveRelayLanUrl(url: String?): Boolean = try {
+        if (url == null) prefs.edit().remove(RELAY_LAN_URL).apply() else prefs.edit().putString(RELAY_LAN_URL, seal(RELAY_LAN_URL, url)).apply()
+        true
+    } catch (_: Exception) { false }
+
+    fun loadRelayLanUrl(): String? {
+        val stored = prefs.getString(RELAY_LAN_URL, null) ?: return null
+        return try { open(RELAY_LAN_URL, stored) } catch (_: Exception) { null }
+    }
+
     /** The remembered relay address, key and zone, or null when nothing (readable) is stored. */
     fun loadRelay(): Triple<String, String, String>? {
         val url = prefs.getString(RELAY_URL, null) ?: return null
@@ -84,6 +95,7 @@ internal class BackendMemory(
         private const val RELAY_URL = "relay_url"
         private const val RELAY_KEY = "relay_key"
         private const val RELAY_ZONE = "relay_zone"
+        private const val RELAY_LAN_URL = "relay_lan_url"
         private const val SEPARATOR = ":"
         private val ENCODER = Base64.getEncoder()
         private val DECODER = Base64.getDecoder()

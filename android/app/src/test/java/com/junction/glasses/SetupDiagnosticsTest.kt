@@ -35,6 +35,7 @@ class SetupDiagnosticsTest {
     private var backgrounded = false
     @Before fun setup() {
         MainActivity.automaticSetup = false // manual setup controls only; see AutomaticSetupActivityTest
+        MainActivity.alwaysOnAutoStart = false
         server = MockWebServer(); server.start()
         owner = Robolectric.buildActivity(MainActivity::class.java).setup()
         activity = owner.get()
@@ -45,6 +46,7 @@ class SetupDiagnosticsTest {
         if (!backgrounded) owner.pause().stop()
         owner.destroy(); server.shutdown(); drain()
         MainActivity.automaticSetup = true
+        MainActivity.alwaysOnAutoStart = true
     }
     @Test fun connectionRequiresAuthenticatedResponseAndCanRecheckWithoutRetypingToken() {
         server.enqueue(page())

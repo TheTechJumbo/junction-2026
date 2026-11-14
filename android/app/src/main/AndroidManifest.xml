@@ -7,6 +7,14 @@
     <!-- Read only: glasses videos that Meta AI imported (Download/Meta AI/), asked for at first use. -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- Always-on recording: a foreground service (glasses over Bluetooth, uploads, the phone camera
+         as a backup) with a persistent notification, keeping the CPU awake while it records. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <queries>
         <intent><action android:name="android.speech.RecognitionService" /></intent>
@@ -33,5 +41,7 @@
                 <data android:scheme="junctionglasses" />
             </intent-filter>
         </activity>
+        <service android:name=".RecordingService" android:exported="false"
+            android:foregroundServiceType="connectedDevice|dataSync|camera" />
     </application>
 </manifest>

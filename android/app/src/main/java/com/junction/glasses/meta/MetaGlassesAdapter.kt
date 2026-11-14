@@ -9,6 +9,7 @@ import android.graphics.YuvImage
 import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
 import com.meta.wearable.dat.core.session.DeviceSession
@@ -223,11 +224,14 @@ internal object YuvFrames {
 }
 
 /**
- * Meta DAT 1.0.1 adapter. Construct during Activity.onCreate, before STARTED.
- * All commands run on Main. Camera, speech and motion require explicit user actions.
- * Caller stops this adapter when leaving the foreground; no covert/background capture.
+ * Meta DAT 1.0.1 adapter. Construct during Activity.onCreate, before STARTED. All commands run on Main.
+ * The session lives in [parentScope] (GlassesHub's, for the whole app process), so it can outlive an
+ * Activity while the always-on recording runs in its foreground service. The Activity is needed only
+ * for what opens Meta AI or a consent dialog ([attach] it in onCreate, [detach] in onDestroy): with
+ * none attached those say "open the app"; the session, camera frames and reconnects still work.
+ * Without the always-on recording the caller stops this adapter when leaving the foreground.
  */
-class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: CoroutineScope) {
+class MetaGlassesAdapter(activity: ComponentActivity, parentScope: CoroutineScope) {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val observerErrors = CoroutineExceptionHandler { _, _ -> fail("Glasses connection interrupted. Reconnect to continue.") }
     private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.Main.immediate + observerErrors)
@@ -261,9 +265,29 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     private var listeningRequested = false
     private var cameraGeneration = 0L
     private var motionRequested = false
-    private val permissionLauncher = activity.registerForActivityResult(Wearables.RequestPermissionContract()) {
-        permissionResult?.complete(it.getOrDefault(PermissionStatus.Denied))
-        permissionResult = null
+    /** The Activity in front, for Meta AI hand-offs and consent dialogs; null while only the service runs. */
+    private var activity: ComponentActivity? = null
+    private var permissionLauncher: ActivityResultLauncher<Permission>? = null
+    init { attach(activity) }
+
+    /** Uses [activity] for Meta AI pages and consent dialogs. Call in its onCreate (before STARTED). */
+    fun attach(activity: ComponentActivity) {
+        if (this.activity === activity) return
+        permissionLauncher?.unregister()
+        this.activity = activity
+        permissionLauncher = activity.registerForActivityResult(Wearables.RequestPermissionContract()) {
+            permissionResult?.complete(it.getOrDefault(PermissionStatus.Denied))
+            permissionResult = null
+        }
+    }
+
+    /** [activity] is going away while the session stays (always-on recording). */
+    fun detach(activity: ComponentActivity) {
+        if (this.activity !== activity) return
+        permissionLauncher?.unregister(); permissionLauncher = null
+        permissionResult?.cancel(); permissionResult = null
+        registrationPending = false; metaAiPagePending = false
+        this.activity = null
     }
 
     private fun fail(message: String) { mutableState.update { it.copy(error = message) } }
@@ -306,7 +330,8 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
 
     fun initialize() {
         if (state.value.initialized) return
-        Wearables.initialize(activity).onSuccess {
+        val host = activity ?: run { fail("Open the app to start the glasses."); return }
+        Wearables.initialize(host).onSuccess {
             mutableState.update { it.copy(initialized = true, error = null) }
             refreshPermissions()
             runCommand { Wearables.registrationState.collect { value -> mutableState.update { it.copy(registration = value.name) } } }
@@ -317,8 +342,9 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
 
     fun register() {
         if (!state.value.initialized) { fail("Initialize glasses first."); return }
+        val host = activity ?: run { fail("Open the app to register with Meta AI."); return }
         registrationPending = true
-        Wearables.startRegistration(activity)
+        Wearables.startRegistration(host)
     }
 
     fun connect() {
@@ -397,10 +423,11 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
      */
     fun openGlassesAppUpdate() {
         if (!state.value.initialized) { fail("Initialize glasses first."); return }
+        val host = activity ?: run { fail("Open the app to install the glasses app in Meta AI."); return }
         metaAiPagePending = true
         Log.i(TAG, "opening Meta AI glasses app update")
         try {
-            Wearables.openDATGlassesAppUpdate(activity).onFailure { _, _ ->
+            Wearables.openDATGlassesAppUpdate(host).onFailure { _, _ ->
                 metaAiPagePending = false
                 fail("Could not open Meta AI. In Meta AI open App info → Developer mode and tap the glasses to install the glasses app.")
             }
@@ -441,9 +468,10 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     /** Opens Meta AI's glasses firmware update page (DeviceCompatibility DEVICE_UPDATE_REQUIRED). */
     fun openFirmwareUpdate() {
         if (!state.value.initialized) { fail("Initialize glasses first."); return }
+        val host = activity ?: run { fail("Open the app to update the glasses in Meta AI."); return }
         metaAiPagePending = true
         try {
-            Wearables.openFirmwareUpdate(activity).onFailure { _, _ ->
+            Wearables.openFirmwareUpdate(host).onFailure { _, _ ->
                 metaAiPagePending = false; fail("Could not open Meta AI. Update the glasses firmware in Meta AI.")
             }
         } catch (e: CancellationException) { throw e }
@@ -560,11 +588,14 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
             fail("Glasses ${enumName(permission).lowercase()} consent was not given. Allow it in Meta AI; asking again in a minute.")
             return false
         }
+        val launcher = permissionLauncher ?: run {
+            fail("Open the app to allow the glasses ${enumName(permission).lowercase()} in Meta AI."); return false
+        }
         val result = CompletableDeferred<PermissionStatus>()
         permissionResult = result
         return try {
             Log.i(TAG, "asking Meta AI for ${enumName(permission)} consent")
-            permissionLauncher.launch(permission)
+            launcher.launch(permission)
             val status = withTimeoutOrNull(60_000) { result.await() }
             recordPermission(permission, status)
             val granted = status == PermissionStatus.Granted
@@ -792,7 +823,7 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         mutableMotion.value = null
         mutableState.update { it.copy(connection = "DISCONNECTED", camera = "STOPPED", display = if (it.displayEnabled) "UNAVAILABLE" else "NOT_REQUIRED", speech = "STOPPED", motion = "STOPPED") }
     }
-    fun close() { disconnect(); job.cancel(); permissionLauncher.unregister() }
+    fun close() { disconnect(); job.cancel(); permissionLauncher?.unregister(); permissionLauncher = null; activity = null }
 
     private companion object {
         /** Logcat tag for session states, SDK error names and outcomes. No audio, images, tokens or addresses. */

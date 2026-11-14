@@ -45,11 +45,13 @@ class AutomaticSetupActivityTest {
     private var owner: ActivityController<MainActivity>? = null
     private val activity: MainActivity get() = owner!!.get()
 
-    @Before fun setup() { server = MockWebServer(); server.start() }
+    // The always-on recording would start a foreground service; it has its own JVM tests (AlwaysOnPartsTest).
+    @Before fun setup() { MainActivity.alwaysOnAutoStart = false; server = MockWebServer(); server.start() }
     @After fun cleanup() {
         owner?.pause()?.stop()?.destroy()
         drain(); server.shutdown()
         MainActivity.automaticSetup = true
+        MainActivity.alwaysOnAutoStart = true
         MainActivity.backendMemoryOverride = null
     }
 

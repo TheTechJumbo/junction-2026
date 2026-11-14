@@ -43,6 +43,9 @@ import com.junction.glasses.live.RecordingUploader
 import com.junction.glasses.live.RelayClient
 import com.junction.glasses.live.RoomRecorder
 import com.junction.glasses.live.FramePump
+import com.junction.glasses.live.AlwaysOn
+import com.junction.glasses.live.AlwaysOnRules
+import com.junction.glasses.live.AlwaysOnStatus
 import com.junction.glasses.live.SizeSettle
 import com.junction.glasses.live.StreamUploadBody
 import com.junction.glasses.live.UploadOutcome
@@ -69,6 +72,8 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** Tests that drive the controls by hand switch this off before creating the Activity. */
         internal var automaticSetup = true
+        /** Tests switch off the always-on recording's automatic start (it would start a foreground service). */
+        internal var alwaysOnAutoStart = true
         /** Tests replace the Android Keystore memory with a software key; production leaves this null. */
         internal var backendMemoryOverride: BackendMemory? = null
         private val PHONE_PERMISSIONS = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
@@ -162,6 +167,12 @@ class MainActivity : ComponentActivity() {
     private var armedZone: String? = null
     private var pendingMediaAction: (() -> Unit)? = null
     private var relayUrl = RelayClient.DEFAULT_URL
+    /** The laptop's Wi-Fi address for the relay, tried when 127.0.0.1 (USB) does not answer. */
+    private var relayLanUrl: String? = null
+    private lateinit var alwaysOnButton: Button
+    private lateinit var alwaysOnText: TextView
+    private var pendingAlwaysOn = false
+    private var notificationsAsked = false
     private var relayKey: String? = null
     private var relayZone = RelayClient.DEFAULT_ZONE
     /** DEBUG builds with automatic setup only; release builds never persist the backend. */
@@ -180,6 +191,7 @@ class MainActivity : ComponentActivity() {
             pendingLiveCamera = false
             if (isGranted(Manifest.permission.CAMERA)) startLiveCamera() else liveDetails.text = "Camera permission is needed for the live camera."
         }
+        if (pendingAlwaysOn) { pendingAlwaysOn = false; startAlwaysOn(auto = false) }
         pendingMediaAction?.let { action ->
             pendingMediaAction = null
             if (isGranted(mediaPermission())) action() else uploadStatus.text = "Allow access to videos so the app can send glasses videos."
@@ -198,7 +210,8 @@ class MainActivity : ComponentActivity() {
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         audio = AndroidAudioOutput(this)
-        glasses = MetaGlassesAdapter(this, lifecycleScope)
+        // The app's glasses adapter: a fresh one per Activity, except while the always-on recording runs.
+        glasses = GlassesHub.forActivity(this, keepSession = AlwaysOn.isRecording)
         colors = Palette((resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(24))
@@ -247,8 +260,9 @@ class MainActivity : ComponentActivity() {
         }
         backendChip = chip(); glassesChip = chip(); micChip = chip()
         setupStatus = note("Setting up automatically…")
-        card("Live camera")
-        note("Sends the selected camera to the relay one photo at a time, so the laptop can rebuild the room. Frames go only to the configured relay; nothing is saved on the phone.")
+        card("Always-on recording")
+        note("Records the room for the laptop all the time, also with the screen off or in other apps, until you tap Stop here or in the notification. " +
+            "Frames go only to the configured relay; chunks stay on the phone only until they are uploaded. Camera: the glasses, or the phone if you pick it.")
         val sourceGroup = RadioGroup(this).apply { orientation = LinearLayout.HORIZONTAL }
         for (source in CameraSource.values()) {
             sourceGroup.addView(RadioButton(this).apply {
@@ -265,6 +279,12 @@ class MainActivity : ComponentActivity() {
         }
         container.addView(sourceGroup)
         zoneField = field("Zone (a-z, 0-9, _ or -)").apply { setText(relayZone) }
+        alwaysOnButton = button("Start recording", primary = true) {
+            if (AlwaysOn.isRecording) RecordingService.stop(this) else startAlwaysOn(auto = false)
+        }
+        alwaysOnText = label("Always-on recording is off.")
+        card("Live camera")
+        note("Sends the camera and zone chosen above to the relay one photo at a time, so the laptop can rebuild the room. Frames go only to the configured relay; nothing is saved on the phone.")
         liveButton = button("Start live camera", primary = true) { toggleLiveCamera() }
         liveHeadline = label("Live camera is off.", 18f).apply { setTypeface(null, Typeface.BOLD) }
         liveDetails = label("")
@@ -398,6 +418,7 @@ class MainActivity : ComponentActivity() {
             deviceStatus.text = "Registration: ${s.registration}\nDevices: ${s.deviceCount} · ${s.connection}\nGlasses: ${s.device ?: "not reported yet"}\nCamera: ${s.camera} · ${displayDescription(s.display)}\nSpeech: ${s.speech} · Motion: ${s.motion}\nGlasses consent — Camera: ${s.cameraPermission}; microphone: ${s.microphonePermission}" + (s.error?.let { "\n$it" } ?: "")
             refreshAutomaticSetup()
         } }
+        lifecycleScope.launch { AlwaysOn.status.collect { renderAlwaysOn(it) } }
         lifecycleScope.launch { glasses.motion.collect { reading ->
             motionStatus.text = reading?.let { "Glasses acceleration: %.2f, %.2f, %.2f".format(it.x, it.y, it.z) }
                 ?: "Motion readings are off; no gestures have been inferred."
@@ -408,10 +429,12 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) glasses.initialize()
         updatePermissionStatus()
         backendMemory?.loadRelay()?.let { (url, key, zone) -> relayUrl = url; relayKey = key; relayZone = zone; zoneField.setText(zone) }
+        relayLanUrl = backendMemory?.loadRelayLanUrl()
         if (!consumeDebugBackendExtras(apply = savedInstanceState == null)) connectRememberedBackend()
         renderRelaySettings()
         refreshPhoneVideos()
         startAutomaticSetup()
+        maybeAutoStartAlwaysOn()
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -436,24 +459,26 @@ class MainActivity : ComponentActivity() {
         val extras = DebugBackendLaunch.read(source, BuildConfig.DEBUG) ?: return false
         setIntent(DebugBackendLaunch.withoutExtras(source))
         if (!apply) return false
-        if (extras.hasRelay) applyRelaySettings(extras.relayUrl, extras.relayKey, extras.relayZone)
+        if (extras.hasRelay) applyRelaySettings(extras.relayUrl, extras.relayKey, extras.relayZone, extras.relayLanUrl)
         extras.backendUrl?.let { endpoint.setText(it) }
         extras.apiToken?.let { connectAutomatically(it) }
         return extras.hasBackend
     }
     /** New relay settings from adb replace the remembered ones; a running live camera restarts with them. */
-    private fun applyRelaySettings(url: String?, key: String?, zone: String?) {
+    private fun applyRelaySettings(url: String?, key: String?, zone: String?, lanUrl: String? = null) {
+        lanUrl?.let { relayLanUrl = it; backendMemory?.saveRelayLanUrl(it) }
         url?.let { relayUrl = it }
         key?.let { relayKey = it }
         zone?.let { relayZone = it; zoneField.setText(it) }
         relayKey?.let { backendMemory?.saveRelay(relayUrl, it, relayZone) }
         renderRelaySettings()
         if (liveLoop != null) { stopLiveCamera("Live camera restarting with the new relay settings."); startLiveCamera() }
+        if (::alwaysOnButton.isInitialized) maybeAutoStartAlwaysOn()
     }
     /** The relay address and zone, and whether a key is set. The key itself is never shown. */
     private fun renderRelaySettings() {
         if (liveLoop != null) return
-        liveDetails.text = "Relay: $relayUrl · zone $relayZone · key ${if (relayKey.isNullOrBlank()) "not set" else "set"}."
+        liveDetails.text = "Relay: $relayUrl" + (relayLanUrl?.let { " (Wi-Fi: $it)" } ?: "") + " · zone $relayZone · key ${if (relayKey.isNullOrBlank()) "not set" else "set"}."
     }
     private fun toggleLiveCamera() {
         if (liveLoop != null) stopLiveCamera("Live camera is off.") else startLiveCamera()
@@ -467,7 +492,7 @@ class MainActivity : ComponentActivity() {
     /** The frame source for the live stream and recordings; it creates the selected camera only when a frame is wanted. */
     private fun sources(): LiveSources<CameraFrame> = liveSources ?: LiveSources<CameraFrame>(cameraSource) { source ->
         when (source) {
-            CameraSource.PHONE -> PhoneCamera(this)
+            CameraSource.PHONE -> PhoneCamera(this, this)
             CameraSource.GLASSES -> GlassesCamera(glasses)
         }
     }.also { liveSources = it }
@@ -502,6 +527,7 @@ class MainActivity : ComponentActivity() {
     /** Starts the send loop: capture the newest frame, post it, wait for the reply, repeat. */
     private fun startLiveCamera() {
         if (liveLoop != null) return
+        if (AlwaysOn.isRecording) { liveDetails.text = "The always-on recording is using the camera and already sends instant fixes. Stop it first."; return }
         if (recordJob != null) { liveDetails.text = "Recording the room; start the live camera after it."; return }
         if (videoRecorder != null) { liveDetails.text = "Recording a video; start the live camera after it."; return }
         val client = relayClient(liveDetails) ?: return
@@ -534,6 +560,7 @@ class MainActivity : ComponentActivity() {
     }
     /** Record room replaces the zone's baseline on the relay, so it asks first, naming the zone. */
     private fun confirmRecording() {
+        if (AlwaysOn.isRecording) { recordStatus.text = "The always-on recording is using the camera. Stop it first."; return }
         if (videoRecorder != null) { recordStatus.text = "A video is recording; stop it first."; return }
         val client = relayClient(recordStatus) ?: return
         val zone = zoneField.text.toString().trim()
@@ -623,6 +650,7 @@ class MainActivity : ComponentActivity() {
         when {
             videoRecorder != null -> stopPhoneVideo()
             glassesWatch.armed -> disarmGlasses("Cancelled. No glasses video will be sent for this recording.")
+            AlwaysOn.isRecording && cameraSource == CameraSource.PHONE -> recordStatus.text = "The always-on recording is using the phone camera. Stop it first."
             cameraSource == CameraSource.PHONE -> startPhoneVideo()
             else -> armGlasses()
         }
@@ -927,6 +955,68 @@ class MainActivity : ComponentActivity() {
         glassesWatch.markSent(video.id)
         uploadGlassesVideo(video, zone)
     }
+    // ---- Always-on recording: a foreground service keeps recording until Stop ----
+
+    /** Starts by itself when the app opens with a relay key, unless already recording or stopped in this run. */
+    private fun maybeAutoStartAlwaysOn() {
+        if (!automaticSetup || !alwaysOnAutoStart || pendingAlwaysOn) return
+        if (AlwaysOnRules.autoStart(enabled = true, relayKeySet = !relayKey.isNullOrBlank(), recording = AlwaysOn.isRecording,
+                stoppedByUser = AlwaysOn.stoppedByUser)) startAlwaysOn(auto = true)
+    }
+    /** Starts the service from the Activity in front; asks once for notifications and, for the phone, the camera. */
+    private fun startAlwaysOn(auto: Boolean) {
+        if (AlwaysOn.isRecording) return
+        val key = relayKey
+        if (key.isNullOrBlank()) {
+            alwaysOnText.text = if (BuildConfig.DEBUG) "No relay key yet. Send it with adb: --es relay_key … (see README)." else "Always-on recording needs a debug build with a relay key."
+            return
+        }
+        val zone = cardZone()
+        if (!RelayClient.isZone(zone)) { alwaysOnText.text = "Zone names use a-z, 0-9, _ and - (for example kitchen)."; return }
+        val source = AlwaysOnRules.source(cameraSource)
+        val missing = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= 33 && !notificationsAsked && !isGranted(Manifest.permission.POST_NOTIFICATIONS)) missing += Manifest.permission.POST_NOTIFICATIONS
+        if (source == CameraSource.PHONE && !isGranted(Manifest.permission.CAMERA)) missing += Manifest.permission.CAMERA
+        if (missing.isNotEmpty() && !notificationsAsked) {
+            notificationsAsked = true
+            pendingAlwaysOn = true
+            permissions.launch(missing.toTypedArray())
+            return
+        }
+        if (source == CameraSource.PHONE && !isGranted(Manifest.permission.CAMERA)) {
+            alwaysOnText.text = "The phone camera needs the camera permission for always-on recording."
+            return
+        }
+        // One camera user at a time: the live stream and a room recording stop first.
+        if (liveLoop != null) stopLiveCamera("Live camera stopped: the always-on recording uses the camera.")
+        if (recordJob != null) stopRecording("Record room stopped: the always-on recording uses the camera. Nothing was uploaded.")
+        if (videoRecorder != null && source == CameraSource.PHONE) stopPhoneVideo()
+        releaseSources()
+        val config = AlwaysOn.Config(relayUrl, relayLanUrl, key, zone, source)
+        try {
+            RecordingService.start(this, config)
+            alwaysOnText.text = (if (auto) "Starting automatically" else "Starting") + " · ${source.label} · zone $zone…"
+        } catch (e: Exception) {
+            alwaysOnText.text = "Always-on recording could not start (${e.javaClass.simpleName})."
+        }
+    }
+    private fun renderAlwaysOn(status: AlwaysOnStatus) {
+        if (!::alwaysOnButton.isInitialized) return
+        val recording = AlwaysOn.isRecording
+        alwaysOnButton.text = when {
+            status.stopping -> "Stopping…"
+            recording -> "Stop recording"
+            else -> "Start recording"
+        }
+        val heading = when {
+            status.stopping -> "Stopping: the last chunk goes to the laptop…"
+            recording -> "Recording · " + RecordingService.summary(status)
+            status.session != null -> "Always-on recording is off. Last session: ${status.session} (${status.chunksSent} chunks sent, ${status.chunksWaiting} still on the phone)."
+            else -> status.waiting ?: "Always-on recording is off."
+        }
+        alwaysOnText.text = if (recording || status.stopping) heading + "\n" + RecordingService.details(status) else heading
+    }
+
     private fun renderLive(snapshot: LiveSnapshot<CameraFrame>) {
         if (liveLoop == null) return
         // The camera makes a thumbnail at most twice a second; other frames leave the picture as it is.
@@ -1316,7 +1406,8 @@ class MainActivity : ComponentActivity() {
         // A phone video is stopped and finalised; it is then sent as usual. An armed glasses wait keeps running,
         // because Meta AI has to be opened to import the glasses video.
         stopPhoneVideo()
-        if (!glasses.isExternalFlowPending) { glasses.stopListening(); glasses.suspendLifecycle() }
+        // The always-on recording keeps the glasses session (and the camera) while the app is not in front.
+        if (!glasses.isExternalFlowPending) { glasses.stopListening(); if (!AlwaysOn.isRecording) glasses.suspendLifecycle() }
         super.onStop()
     }
     override fun onResume() {
@@ -1330,6 +1421,7 @@ class MainActivity : ComponentActivity() {
             autoGlasses.onForeground()
             continueAutomaticSetup()
         }
+        if (::alwaysOnButton.isInitialized) maybeAutoStartAlwaysOn()
         // Back from Meta AI: look for a newly imported glasses video in case no change was reported.
         if (::autoSendGlasses.isInitialized && (glassesWatch.armed || autoSendGlasses.isChecked)) checkGlassesVideos()
     }
@@ -1345,7 +1437,8 @@ class MainActivity : ComponentActivity() {
         stopRecording("Recording stopped.")
         videoRecorder?.release()
         unwatchGlassesVideos()
-        recognizer?.destroy(); glasses.close(); audio.close()
+        // While the always-on recording runs, the glasses session stays for its service; otherwise it ends here.
+        recognizer?.destroy(); GlassesHub.release(this, glasses, keepSession = AlwaysOn.isRecording); audio.close()
         super.onDestroy()
     }
 }

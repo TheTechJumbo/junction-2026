@@ -23,7 +23,7 @@ class HttpBackendClient(baseUrl: String, private val token: String, allowLocalHt
     private val base = baseUrl.toHttpUrl().also {
         require(it.username.isEmpty() && it.password.isEmpty() && it.query == null && it.fragment == null) { "Use a server URL without credentials, query or fragment" }
         require(it.encodedPath == "/") { "Use the server origin without a path" }
-        require(it.isHttps || (allowLocalHttp && it.host in setOf("localhost", "127.0.0.1", "::1", "10.0.2.2"))) { "HTTPS required except explicit local development" }
+        require(it.isHttps || LocalHosts.cleartextAllowed(it.host, allowLocalHttp)) { "HTTPS required except explicit local development" }
     }
     init { require(token.isNotBlank() && !token.contains('\n') && !token.contains('\r')) { "A valid session token is required" } }
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
