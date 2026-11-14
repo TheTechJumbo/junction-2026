@@ -37,6 +37,15 @@ A job takes about 40 seconds on an L4 GPU. The verdict is at the end of `slurm-j
 The before clip is split in two. One half is the reference and the other half is a control:
 nothing changed between them, so anything found there is a false alarm.
 
+`report.json` also has `lookalike_check`. When the two clips line up worse with each other than
+frames of one clip do, a tall object (a tree, a lamp) is rebuilt in a slightly different place
+and looks like "gone here, appeared there". The check drops a flagged surface when the other
+clip has a surface that looks the same within `reach` of it (a fraction of the viewing
+distance). "Looks the same" uses the DINOv2 patch features VGGT computes anyway, so it costs no
+extra model and no extra GPU time. `reach` grows with the measured misalignment and is zero
+for well-aligned clips, where the check is off and results are unchanged. `--no-lookalike`
+switches it off.
+
 | Verdict | Meaning |
 | --- | --- |
 | PASS | Changes found, and the control is clean |
@@ -97,9 +106,20 @@ from the reconstruction on a CPU in about 0.05 s (`splat.py`), with what appeare
 what is gone as red ghosts. `live/viewer.html` shows it in the browser.
 
 **CPU worker:** `sbatch iridis/worker_cpu.slurm` starts the same worker on CPU cores only, with
-its own queue. Send a check to it with `&device=cpu`. On 16 AMD EPYC cores, 12+6 frames at
-294 px take 30 to 40 s, but that setting is too coarse and the check comes back as unreliable;
-the right setting is still being measured (`RECON_FRAMES`, `RECON_LONG_SIDE`).
+its own queue. Send a check to it with `&device=cpu`. It uses fewer frames at full size (8+4
+frames, long side 518). The CPU benchmark measured that setting at 34 s per check on 32 AMD EPYC
+cores, with the same answer as the GPU. Smaller frames are faster, but the depth gets too noisy
+for the detector, so cut frames, not size (`RECON_FRAMES`, `RECON_LONG_SIDE`). The numbers are in
+`cpu/RESULTS.md` on branch `jun-22-cpu-speed`. The live CPU worker has not been run with this
+setting yet.
+
+**Where is the wearer, and directions:** name places once on `/places?k=KEY` by clicking a spot
+in a baseline picture. Then `POST /locate?zone=kitchen` with a photo or a short clip of what the
+wearer sees returns where they stand, which way they face, and the distance and bearing to each
+place, in about 5 s on the GPU. `GET /where?zone=kitchen` returns the latest fix. `/hud?k=KEY`
+is the glasses display that draws it: an arrow, a distance and a mini map.
+`/hud?k=KEY&demo=1` is a sample room that needs no relay. A view that does not match the room
+comes back as `lost`. Distances are rough: they assume things are about 2 m away.
 
 - The video stays on the laptop: the relay picks the sharp frames with OpenCV and sends only
   those (about 1 MB) to Iridis.
@@ -124,7 +144,10 @@ the right setting is still being measured (`RECON_FRAMES`, `RECON_LONG_SIDE`).
   large as a real object, while the control stayed clean. Cause: the two clips line up less well
   than frames of one clip, so a tall object lands in a slightly different place and looks moved.
   With the cross-clip tolerance and the 15-pixel search window, three of those four are clean.
-  A portrait crop of the Colosseum clip still gives two or three small false clusters.
+  A portrait crop of the Colosseum clip still gave two or three small false clusters (a tree
+  rebuilt about 10% of the viewing distance off). The look-alike check removes them: all five
+  video cases and the kitchen set report nothing. Numbers, and what did not help (more frames),
+  are in [MAXQ_RESULTS.md](MAXQ_RESULTS.md).
 - **Not yet tested:** a real object moved between two real clips, indoor video, and footage
   from the glasses.
 
@@ -135,6 +158,9 @@ the right setting is still being measured (`RECON_FRAMES`, `RECON_LONG_SIDE`).
   not as fact, and record the second clip from roughly the same spots as the first.
 - When the two clips line up poorly, the thresholds widen and only large changes are reported.
   `depth_noise_between_clips` in the report shows how well they lined up.
+- When the look-alike check is active (poorly aligned clips), an object that moved less than
+  `reach` is treated as the same object and not reported, and so is a new object standing
+  within `reach` of one that looks just like it.
 - It sees depth steps of about 5% of the viewing distance or more (5 cm at 1 m). Flat things
   (paper, a pill strip lying on a table) are invisible to it.
 - A point only counts if at least two other frames of its own clip confirm it, so each part of

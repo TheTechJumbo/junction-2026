@@ -9,14 +9,14 @@
     font: 13px/1.4 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
   canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   #note { position: fixed; left: 10px; bottom: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
-  #key { position: fixed; right: 10px; bottom: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
+  #key { position: fixed; right: 10px; top: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
   #key b.g { color: #3cdc78; } #key b.r { color: #ff6b5b; }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
 <div id="note">Loading…</div>
-<div id="key"><b class="g">green</b> appeared · <b class="r">red</b> gone · drag to orbit, scroll to zoom</div>
+<div id="key"><b class="g">green</b> appeared · <b class="r">red</b> gone · <b style="color:#4aa3ff">blue</b> wearer · drag to orbit</div>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",

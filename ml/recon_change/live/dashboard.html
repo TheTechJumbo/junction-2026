@@ -60,7 +60,7 @@
   <span class="pill" id="gpu">GPU worker: checking…</span>
   <span class="pill" id="cpu">CPU worker: checking…</span>
   <span class="pill" id="places"></span>
-  <a id="phone" style="margin-left:auto">Phone page</a>
+  <span style="margin-left:auto;display:flex;gap:14px"><a id="places">Places and position</a><a id="hud">Glasses display</a><a id="phone">Phone page</a></span>
 </header>
 <main>
   <div class="col">
@@ -103,6 +103,8 @@ const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.crea
 const get = async (path) => (await fetch(withKey(path), { cache: 'no-store' })).json();
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 $('phone').href = withKey('/');
+$('places').href = withKey('/places');
+$('hud').href = withKey('/hud');
 
 let checks = [], selected = null, busy = false;
 
