@@ -23,7 +23,7 @@ sys.path[:0] = [str(HERE), str(HERE.parent)]
 import watch  # noqa: E402
 import watch_report as wr  # noqa: E402
 
-PAIRS = {"colour": ("c_spot", "c_ring"), "top": ("c_top", "c_ring"), "structure": ("z_spot", "z_ring"),
+PAIRS = {"colour": ("c_spot", "c_ring"), "top": ("c_top", "c_ring"), "gcolour": ("a_spot", "a_ring"), "gtop": ("a_top", "a_ring"), "structure": ("z_spot", "z_ring"),
          "feature": ("f_spot", "f_ring"), "depth": ("g_spot", "g_ring")}
 
 
@@ -39,7 +39,7 @@ def variants(m, own):
         out[kind + ":own"] = val(m, a) - val(own, a)
         out[kind + ":both"] = (val(m, a) - val(m, b)) - (val(own, a) - val(own, b))
         out[kind + ":clip"] = (val(m, a) - val(m, b)) - max(val(own, a) - val(own, b), 0.0)
-        out[kind + ":ratio"] = val(m, a) / (val(m, b) + val(own, a) + 1e-3 + (2.0 if kind in ("colour", "top") else 0.05))
+        out[kind + ":ratio"] = val(m, a) / (val(m, b) + val(own, a) + 1e-3 + (2.0 if kind in ("colour", "top", "gcolour", "gtop") else 0.05))
     out["moved:plain"] = max(val(m, "g_far"), val(m, "g_near"))
     out["moved:own"] = out["moved:plain"] - max(val(own, "g_far"), val(own, "g_near"))
     return out
@@ -87,24 +87,25 @@ def main():
              ["Evidence", "small", "medium", "large", "all", "against changed-pair negatives", "against unchanged-pair boxes"], lines)
 
     # false alarms by viewing angle, with colour:ring as the score
-    x = np.array([d[4]["colour:ring"] for d in data])
+    x = np.array([d[4]["top:ring"] + 60 * d[4]["feature:both"] for d in data])  # roughly the score, before any angle limit
     lim = wr.limit_at(x[y == 0], 0.05)
     angle = np.array([d[5]["view"].get("angle") or 0.0 for d in data])
     lines = []
-    for lo, hi in ((0, 5), (5, 10), (10, 20), (20, 30), (30, 45), (45, 180)):
+    for lo, hi in ((0, 3), (3, 6), (6, 10), (10, 15), (15, 20), (20, 30), (30, 180)):
         sel = (angle >= lo) & (angle < hi)
         lines.append([f"{lo} to {hi}", int((sel & (y == 0)).sum()), wr.pct(int((x[sel & (y == 0)] > lim).sum()), int((sel & (y == 0)).sum())),
                       int((sel & (y == 1)).sum()), wr.pct(int((x[sel & (y == 1)] > lim).sum()), int((sel & (y == 1)).sum()))])
-    wr.table("Colour evidence by the angle between the baseline view and the new view (degrees)",
+    wr.table("Colour and feature evidence by the angle between the baseline view and the new view (degrees)",
              ["Angle", "Unchanged", "False alarms", "Changed", "Caught"], lines)
 
     # weighted sums, fitted on four scenes and scored on the fifth
-    formulas = [["colour:ring"], ["colour:plain"], ["colour:ring", "feature:both"], ["colour:ring", "structure:both", "feature:both"],
-                ["colour:ring", "structure:ring", "feature:both"], ["colour:ring", "structure:both", "feature:both", "depth:both"],
-                ["colour:ring", "structure:both", "feature:both", "moved:own"], ["colour:both", "structure:both", "feature:both"],
-                ["colour:clip", "structure:clip", "feature:clip"], ["colour:clip", "structure:clip", "feature:clip", "depth:clip"],
-                ["colour:ring", "top:ring", "structure:both", "feature:both"], ["colour:ring", "colour:plain", "structure:both", "feature:both"],
-                ["colour:ratio", "structure:both", "feature:both"], ["colour:ring", "feature:clip", "structure:clip"]]
+    formulas = [["gtop:ring", "feature:both"], ["gcolour:ring", "feature:both"], ["gtop:ring"], ["gtop:plain", "feature:both"], ["colour:ring"], ["colour:plain"], ["top:ring"], ["top:plain"], ["feature:both"],
+                ["colour:ring", "feature:both"], ["top:ring", "feature:both"], ["top:plain", "feature:both"],
+                ["top:ring", "feature:ring"], ["colour:ratio", "feature:both"], ["top:ring", "top:plain", "feature:both"],
+                ["top:ring", "structure:both", "feature:both"], ["top:ring", "structure:ratio", "feature:both"],
+                ["top:ring", "feature:both", "depth:ring"], ["top:ring", "feature:both", "moved:own"],
+                ["colour:ring", "structure:both", "feature:both"], ["colour:both", "structure:both", "feature:both"],
+                ["top:both", "feature:both"], ["top:own", "feature:both"]]
     lines = []
     scene = np.array([d[1] for d in data])
     band = np.array([d[2] for d in data])

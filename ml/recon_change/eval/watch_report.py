@@ -23,7 +23,6 @@ import watch  # noqa: E402
 CHOOSE = ["Cantina", "Lounge", "Lunch_room", "Garden", "Pots"]  # weights and limits are chosen here
 REPORT = ["Printing_area", "Meeting_room", "Zen", "Playground", "Porch"]  # and reported here
 BANDS = [("small, 50 to 199 px", 50, 200), ("medium, 200 to 799 px", 200, 800), ("large, 800 px and more", 800, 10 ** 9)]
-KINDS = ("colour", "structure", "feature", "depth")
 
 
 def load(folder, instance):
@@ -56,21 +55,6 @@ def reason(row):
     if row["view"]["why"] is None and watch.MAX_ANGLE is not None and (row["view"].get("angle") or 0.0) > watch.MAX_ANGLE:
         return "seen from another side"
     return row["view"]["why"] or "blocked"
-
-
-def evidence(row, key):
-    m = single(row, key)
-    if m is None:
-        return None
-    ev = watch.evidence(m, row["own"].get(key))
-    own = row["own"].get(key) or {}
-    ev["colour_plain"] = m["c_spot"]
-    ev["colour_minus_ring"] = m["c_spot"] - (m["c_ring"] or 0.0)
-    ev["colour_minus_own"] = m["c_spot"] - (own.get("c_spot") or 0.0)
-    ev["colour_top"] = watch.surplus(m, own, "c_top", "c_ring")
-    ev["feature_plain"] = m["f_spot"] if m.get("f_spot") is not None else 0.0
-    ev["depth_share"] = max(m.get("g_far") or 0.0, m.get("g_near") or 0.0) - max(own.get("g_far") or 0.0, own.get("g_near") or 0.0)
-    return ev
 
 
 def auc(pos, neg):
@@ -125,7 +109,13 @@ def table(title, head, lines):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--eval", required=True)
+    ap.add_argument("--colour", nargs=2, metavar=("SPOT", "RING"), help="try other measurements as the colour evidence, e.g. c_top c_ring")
+    ap.add_argument("--weights", nargs=2, type=float, metavar=("COLOUR", "FEATURE"), help="try other weights")
     args = ap.parse_args()
+    if args.colour:
+        watch.PAIRS["colour"] = tuple(args.colour)
+    if args.weights:
+        watch.WEIGHTS.update(colour=args.weights[0], feature=args.weights[1])
     rows, meta = load(args.eval, 1)
     print(f"{len(rows)} spots from {len(meta)} scenes (same lighting)")
     for scene, no_view, no_neg in meta:
@@ -238,16 +228,19 @@ def main():
     lines = []
     for lo, hi in zip(edges[:-1], edges[1:]):
         for key in ("x1", "full"):
-            lim5 = limit_at(negatives(CHOOSE, key), 0.05)
-            sel = [r for r in pick(rows, CHOOSE + REPORT, "changed") if r.get("view") and r["view"]["box"]
+            neg = negatives(CHOOSE, key)
+            lim5, lim1 = limit_at(neg, 0.05), limit_at(neg, 0.01)
+            sel = [r for r in pick(rows, REPORT, "changed") if r.get("view") and r["view"]["box"]
                    and lo <= np.sqrt(r["view"]["area"]) < hi]
             p = [score(r, key) for r in sel if r["label"]]
             n = [score(r, key) for r in sel if not r["label"]]
             ps, ns = [s for s in p if s is not None], [s for s in n if s is not None]
-            lines.append([f"{lo} to {hi - 1}" if hi < 1000 else f"{lo} and more", key, len(p), pct(sum(s > lim5 for s in ps), len(p)),
-                          pct(sum(s > lim5 for s in ns), len(ns)), f"{auc(ps, ns):.2f}"])
-    table("By how many pixels across the spot is in the new frame (square root of the landing box area, all ten scenes)",
-          ["Pixels across at 518 x 294", "Photos", "Changed spots", "Caught at the 5% limit", "False alarms", "AUC"], lines)
+            lines.append([f"{lo} to {hi - 1}" if hi < 1000 else f"{lo} and more", key, len(p), pct(len(p) - len(ps), len(p)),
+                          pct(sum(s > lim5 for s in ps), len(ps)), pct(sum(s > lim5 for s in ns), len(ns)),
+                          pct(sum(s > lim1 for s in ps), len(ps)), pct(sum(s > lim1 for s in ns), len(ns)), f"{auc(ps, ns):.2f}"])
+    table("By how many pixels across the spot is in the new frame (square root of the landing box area; REPORT scenes; of the spots seen)",
+          ["Pixels across at 518 x 294", "Photos", "Changed spots", "Not seen", "Caught at the 5% limit, of seen", "False alarms",
+           "Caught at the 1% limit, of seen", "False alarms", "AUC"], lines)
 
     # ------------------------------------------------------------------ other lighting
     rows2, meta2 = load(args.eval, 2)
@@ -271,8 +264,8 @@ def main():
 
     # ------------------------------------------------------------------ the live check: best of 12 new frames
     def multi(row, key="x1"):
-        own = (row.get("own") or {}).get(key)
-        s = [watch.score_of(m[key], own, weights, scale) for m in row.get("multi") or []
+        looks = [m for m in row.get("multi") or [] if watch.MAX_ANGLE is None or (m["view"].get("angle") or 0.0) <= watch.MAX_ANGLE][:3]
+        s = [watch.score_of(m[key], m.get("own_" + key)) for m in looks
              if m[key].get("c_spot") is not None and m[key]["seen"] >= watch.MIN_CLEAR]
         return float(np.median(s)) if s else None
     lines = []

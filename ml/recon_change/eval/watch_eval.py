@@ -174,30 +174,40 @@ def texture(scene, spot):
 
 
 def measure(scene, spot, base, new, q):
-    """Everything watch.py measures for one spot: against query frame q alone, against the three
-    best of all new frames, and the baseline's own disagreement, at every resolution."""
+    """Everything watch.py measures for one spot, the way watch.check goes about it: against
+    query frame q alone, against the best of all new frames, and the baseline's own
+    disagreement, at every resolution. No angle limit here: the angle is recorded and
+    watch_report.py applies watch.MAX_ANGLE."""
     geo = watch.spot_geometry(scene, {"name": "", **spot})
     out = {"points": len(geo["points"]), "own": {}, "single": {}, "multi": [], "view": None, "multi_why": None}
     if not len(geo["points"]):
         return out
-    own_views, _ = watch.clear_views(scene, geo, base)
-    out["own_frames"] = [v["frame"] for v in own_views[:3]]
-    for key, scale in SCALES.items():
-        rows = [watch.compare(scene, geo, v["frame"], scale) for v in own_views[:3]]
-        out["own"][key] = watch.typical([row for row in rows if row["c_spot"] is not None])
+    refs = watch.references(scene, geo, base)
+    out["references"] = len(refs)
+    usual = {}
+
+    def own(ref, key):
+        if (ref["frame"], key) not in usual:
+            usual[ref["frame"], key] = watch.baseline_disagreement(scene, ref, base, 3, SCALES[key])
+        return usual[ref["frame"], key]
+
     if q is not None:
-        out["view"] = watch.view(scene, geo, q)
-        out["fx"] = float(scene.r.K[q][0, 0])
-        if out["view"]["why"] is None:
-            for key, scale in SCALES.items():
-                out["single"][key] = watch.compare(scene, geo, q, scale)
-    good, poor = watch.clear_views(scene, geo, new)
+        good, poor = watch.looks_at(scene, refs, [q], 360.0)
+        if good or poor:
+            out["view"], ref = (good or poor)[0]
+            out["ref"] = {"frame": ref["frame"], "box": [ref["box"][0] / scene.W, ref["box"][1] / scene.H,
+                                                         ref["box"][2] / scene.W, ref["box"][3] / scene.H]}
+            out["fx"] = float(scene.r.K[q][0, 0])
+            if good:
+                for key, scale in SCALES.items():
+                    out["single"][key] = watch.compare(scene, ref, q, scale)
+                    out["own"][key] = own(ref, key)
+    good, poor = watch.looks_at(scene, refs, new, 360.0)
     if not good:
-        reasons = [v["why"] for v in sorted(poor, key=lambda v: -v["inside"])]
-        out["multi_why"] = next((w for w in reasons if w != "out of view"), "out of view")
-    for v in good[:3]:
-        out["multi"].append({"view": v, "x1": watch.compare(scene, geo, v["frame"], 1.0),
-                             "full": watch.compare(scene, geo, v["frame"], None)})
+        out["multi_why"] = watch.why_not_seen(poor) if poor else "out of view"
+    # the best looks first; enough of them that three remain after an angle limit
+    for v, ref in good[:6]:
+        out["multi"].append({"view": v, "ref": ref["frame"], "x1": watch.compare(scene, ref, v["frame"], 1.0), "own_x1": own(ref, "x1")})
     return out
 
 
@@ -288,11 +298,11 @@ def main():
             geo = watch.spot_geometry(scene, {"name": "", **spot})
             q = None
             if len(geo["points"]):
-                good, poor = watch.clear_views(scene, geo, after)
+                good, poor = watch.looks_at(scene, watch.references(scene, geo, base), after, 360.0)
                 if good:
-                    q = good[int(rng.integers(len(good)))]["frame"]  # any clear look, not the best one
+                    q = good[int(rng.integers(len(good)))][0]["frame"]  # any clear look, not the best one
                 elif poor:
-                    q = max(poor, key=lambda v: v["inside"])["frame"]
+                    q = max(poor, key=lambda x: x[0]["inside"])[0]["frame"]
             rows.append({"scene": args.scene, "instance": args.instance, "pair": "unchanged", "q": q, "label": 0,
                          "box_of": "positive" if was else "negative", "region_area": area, "spot": spot,
                          "texture": texture(scene, spot), "whole_room": {}, **measure(scene, spot, base, after, q)})

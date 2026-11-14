@@ -9,7 +9,9 @@ watch.check then runs as the live system would: all 12 new frames, at the model'
 
 One row per spot: the baseline crop, the new crop (from the original photos, so a person can
 judge them; the check itself saw the 518-pixel frames), the labelled truth, the answer and
-score, and a tick, a cross, or a dash when the spot was not seen. Nothing is left out.
+score, and a tick, a cross, or a dash when the spot was not seen. Nothing is left out. The
+baseline crop is the baseline frame the check compared with (the one that sees the spot from
+the direction most like the new frame's), which need not be the frame the spot was marked in.
 
     python watch_sheets.py --recon recall/out/base --data bench/data/PASLCD --scene Lounge --out watch/out [--live]
 """
@@ -27,7 +29,7 @@ import run_bench as rb  # noqa: E402
 import watch  # noqa: E402
 import watch_eval as we  # noqa: E402
 
-TILE_W, TILE_H, TEXT_W = 230, 170, 330
+TILE_W, TILE_H, TEXT_W = 230, 170, 400
 GREEN, RED, GREY, YELLOW = (60, 200, 60), (50, 50, 230), (150, 150, 150), (0, 230, 255)  # BGR
 
 
@@ -142,9 +144,10 @@ def main():
     for s, a in zip(spots, answers):
         right = "not seen" if a["state"] == "not_seen" else "right" if a["state"] == s["truth"] else "wrong"
         rows.append({**s, **a, "verdict": right})
-        left = crop(photos[s["frame"]], s["box"])
+        shown = (a["frame_base"], a["box_base"]) if a.get("frame_base") is not None else (s["frame"], s["box"])
+        left = crop(photos[shown[0]], shown[1])
         new = crop(photos[a["frame"]], a["box_new"]) if a["frame"] is not None else np.zeros((TILE_H, TILE_W, 3), np.uint8)
-        for tile, label in ((left, f"baseline, frame {s['frame']}"), (new, f"new, frame {a['frame']}" if a["frame"] is not None else "no clear look")):
+        for tile, label in ((left, f"baseline, frame {shown[0]}"), (new, f"new, frame {a['frame']}" if a["frame"] is not None else "no clear look")):
             cv2.putText(tile, label, (6, TILE_H - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(tile, label, (6, TILE_H - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
         colour = {"right": GREEN, "wrong": RED, "not seen": GREY}[right]
