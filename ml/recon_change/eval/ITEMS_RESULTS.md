@@ -147,8 +147,8 @@ Detector alone on a 1280 x 720 picture, median of repeated calls, and a whole fi
 | whole picture only (1 pass) | 0.25 s | 1.39 s |
 | 1 row of tiles (3 passes), shipped | 0.76 s | 4.94 s |
 | 2 rows of tiles (9 passes) | 2.28 s | 13.85 s |
-| fix without items | 2.37 s | 26.3 s |
-| fix with items | 3.17 s | 31.4 s |
+| fix without items | 2.38 s | 26.3 s |
+| fix with items | 3.16 s | 31.4 s |
 | loading the detector at worker start | 2 s | under 1 s |
 
 On the CPU worker `RECON_ITEMS_TILES=0` brings the added time down to about 1.4 s and loses
@@ -176,11 +176,12 @@ depth, the item from the new frame's depth. The fixes went through `worker.where
 
 | case | what came back |
 |---|---|
-| phone pasted on the table mat, CPU worker settings, final code | found (match 1.0). Phone 0.59 at [0.70, 1.41, -0.74], 1.2 m, -15 degrees. The place picked at the same spot: [0.71, 1.42, -0.73], 1.2 m, -14 degrees. **2 cm apart.** Placed with the help of the surface around it (see below). |
-| the same on the L4 GPU, code before the surface rule | found. The item in the middle got no position: "The depth there is not trusted (34 of 231 pixels in the middle of the box)". The final code is queued for a GPU run (job `jun-items-full`); it had not started when this was written. |
-| item pasted on the strip outside the crop | listed with box and crop, no position, note "Seen at the edge of the picture, outside the part the position fix used." |
-| photo of another place with a pasted item | state `lost`; the item is listed, position, distance and bearing are null |
-| detector not loaded (simulated) | the fix comes back as before with `"items": []` and an `items_note` that says why |
+| phone pasted on the table mat, L4 GPU, 12 baseline photos | found (match 1.0). Phone 0.59 at [0.69, 1.37, -0.88], 1.4 m, -14 degrees. The place picked at the same spot: [0.70, 1.38, -0.87], 1.4 m, -13 degrees. **2 cm apart.** Placed with the help of the surface around it (see below). |
+| the same, CPU worker settings (8 baseline photos) | found (match 1.0). Phone 0.59 at [0.70, 1.41, -0.74], 1.2 m, -15 degrees; the place at [0.71, 1.42, -0.73], 1.2 m, -14 degrees. **2 cm apart.** |
+| the same without `big.jpg` (the detector sees the 640 pixel frame) | found, but no item: the pasted phone scores 0.48 there, below the limit. The full-size picture matters. |
+| item pasted on the strip outside the crop (runs at limit 0.3; at 0.5 it was not found) | listed with box and crop, no position, note "Seen at the edge of the picture, outside the part the position fix used." |
+| photo of another place | state `lost`, nothing placed. (The offline check covers an item found on a lost fix: listed, position null.) |
+| detector not loaded (simulated) | the fix comes back as before with `"items": []`, `"items_looked_for": []` and an `items_note` that says why |
 | unreadable `big.jpg` | the fix comes back; the detector used the newest numbered frame instead |
 | 3D view asked for | the splat is written with one more ball, for the item (not looked at in the viewer) |
 
@@ -194,11 +195,11 @@ placed with its own depth and says so in its `note`; otherwise it gets no positi
 `RECON_ITEMS_SURFACE=0` switches this off. Whether real objects behave like pasted ones is not
 known.
 
-Looking again at the remembered spot, same runs (CPU worker settings):
+Looking again at the remembered spot, same runs (the GPU and the CPU run agree):
 
 | the newest frame shows | in_view | blocked | close_enough | detected_near |
 |---|---|---|---|---|
-| the item still there | true | true (the depth on the item is not trusted) | true (66 px at 1.2 m) | true |
+| the item still there | true | true (the depth on the item is not trusted) | true (65 px at 1.4 m) | true |
 | the item taken away | true | false (depth gap -0.01 m) | true | false |
 | a grey card painted over the spot | true | true (depth not trusted) | true | false |
 | a remembered spot 68 m away, behind the wearer | false | false | false | false |
@@ -261,9 +262,6 @@ within 0.5 m of the spot will keep a sighting alive.
   the 23 GB L4 without trouble).
 - `transformers` newer than 4.46.3, and other OWLv2 sizes (the large one may find more, slower).
 - 2 rows of tiles on the report half and on item-free photos.
-- The final code on the GPU through `worker.where()`: the GPU run above is from before the
-  surface rule, the score limit 0.5 and the look-again check; those ran on the CPU node and in
-  the offline checks. GPU timings do not depend on them.
 - A worker started by `iridis/worker.slurm` with the detector: the runs here call
   `worker.where()` from a test script, not through the queue.
 
