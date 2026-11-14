@@ -80,7 +80,7 @@ injected; this verifies integration contracts, not model quality or real speech 
 `.github/workflows/bartek-ci.yml` adds a clean Linux installation, PostgreSQL 17, isolated
 assembled HTTP server and explicit mandatory-source integration gate. Missing source
 objects and skipped required integration tests fail CI. The workflow never deploys or
-uses live provider secrets. Latest assembled local verification: 430 Python checks,
+uses live provider secrets. Latest assembled local verification: 467 Python checks,
 9 marked PostgreSQL/HTTP/actual-source integration checks, and 10 Node checks passed.
 A built wheel was extracted outside the checkout and successfully redacted the public
 face fixture with its packaged model. Browser verification displayed the processed
@@ -101,4 +101,5 @@ photo in the authenticated evidence dialog. See CI for the published-head result
 
 Bartek's decision is observation-only: opening evidence never establishes ingestion,
 correct dose, adherence, door locking, or safety. This is tested, not just a disclaimer.
-These external acceptance gates keep the overall feature goal open even if CI passes.
+These external acceptance gates remain separate from verified local integration; live
+provider and hardware acceptance is not claimed without those environments.
