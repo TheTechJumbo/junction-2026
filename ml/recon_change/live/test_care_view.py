@@ -99,6 +99,7 @@ def check_relay():
             (evidence / name).mkdir()
             for f in files:
                 (evidence / name / f).write_bytes(bytes(32))
+        (evidence / "train-kitchen-x-1" / "labels.json").write_text('{"objects": [{"name": "cup", "position": [0, 0, 1]}]}')
         np.savez(evidence / "train-kitchen-x-1" / "cameras.npz", E=E.astype(np.float32), K=np.zeros((len(E), 3, 3)), keyframes=np.arange(len(E)))
         room = {"job": "job1", "splat": "/evidence/job1/room.splat", "cameras": cameras, "places": [{"name": "pill box", "position": [1.0, 2.0, 0.0]}],
                 "at": time.time(), "median_depth_m": 2.0, "fov_deg": 55,
@@ -120,6 +121,8 @@ def check_relay():
             assert space["splat"].endswith("/trained.splat") and space["room_splat"] == "/evidence/job1/room.splat"
             assert space["fit"]["pairs"] == len(cameras) and space["fit"]["rms_m"] < 0.02, space["fit"]
             assert space["places"][0]["name"] == "pill box"
+            # labels made again after training sit next to the splat and are found there (rooms.json has none)
+            assert space["trained"]["labels"] == "/evidence/train-kitchen-x-1/labels.json", space["trained"]
             assert json.loads(get(base, "/care/space?zone=kitchen")[2]) == space  # worked out once, then the same reply
 
             code, _, body = get(base, "/care/space?zone=hall")

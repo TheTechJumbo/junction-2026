@@ -878,14 +878,17 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         got = rooms.get(zone)
         if not got or not got.get("splat"):
             return 404, {"ok": False, "error": f"No room map for '{zone}' yet: POST /map?zone={zone}."}
-        trained = got.get("trained") or {}
+        trained = dict(got.get("trained") or {})
+        match = re.fullmatch(r"/evidence/([\w-]+)/trained\.splat", trained.get("splat") or "")
+        # Labels made again after training (video_map.py --labels-only, same cameras) sit next to the splat.
+        if match and not trained.get("labels") and (evidence_dir / match[1] / "labels.json").exists():
+            trained["labels"] = f"/evidence/{match[1]}/labels.json"
         plain = {"ok": True, "zone": zone, "kind": "map", "splat": got["splat"], "matrix": None, "fit": None,
                  "room_splat": got["splat"], "trained": trained or None, "median_depth_m": got.get("median_depth_m"),
                  "fov_deg": got.get("fov_deg"), "cameras": got.get("cameras") or [], "places": got.get("places") or []}
-        match = re.fullmatch(r"/evidence/([\w-]+)/trained\.splat", trained.get("splat") or "")
         if not match:
             return 200, {**plain, "why": "No trained splat for this room yet: the room map is shown."}
-        made_for = (got.get("job"), trained["splat"])
+        made_for = (got.get("job"), trained["splat"], trained.get("labels"))
         with space_lock:
             if zone in space_made and space_made[zone][0] == made_for:
                 return 200, space_made[zone][1]

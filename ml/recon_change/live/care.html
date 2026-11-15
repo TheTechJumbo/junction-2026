@@ -141,6 +141,8 @@
   <section>
     <h2>Places</h2>
     <ul id="places"><li class="muted">No named places yet.</li></ul>
+    <h2 style="margin-top:12px">Things in the room</h2>
+    <ul id="things"><li class="muted small">Nothing recognised in this room yet.</li></ul>
     <p class="small muted" style="margin:8px 0 0">Name a place by clicking it in a room picture: <a class="btn" id="namePlaces" href="#" target="_blank" rel="noopener">Name places</a></p>
   </section>
   <footer class="muted small" id="about"></footer>
@@ -217,10 +219,10 @@ resize();
 const colours = { found: 0x4aa3ff, unsure: 0xffb84d, lost: 0xff6b5b, stale: 0x6f7d8c };
 const wearer = new THREE.Group();
 const coneMat = new THREE.MeshBasicMaterial({ color: colours.found, transparent: true });
-const cone = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.2, 20), coneMat);
-cone.position.y = 0.15;  // the cone's tip along +y: north before the wearer's heading turns it
+const cone = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.15, 20), coneMat);
+cone.position.y = 0.11;  // the cone's tip along +y: north before the wearer's heading turns it
 const headMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
-const head = new THREE.Mesh(new THREE.SphereGeometry(0.05, 20, 14), headMat);
+const head = new THREE.Mesh(new THREE.SphereGeometry(0.035, 20, 14), headMat);
 const stem = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -0.08), new THREE.Vector3(0, 0, -1.45)]),
   new THREE.LineBasicMaterial({ color: 0x9fd0ff, transparent: true, opacity: 0.55 }));
 const feet = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.2, 32), new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
@@ -439,9 +441,27 @@ function describeRoom(info, kind) {
   $('about').textContent = lines.join(' ');
 }
 
+let things = [];  // labels.json: [{name, anchor}] in the trained splat's axes
+function renderThings() {
+  const groups = new Map();
+  for (const t of things) groups.set(t.name, [...(groups.get(t.name) || []), t]);
+  $('things').innerHTML = groups.size ? [...groups].map(([name, list]) => `<li class="pl"><span class="name" style="color:#d6e6ff">${esc(name)}</span>
+    <span class="muted small">${list.length > 1 ? `${list.length} seen` : ''}</span><button data-name="${esc(name)}">Show</button></li>`).join('')
+    : '<li class="muted small">Nothing recognised in this room yet.</li>';
+  $('things').querySelectorAll('button').forEach((b) => {
+    b.onclick = () => {  // the nearest one of that name to where the camera is now
+      const list = things.filter((t) => t.name === b.dataset.name);
+      const at = (t) => t.anchor.getWorldPosition(new THREE.Vector3());
+      list.sort((a, c) => at(a).distanceTo(camera.position) - at(c).distanceTo(camera.position));
+      if (list.length) lookAtPoint(at(list[0]), 0.9, 0.2);
+    };
+  });
+}
 async function objectLabels(info) {
   objectAnchors.clear();
   dropTags('o:', new Set());
+  things = [];
+  renderThings();
   const url = info.kind === 'trained' && info.trained && info.trained.labels;
   $('objectsLabel').hidden = !url;
   if (!url) return;
@@ -456,7 +476,9 @@ async function objectLabels(info) {
       const id = `o:${i}`;
       keep.add(id);
       tag(id, o.name, 'object', a, () => lookAtPoint(a.getWorldPosition(new THREE.Vector3()), 0.8, 0.15));
+      things.push({ name: o.name, anchor: a });
     });
+    renderThings();
   } catch { /* no labels: nothing to draw */ }
 }
 $('showObjects').onchange = () => { objectAnchors.visible = $('showObjects').checked && !!(room && room.kind === 'trained'); };
@@ -783,10 +805,12 @@ renderer.setAnimationLoop((now) => {
 });
 
 // ---- polling: fast for the wearer, slower for the rest; paused while the page is hidden ----
-function every(ms, fn) {
+const runs = [];
+function every(ms, fn) {  // the first run happens even in a background tab, so the page is ready when looked at
   let busy = false;
-  const run = async () => { if (document.hidden || busy) return; busy = true; try { await fn(); } finally { busy = false; } };
-  run();
+  const run = async (always) => { if ((document.hidden && !always) || busy) return; busy = true; try { await fn(); } finally { busy = false; } };
+  run(true);
+  runs.push(run);
   return setInterval(run, ms);
 }
 await tickWhere();
@@ -796,7 +820,7 @@ every(15000, tickDay);
 every(10000, tickReminders);
 every(3000, tickSee);
 every(2000, tickChanges);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickWhere(); tickDay(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) runs.forEach((run) => run()); });
 window.__care = { camera, look, space, splatFrame, get fix() { return fix; }, get room() { return room; }, get places() { return places; }, wearer };
 </script>
 </body>
