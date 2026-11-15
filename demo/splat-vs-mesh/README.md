@@ -1,5 +1,12 @@
 # Splat vs mesh
 
+**Default view: the example living room three ways**, side by side: the room as it was built (the exact
+boxes, `home/actual.ply`), the same room as a Gaussian splat (`home/home.splat`) and the block mesh
+our code makes from that splat (`home/blocks_*.ply`, with a Quality dropdown), with last night's walk
+over the mesh and the night controls under all three. The actual room and the mesh turn together.
+Rebuild with `python home.py`. Then `?scene=venue` is the real splat below.
+
+
 Seb's Gaussian splat of the Junction hacking hall (made from our Ray-Ban Meta glasses, people
 anonymised) next to the block mesh our code makes from it, in the family app's own viewer, with the
 "Last night" overlay (trail in the air, neon orb, time controls) playing over it.

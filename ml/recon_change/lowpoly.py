@@ -133,8 +133,12 @@ def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hi
         keys, starts = np.unique(ij[order], axis=0, return_index=True)
         bounds = list(starts[1:]) + [len(order)]
         hs, cs = h[inside][order], rgb[inside][order]
+        # How many Gaussians a square needs: the quality's number, or a quarter of what a typical filled
+        # square holds when the splat is sparser than that (else flat tops of a sparse splat fall through).
+        counts = np.array(bounds) - starts
+        need = max(2, min(q["min_points"], int(0.25 * np.median(counts))))
         for key, s, e in zip(map(tuple, keys), starts, bounds):
-            if e - s >= q["min_points"]:
+            if e - s >= need:
                 top = stack_top(hs[s:e])
                 if top is not None and top >= MIN_TOP_M:
                     if cut and top > TALL_M:  # cut walls: pillars, curtains, tall cupboards are cut like them
@@ -150,7 +154,8 @@ def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hi
             top = max(set(tops), key=tops.count)  # the most common neighbouring height
             grid[k] = (top, np.mean([g[1] for g in around if g[0] == top], 0), 2 * q["min_points"])
     # Lone specks (no neighbour, few Gaussians) are noise.
-    grid = {k: g for k, g in grid.items() if g[2] >= 2 * q["min_points"] or any((k[0] + di, k[1] + dj) in grid for di, dj in near)}
+    need = need if len(ij) else q["min_points"]
+    grid = {k: g for k, g in grid.items() if g[2] >= 2 * need or any((k[0] + di, k[1] + dj) in grid for di, dj in near)}
 
     boxes = _boxes(grid, q["merge_dc"])
     top_of = {}
