@@ -1,17 +1,21 @@
 // The home in 3D for the family: the mesh of the flat, with two views on it.
 //   Now        things on the floor in the way of the night walks (trip hazards to clear up), as red
 //              rings, and the walks they block as amber dashes. Suggestions, never alerts.
-//   Last night where the wearer walked after going to bed: a trail coloured from early (indigo) to
-//              late (amber), the stops, the night's door events, and a marker that moves with the
-//              time slider (play, step back and forward, or tap a trip).
+//   Last night where the wearer walked after going to bed: a trail in the air whose height is the time
+//              (knee height at the start of the night, above the head by morning), so each trip floats
+//              at its own level; coloured early (indigo) to late (amber), with its shadow on the floor,
+//              stops pinned down to the floor, the night's door events, and a beam for the wearer that
+//              moves with the time slider (play, step back and forward, or tap a trip).
 // Connected, everything comes from the home (GET /mesh, /hazards, /night). Otherwise, or while the
 // home has no 3D map yet, all three are the example home, labelled as such; never a mix of both.
-import {Space, parsePly, upright, shape, ring, disc, ribbon, dashes, pillar} from './space.js';
+import {Space, parsePly, upright, shape, ring, disc, ribbon, wall, dashes, pillar} from './space.js';
 
 const RED = [0.86, 0.27, 0.25], ORANGE = [0.95, 0.6, 0.25], AMBER = [0.95, 0.69, 0.29], TEAL = [0.3, 0.75, 0.7];
 const EARLY = [0.33, 0.36, 0.85], LATE = [0.97, 0.7, 0.3], DIM = [0.42, 0.45, 0.58];
 // Floor overlays sit this far above the floor: the meshed floor is a slab a few centimetres thick.
 const LIFT = 0.07;
+// The night trail's height: time mapped from LOW_M (start of the night) to HIGH_M (the end) above the floor.
+const LOW_M = 0.45, HIGH_M = 2.1;
 const mix = (a, b, f) => a.map((v, k) => v + (b[k] - v) * f);
 const clock = t => new Date(t).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Helsinki'});
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -96,7 +100,7 @@ export class Home3D {
     $('now-panel').hidden = tab !== 'now'; $('night-panel').hidden = tab !== 'night';
     this.space.clearLayers();
     const label = this.data.example ? (this.data.liveAsked ? 'No 3D map from home yet. This is the example home.' : 'Example home, not a real one.') : '';
-    if (tab === 'now') { if (!focusFirst) this.space.reset(); this.drawNow(label, focusFirst); } else { this.space.overview(); this.setUpNight(label); }
+    if (tab === 'now') { if (!focusFirst) this.space.reset(); this.drawNow(label, focusFirst); } else { this.space.overview(0.62, 0.74); this.setUpNight(label); }
   }
 
   // ---- Now: trip hazards ----
@@ -137,7 +141,10 @@ export class Home3D {
     this.say(label);
     const floor = (this.data.hazards?.floor || 0) + LIFT;
     this.track = n.points.map(p => ({t: Date.parse(p.t), p: (q => { q[1] = floor; return q; })(upright(p.p, n.up))}));
-    this.t0 = this.track[0].t; this.t1 = this.track.at(-1).t;
+    this.t0 = this.track[0].t; this.t1 = this.track.at(-1).t; this.floor = floor;
+    const span0 = (this.t1 - this.t0) || 1;
+    this.lift = t => floor + LOW_M + (HIGH_M - LOW_M) * (t - this.t0) / span0;
+    for (const x of this.track) x.air = [x.p[0], this.lift(x.t), x.p[2]];
     const s = n.summary;
     $('night-summary').textContent = s.trips
       ? `Up ${times(s.trips)} · ${s.minutes_up} min out of bed · ${s.metres} m walked${s.places.length ? ` · ${s.places.join(', ')}` : ''}`
@@ -159,8 +166,11 @@ export class Home3D {
       el.style.setProperty('--from', ((Date.parse(e.t) - this.t0) / span).toFixed(4));
       el.title = `${clock(e.t)} ${e.type.replace(/_/g, ' ')}`; strip.append(el);
     }
-    // The whole night faintly, for context; the walked-so-far part is drawn over it as time moves.
-    const whole = shape(); ribbon(whole, this.track.map(x => x.p), 0.06, () => DIM);
+    // The whole night faintly, for context: its shadow on the floor and a thin ghost in the air. The
+    // walked-so-far part is drawn over it as time moves.
+    const whole = shape();
+    ribbon(whole, this.track.map(x => x.p), 0.05, () => DIM);
+    ribbon(whole, this.track.map(x => x.air), 0.025, () => DIM);
     this.space.layer('night-all', whole);
     this.setTime(n.trips.length ? Date.parse(n.trips[0].start) : this.t0);
   }
@@ -194,16 +204,27 @@ export class Home3D {
       const a = this.track[k - 1], b = this.track[k], f = (t - a.t) / ((b.t - a.t) || 1);
       here = mix(a.p, b.p, Math.min(1, Math.max(0, f)));
     }
+    const hereAir = [here[0], this.lift(t), here[2]];
+    const colourAt = i => mix(EARLY, LATE, (done[Math.min(i, done.length - 1)].t - this.t0) / span);
+    const air = [...done.map(x => x.air), hereAir];
     const trail = shape();
-    ribbon(trail, [...done.map(x => x.p), here], 0.12, i => mix(EARLY, LATE, (done[Math.min(i, done.length - 1)].t - this.t0) / span));
+    ribbon(trail, air, 0.09, colourAt); wall(trail, air, 0.09, colourAt);              // the trail: a flat band and an upright one, a tube from any angle
+    ribbon(trail, [...done.map(x => x.p), here], 0.07, i => mix(colourAt(i), DIM, 0.55)); // its shadow on the floor
+    for (let i = 0; i < done.length; i += 6) {                                         // thin threads from the floor up to the trail
+      const x = done[i]; pillar(trail, x.p, 0.006, x.air[1] - x.p[1], mix(colourAt(i), DIM, 0.4));
+    }
     for (const stop of n.stops || []) {
       if (Date.parse(stop.t) > t || stop.place === 'bed') continue;
-      const p = upright(stop.p, n.up); p[1] = here[1] + 0.005;
-      disc(trail, p, Math.min(0.35, 0.1 + 0.02 * stop.minutes), TEAL);
+      const p = upright(stop.p, n.up); p[1] = this.floor + 0.005;
+      const r = Math.min(0.35, 0.1 + 0.02 * stop.minutes), top = this.lift(Date.parse(stop.t));
+      disc(trail, p, r, TEAL);                                                         // where she stopped, on the floor
+      pillar(trail, p, 0.025, top - p[1], TEAL);                                       // pinned up to when, on the trail
+      disc(trail, [p[0], top, p[2]], r * 0.6, TEAL);
     }
     this.space.layer('night-done', trail);
     const marks = shape();
-    pillar(marks, here, 0.1, 1.45, AMBER, [1, 0.92, 0.75]);
+    pillar(marks, here, 0.05, hereAir[1] - here[1], AMBER, [1, 0.92, 0.75]);          // the wearer: a beam from the floor
+    pillar(marks, [hereAir[0], hereAir[1] - 0.09, hereAir[2]], 0.13, 0.18, [1, 0.92, 0.75]); // ... to now, on the trail
     for (const e of n.events || []) {
       const at = Date.parse(e.t), place = n.places?.[e.place];
       if (!place || at > t || t - at > 5 * 60 * 1000) continue; // a door event glows for five minutes

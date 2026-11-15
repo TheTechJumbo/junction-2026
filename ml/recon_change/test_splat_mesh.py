@@ -133,6 +133,22 @@ def main():
     floor = np.abs(v[:, 2]) < 0.1
     check(floor.mean() > 0.3 and (np.abs(v[:, 1] - 3.0) < 0.1).any(), "the floor and the back wall are there")
 
+    print("A trained .splat file (the 32-byte records video_map.py writes):")
+    import demo_room
+    room = demo_room.make_map().splats
+    faint = np.zeros(200, sr.RECORD)
+    faint["pos"], faint["rgba"][:, 3] = np.random.default_rng(0).uniform(0, 4, (200, 3)), 10   # near-transparent
+    blob = np.zeros(1, sr.RECORD)
+    blob["pos"], blob["scale"], blob["rgba"][:, 3] = (2.0, 2.0, 3.4), 3.0, 255                   # a big floater above the room
+    v, nrm, c, t = smesh.from_splat(np.concatenate([room, faint, blob]).tobytes(), voxel=0.05)
+    check(len(t) > 10000 and len(v) == len(nrm) == len(c), "a trained splat becomes a coloured mesh")
+    check(v[:, 2].max() < 2.7, "the floater above the room is left out")
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "trained.ply"
+        smesh.write_mesh(v, nrm, c, t, path, comments=["up z"])
+        head = path.read_bytes()[:300].decode("latin1")
+        check(head.startswith("ply") and "comment up z" in head, "written as the PLY the dashboard reads")
+
     print("\nAll checks passed." if not failures else f"\n{len(failures)} check(s) failed.")
     sys.exit(1 if failures else 0)
 
