@@ -26,9 +26,6 @@
   #bird button { font: inherit; font-size: 12px; color: #e8eef5; background: #12202d; border: 1px solid #4fc3ff;
     border-radius: 6px; padding: 2px 8px; cursor: pointer; margin-left: auto; }
   #bird.setting canvas { cursor: crosshair; } #bird.setting button { background: #4fc3ff; color: #05070a; }
-  #follow { position: fixed; right: 10px; top: 30px; display: none; font: inherit; color: #e8eef5; background: #12202d;
-    border: 1px solid #4fc3ff; border-radius: 8px; padding: 5px 12px; cursor: pointer; }
-  #follow.on { background: #4fc3ff; color: #05070a; }
 </style>
 </head>
 <body>
@@ -38,7 +35,6 @@
 <div id="bird" title="The splat from straight above"><div><span id="birdSay">From above · click to enlarge</span>
   <button id="birdSet" hidden title="Click the map where the wearer should go, then name it">＋ Set a place</button></div><canvas></canvas></div>
 <button id="playStart">▶ Play the recording</button>
-<button id="follow" title="Keep the wearer in the middle of the view (you can still orbit)">Follow wearer</button>
 <div id="play">
   <button id="playPause">⏸</button>
   <input type="range" id="playAt" min="0" max="1" step="0.01" value="0" aria-label="Where in the recording">
@@ -361,58 +357,6 @@ if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=.
   marker.add(cone, new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffffff })));
   marker.visible = false;
   const trail = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x4aa3ff }));
-  // "You are here" (relay splat_locate.py): a ring on the floor that holds the true spot with 95% certainty, and a
-  // translucent cone of what the glasses see, tilted with the head. Both are made in map axes and put through the
-  // same transform as the marker, so on a trained splat they sit where the splat says.
-  const sureRing = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x9fd0ff }));
-  const sureDisc = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false }));
-  const viewCone = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }));
-  const viewEdges = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x9fd0ff, transparent: true, opacity: 0.8 }));
-  scene.add(sureRing, sureDisc, viewCone, viewEdges);
-  const extras = [sureRing, sureDisc, viewCone, viewEdges];
-  extras.forEach(o => { o.visible = false; });
-  function drawSure(fix, put) {  // fix in map axes (metres): position, heading_deg, pitch_deg, radius95_m
-    const [e, n, u] = [fix.position[0], fix.position[1], fix.position[2] || 0];
-    const r = Number.isFinite(fix.radius95_m) ? Math.max(0.12, Math.min(6, fix.radius95_m)) : null;
-    sureRing.visible = sureDisc.visible = r != null;
-    if (r != null) {
-      const ring = [];
-      for (let i = 0; i < 64; i++) { const a = i / 64 * 2 * Math.PI; ring.push(put([e + r * Math.cos(a), n + r * Math.sin(a), u - 1.45])); }
-      sureRing.geometry.dispose(); sureRing.geometry = new THREE.BufferGeometry().setFromPoints(ring);
-      const fan = [];
-      ring.forEach((p, i) => fan.push(put([e, n, u - 1.45]), p, ring[(i + 1) % ring.length]));
-      sureDisc.geometry.dispose(); sureDisc.geometry = new THREE.BufferGeometry().setFromPoints(fan);
-      sureRing.material.color.setHex(r > 1 ? 0xffb84d : 0x9fd0ff);
-    }
-    const h = (fix.heading_deg || 0) * Math.PI / 180, pt = Math.max(-1, Math.min(1, (fix.pitch_deg || 0) * Math.PI / 180));
-    const f = [Math.sin(h) * Math.cos(pt), Math.cos(h) * Math.cos(pt), Math.sin(pt)];
-    const rt = [Math.cos(h), -Math.sin(h), 0];
-    const up = [rt[1] * f[2] - rt[2] * f[1], rt[2] * f[0] - rt[0] * f[2], rt[0] * f[1] - rt[1] * f[0]];
-    const L = 1.1, tH = Math.tan(30 * Math.PI / 180), tV = Math.tan(24 * Math.PI / 180);
-    const eye = put([e, n, u]);
-    const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => put([0, 1, 2].map(k => [e, n, u][k] + L * (f[k] + a * tH * rt[k] + b * tV * up[k]))));
-    const tris = [], lines = [];
-    corners.forEach((c, i) => { const d = corners[(i + 1) % 4]; tris.push(eye, c, d); lines.push(eye, c, c, d); });
-    viewCone.geometry.dispose(); viewCone.geometry = new THREE.BufferGeometry().setFromPoints(tris);
-    viewEdges.geometry.dispose(); viewEdges.geometry = new THREE.BufferGeometry().setFromPoints(lines);
-    viewCone.visible = viewEdges.visible = true;
-  }
-  const followBtn = document.getElementById('follow');
-  let following = false, behindView = null;  // behindView: {here, behind, up} of the newest pose, in scene units per metre
-  followBtn.onclick = () => {
-    following = !following;
-    followBtn.classList.toggle('on', following);
-    if (following && behindView) {  // start a step behind and above the wearer, looking at them
-      const { here, behind, up } = behindView;
-      controls.target.copy(here);
-      camera.position.copy(here).addScaledVector(behind, 1.6).addScaledVector(up, 0.9);
-    }
-  };
-  onFrame.push(() => {  // Follow: the orbit's centre glides to the wearer, and the camera moves with it
-    if (!following || !marker.visible) return;
-    const d = marker.position.clone().sub(controls.target).multiplyScalar(0.12);
-    controls.target.add(d); camera.position.add(d);
-  });
   const places = new THREE.Group();
   const way = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: 0x5ee0ff, dashSize: 0.3, gapSize: 0.18 }));
   scene.add(marker, trail, places, way);
@@ -529,12 +473,6 @@ if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=.
     const put = onTrained ? (p) => sceneOf(splatOf(p)) : toThree;
     const ok = fix.state !== 'lost' && fix.position && !fix.unusable && scale > 0;
     marker.visible = !!ok;
-    followBtn.style.display = ok ? 'block' : followBtn.style.display;
-    if (ok) {
-      drawSure(fix, put);
-      const p = fix.position, h = (fix.heading_deg || 0) * Math.PI / 180, here = put(p);
-      behindView = { here, behind: put([p[0] - Math.sin(h), p[1] - Math.cos(h), p[2] || 0]).sub(here), up: put([p[0], p[1], (p[2] || 0) + 1]).sub(here) };
-    } else extras.forEach(o => { o.visible = false; });
     marker.scale.setScalar(scale || 1);
     if (ok) {
       const here = put(fix.position), h = (fix.heading_deg || 0) * Math.PI / 180;

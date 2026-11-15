@@ -74,6 +74,14 @@ worst, so it moves by tenths of a metre between runs. In the hard variant PnP pl
 error is the pose held (and its ring growing) while the wearer walks on unseen, and the larger moves are the pose
 catching up when the next photo is placed.
 
+## What /where carries
+
+`position`, `heading_deg`, `pitch_deg` in the room map's axes (the ones /care draws in), and on both the fix and
+`stable`: `source` ("fused": the splat pose below; "full": the model's fix; "instant": the cosine match) and
+`uncertainty_m` (the 95% radius in metres; null when unknown, i.e. for "full" and "instant"). The fused fix also
+has `splat_pose` (keyframe matched, its photo, inliers, the raw fix, the trail); a model fix overridden by it keeps
+`model_pose`. The marker and ring on the pages are the caretaker session's (patch handed over).
+
 ## Choices made by these numbers
 
 - **PnP against the splat's own keyframes, on the laptop.** Most accurate by far and 10–20 times faster than any model

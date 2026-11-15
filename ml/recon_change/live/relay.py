@@ -20,8 +20,9 @@ It prints the link to open. The link carries an access key, and every request ne
                                   (both replies carry "stable": the steady position made from the stream of
                                   fixes, with "confidence_pct" and "show", see track.py. In a zone with a trained
                                   splat every photo is also placed against the splat's keyframes on this laptop,
-                                  splat_locate.py; while that pose is fresh it is "position" and "stable", with
-                                  "radius95_m", "pitch_deg", "splat_pose" and "stable.source" = "splat")
+                                  splat_locate.py; while that pose is fresh it is "position" and "stable".
+                                  Both carry "source": "fused" (that pose), "full" (the model's fix) or "instant"
+                                  (the cosine match), and "uncertainty_m": the 95% radius in metres, null if unknown)
     GET  /waypoints?zone=kitchen  the zone's named places
     POST /waypoint?zone=kitchen&name=pill+box&frame=3&u=0.4&v=0.6   name a spot in baseline picture 3
     POST /waypoint?zone=kitchen&name=pill+box&delete=1
@@ -670,7 +671,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 answer = trackers[zone].current(time.time()) if zone in trackers else None
         except Exception:  # the steady position is an extra: it must never cost the wearer a fix
             answer = None
-        return splat_steady(zone, answer)  # in a zone with a trained splat, its own steady pose while it is fresh
+        answer = splat_steady(zone, answer)  # in a zone with a trained splat, its own steady pose while it is fresh
+        if isinstance(answer, dict) and "source" not in answer:  # track.py's, made from the model's fixes
+            answer = {**answer, "source": "full", "uncertainty_m": None}
+        return answer
 
     # ---- day log (JUN-26): one file per day in the evidence folder, no pictures in it. See day.py. ----
     try:  # BEACON_NEAR_M: how close to a place counts as a visit, in the fix's metres (see eval/DAY_RESULTS.md)
@@ -1077,10 +1081,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         state = "found" if got["placed"] and pose["state"] == "found" else "unsure"
         fix = {"ok": True, "zone": zone, "job": None, "state": state, "confidence": round(splat_locate.chance_within(pose["sigma_m"]), 2),
                "position": pose["position"], "heading_deg": int(round(pose["heading_deg"])), "pitch_deg": pose["pitch_deg"],
-               "radius95_m": pose["radius95_m"], "waypoints": splat_waypoints(zone, here), "map": last.get("map"),
+               "source": "fused", "uncertainty_m": pose["radius95_m"], "waypoints": splat_waypoints(zone, here), "map": last.get("map"),
                "items": [], "items_looked_for": last.get("items_looked_for") or [],
                "splat_pose": {**{k: v for k, v in got.items() if k != "fix"}, "raw": got.get("fix"), "sigma_m": pose["sigma_m"],
-                              "radius95_m": pose["radius95_m"], "trail": pose["trail"],
+                              "uncertainty_m": pose["radius95_m"], "trail": pose["trail"],
                               "keyframe_photo": f"/evidence/{folder.name}/kf{kf:03d}.jpg" if kf is not None else None},
                "at": time.time(), "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                "seconds": {"total": round(time.time() - t0, 3)}}
@@ -1105,8 +1109,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         return {"state": "steady" if found else "settling", "position": [round(float(v), 2) for v in pose["position"]],
                 "heading_deg": int(round(pose["heading_deg"])), "pitch_deg": pose["pitch_deg"], "confidence_pct": pct, "next_pct": pct,
                 "show": found, "agree": len(recent), "of": len(recent), "age_s": pose["age_s"], "waiting": pose["held"] > 0,
-                "waypoints": splat_waypoints(zone, here, (answer or {}).get("waypoints")), "source": "splat",
-                "sigma_m": pose["sigma_m"], "radius95_m": pose["radius95_m"], "speed_m_s": pose["speed_m_s"],
+                "waypoints": splat_waypoints(zone, here, (answer or {}).get("waypoints")), "source": "fused",
+                "sigma_m": pose["sigma_m"], "uncertainty_m": pose["radius95_m"], "speed_m_s": pose["speed_m_s"],
                 "trail": [[p[0], p[1], p[2], p[3]] for p in pose["trail"]]}
 
     def splat_status(zone):
@@ -1197,7 +1201,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             distance, bearing = from_here(w["position"], pose)
             waypoints.append({"name": w["name"], "distance_m": distance, "bearing_deg": bearing, "position": w["position"]})
         state = "found" if sim >= QUICK_FOUND else "unsure"
-        fix = {"ok": True, "zone": zone, "job": None, "state": state, "confidence": round(sim, 2), "position": base["position"],
+        fix = {"ok": True, "zone": zone, "job": None, "source": "instant", "uncertainty_m": None, "state": state,
+               "confidence": round(sim, 2), "position": base["position"],
                "heading_deg": int(round(heading)), "waypoints": waypoints, "map": last.get("map"),
                "items": [], "items_looked_for": last.get("items_looked_for") or [],
                "quick": {"similarity": round(sim, 2), "picture": frame_k, "turn_deg": round(-slide * keys["fov"], 1),
@@ -2195,7 +2200,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     if isinstance(result.get("map"), dict):
                         result["map"][part] = [[round(float(v), 2) for v in p] for p in result["map"].get(part) or []]
                 headline, detail = where_in_plain_words(result)
-                fix = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail, **result,
+                fix = {"ok": True, "zone": zone, "job": header["job"], "headline": headline, "detail": detail, "source": "full",
+                       "uncertainty_m": None, **result,
                        "images": images, "splat": splat_url, "seconds": {**seconds, **result.get("seconds", {})},
                        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "at": time.time()}
                 fix["confidence_pct"] = track.fix_confidence_pct(result)  # this one fix on its own, as a percentage
@@ -2233,13 +2239,13 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     grow_room(zone)
                 # t0: when the photo reached the relay. The steady position ages from the photo, not from the answer.
                 stable = steady(zone, result, t0)
-                if isinstance(stable, dict) and stable.get("source") == "splat":
+                if isinstance(stable, dict) and stable.get("source") == "fused":
                     # The trained splat placed this photo too (above), far closer than the model's pass does in its own
                     # map axes (eval/POSITION_RESULTS.md): its pose is the position; the model's is kept beside it.
                     here = {"position": stable["position"], "heading_deg": stable["heading_deg"]}
                     fix.update(model_pose={"position": fix.get("position"), "heading_deg": fix.get("heading_deg"), "state": fix.get("state")},
                                position=stable["position"], heading_deg=stable["heading_deg"], pitch_deg=stable.get("pitch_deg"),
-                               radius95_m=stable["radius95_m"], waypoints=splat_waypoints(zone, here),
+                               source="fused", uncertainty_m=stable["uncertainty_m"], waypoints=splat_waypoints(zone, here),
                                state="found" if stable["state"] == "steady" else "unsure",
                                **({"splat_pose": placed["splat_pose"]} if placed else {}))
                     fix["headline"], fix["detail"] = where_in_plain_words(fix)

@@ -53,9 +53,6 @@
   #see { margin-top: 10px; display: none; }
   #see img { width: 100%; border-radius: 10px; display: block; background: #0b1118; aspect-ratio: 4 / 3; object-fit: cover; }
   #see figcaption { margin-top: 4px; }
-  #matched { margin-top: 8px; display: none; }
-  #matched img { width: 100%; border-radius: 10px; display: block; background: #0b1118; aspect-ratio: 1 / 1; object-fit: cover; }
-  #matched figcaption { margin-top: 4px; }
   ul, ol { list-style: none; margin: 0; padding: 0; }
   .tag.time { color: #bfe0ff; border-color: rgba(74, 163, 255, .5); font-weight: 500; font-size: 11px; padding: 1px 7px; }
   .tag.goal { color: #05070a; background: var(--yellow); border-color: #fff3b0; animation: pulse 1.6s ease-in-out infinite; }
@@ -139,7 +136,6 @@
     <div id="doing" class="muted"></div>
     <div id="check" hidden></div>
     <figure id="see" style="margin:10px 0 0"><img id="seeImg" alt="What the glasses saw last"><figcaption class="muted small" id="seeWhen"></figcaption></figure>
-    <figure id="matched" style="margin:8px 0 0"><img id="matchedImg" alt="The room's own photo the glasses' view was matched with"><figcaption class="muted small" id="matchedWhen"></figcaption></figure>
   </section>
   <section>
     <h2>Where they went today</h2>
@@ -254,35 +250,10 @@ feet.position.z = -1.45;
 const wearerTagAt = new THREE.Object3D();
 wearerTagAt.position.z = 0.22;
 wearer.add(cone, head, stem, feet, wearerTagAt);
-// "You are here" in the trained room (relay splat_locate.py): what they see as a translucent view cone that tilts with
-// their head, an arrow on the floor where they face, a ring holding the true spot with 95% certainty, and a short trail.
-const aim = new THREE.Group();  // turns about east-west by the head's pitch; +y is where they face
-const VIEW_LEN = 1.1, VIEW_H = Math.tan(30 * Math.PI / 180), VIEW_V = Math.tan(24 * Math.PI / 180);
-const viewCorners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => new THREE.Vector3(a * VIEW_LEN * VIEW_H, VIEW_LEN, b * VIEW_LEN * VIEW_V));
-const viewGeo = new THREE.BufferGeometry();
-const viewPts = [];
-for (let i = 0; i < 4; i++) viewPts.push(0, 0, 0, ...viewCorners[i].toArray(), ...viewCorners[(i + 1) % 4].toArray());
-viewGeo.setAttribute('position', new THREE.Float32BufferAttribute(viewPts, 3));
-const viewMat = new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false });
-const viewEdgeMat = new THREE.LineBasicMaterial({ color: 0x9fd0ff, transparent: true, opacity: 0.75 });
-const viewEdges = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(
-  viewCorners.flatMap((c, i) => [new THREE.Vector3(), c, c, viewCorners[(i + 1) % 4]])), viewEdgeMat);
-aim.add(new THREE.Mesh(viewGeo, viewMat), viewEdges);
-const arrowShape = new THREE.Shape([[-0.07, 0.2], [0, 0.42], [0.07, 0.2], [0.025, 0.2], [0.025, 0.24], [-0.025, 0.24], [-0.025, 0.2]]
-  .map(([x, y]) => new THREE.Vector2(x, y)));
-const floorArrow = new THREE.Mesh(new THREE.ShapeGeometry(arrowShape), new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
-floorArrow.position.z = -1.44;
-const sureDisc = new THREE.Mesh(new THREE.CircleGeometry(1, 48), new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
-const sureRing = new THREE.Mesh(new THREE.RingGeometry(0.97, 1, 64), new THREE.MeshBasicMaterial({ color: 0x9fd0ff, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
-const sure = new THREE.Group();  // scaled to the 95% radius; it does not turn with the heading
-sure.add(sureDisc, sureRing);
-sure.visible = false;
-wearer.add(aim, floorArrow);
-const trailLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.85 }));
 wearer.visible = false;
 const pathLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.7 }));
 const placeGroup = new THREE.Group();
-space.add(wearer, pathLine, placeGroup, sure, trailLine);
+space.add(wearer, pathLine, placeGroup);
 
 // ---- labels: HTML tags that follow points in 3D, so they stay sharp and readable on a phone ----
 const tags = new Map();  // id -> {el, anchor, lift}
@@ -329,7 +300,7 @@ function setMode(m) {
   mode = m;
   $('follow').classList.toggle('on', m === 'follow');
   $('eyes').classList.toggle('on', m === 'eyes');
-  head.visible = cone.visible = aim.visible = m !== 'eyes';
+  head.visible = cone.visible = m !== 'eyes';
 }
 function takeOver() { if (mode !== 'free') setMode('free'); flight = null; }
 let hintTimer = 0;
@@ -606,10 +577,8 @@ async function tickSpace() {
 const fresh = (f) => f && f.age_s != null && f.age_s < 45;
 function wearerPose(f) {  // the steady position when there is one (smoother), else the newest fix
   const s = f && f.stable;
-  if (s && s.position && s.state !== 'lost') return { position: s.position, heading: s.heading_deg || 0, state: f.state === 'unsure' ? 'unsure' : 'found',
-    pitch: s.pitch_deg || 0, radius: s.radius95_m, trail: s.trail, source: s.source };
-  if (f && f.position && f.state !== 'lost' && !f.unusable) return { position: f.position, heading: f.heading_deg || 0, state: f.state,
-    pitch: f.pitch_deg || 0, radius: f.radius95_m };
+  if (s && s.position && s.state !== 'lost') return { position: s.position, heading: s.heading_deg || 0, state: f.state === 'unsure' ? 'unsure' : 'found' };
+  if (f && f.position && f.state !== 'lost' && !f.unusable) return { position: f.position, heading: f.heading_deg || 0, state: f.state };
   return null;
 }
 let lastSeen = null;  // {position, heading, at}: the last live position this page saw
@@ -623,7 +592,7 @@ function knownPose() {  // the live position, else the last known one (stale: tr
   const p = track[track.length - 1];
   return p ? { position: [p[1], p[2], 0], heading: 0, state: 'lost', at: p[0], stale: true } : null;
 }
-const target = { pos: new THREE.Vector3(), heading: 0, pitch: 0, has: false };
+const target = { pos: new THREE.Vector3(), heading: 0, has: false };
 function nearestPlace(pose) {
   let best = null;
   for (const p of places) {
@@ -635,21 +604,12 @@ function nearestPlace(pose) {
 
 function updateWearer() {
   const pose = knownPose();
-  if (!pose) { wearer.visible = sure.visible = trailLine.visible = false; dropTags('wearer', new Set()); return; }
+  if (!pose) { wearer.visible = false; dropTags('wearer', new Set()); return; }
   const stale = pose.stale;
   if (!stale) lastSeen = { position: pose.position, heading: pose.heading, at: pose.at };
   wearer.visible = true;
   target.pos.set(pose.position[0], pose.position[1], pose.position[2] || 0);
   target.heading = pose.heading;
-  target.pitch = Math.max(-60, Math.min(60, pose.pitch || 0));
-  const r = Number.isFinite(pose.radius) ? Math.max(0.12, Math.min(6, pose.radius)) : null;
-  sure.visible = !stale && r != null;
-  if (sure.visible) { sure.scale.setScalar(r); sureRing.material.color.setHex(r > 1 ? colours.unsure : 0x9fd0ff); }
-  floorArrow.material.color.setHex(stale ? colours.stale : colours[pose.state] || colours.found);
-  const trail = (!stale && Array.isArray(pose.trail) ? pose.trail : []).filter((p) => p[0] >= (fix ? fix.at : 0) - 15);
-  trailLine.visible = trail.length > 1;
-  trailLine.geometry.dispose();
-  trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map((p) => new THREE.Vector3(p[1], p[2], (p[3] || 0) - 1.43)));
   if (!target.has) { wearer.position.copy(target.pos); wearer.rotation.z = -pose.heading * Math.PI / 180; target.has = true; }
   coneMat.color.setHex(stale ? colours.stale : colours[pose.state] || colours.found);
   const t = tag('wearer', stale ? `Last seen ${clock(pose.at)}` : 'Wearer', 'wearer', wearerTagAt, () => toWearer('follow'));
@@ -925,9 +885,7 @@ function renderNow() {
       : here ? `At the ${here.name}, ${stay(fix.at - here.start)} so far.`
       : `In the ${nice(fix.zone || zone)}` + (near ? (near.d <= VISIT_IN_M ? `, at the ${near.name}.` : `, ${metres(near.d)} from the ${near.name}.`) : '.');
     $('nowLine').textContent = where;
-    const sure95 = pose && Number.isFinite(pose.radius) ? ` · within ${pose.radius < 1 ? `${Math.max(10, Math.round(pose.radius * 100))} cm` : metres(pose.radius)}` : '';
-    const how = pose && pose.source === 'splat' ? ' (matched to the 3D room)' : '';
-    $('seen').textContent = fresh(fix) ? `Live · position from ${ago(fix.age_s)}${sure95}${how}` : `Last seen at ${clock(fix.at)}, ${ago(fix.age_s)}`;
+    $('seen').textContent = fresh(fix) ? `Live · position from ${ago(fix.age_s)}` : `Last seen at ${clock(fix.at)}, ${ago(fix.age_s)}`;
   }
   $('doing').innerHTML = doingWords().map((w) => `<div>${esc(w)}</div>`).join('');
   renderGoal();
@@ -1046,13 +1004,7 @@ async function tickSee() {
     seeUrl = url;
     $('seeWhen').textContent = `What the glasses saw at ${clock(fix.at)}`;
     $('see').style.display = 'block';
-    const sp = fix.splat_pose;
-    if (sp && sp.keyframe_photo && sp.placed) {
-      if ($('matchedImg').dataset.src !== sp.keyframe_photo) { $('matchedImg').dataset.src = sp.keyframe_photo; $('matchedImg').src = api(sp.keyframe_photo); }
-      $('matchedWhen').textContent = `Matched with the room's photo ${sp.keyframe} (${sp.inliers} points agree): they stand near where it was taken.`;
-      $('matched').style.display = 'block';
-    } else $('matched').style.display = 'none';
-  } catch { $('see').style.display = $('matched').style.display = 'none'; } finally { seeBusy = false; }
+  } catch { $('see').style.display = 'none'; } finally { seeBusy = false; }
 }
 
 // Panel folding on a phone.
@@ -1074,8 +1026,6 @@ renderer.setAnimationLoop((now) => {
     const want = -target.heading * Math.PI / 180;
     const diff = Math.atan2(Math.sin(want - wearer.rotation.z), Math.cos(want - wearer.rotation.z));
     wearer.rotation.z += diff * (1 - Math.exp(-dt * 6));
-    aim.rotation.x += (target.pitch * Math.PI / 180 - aim.rotation.x) * (1 - Math.exp(-dt * 6));
-    sure.position.set(wearer.position.x, wearer.position.y, wearer.position.z - 1.445);
   }
   if (flight) {
     flight.t = Math.min(1, flight.t + dt / flight.seconds);
@@ -1093,7 +1043,7 @@ renderer.setAnimationLoop((now) => {
     camera.position.lerp(want, k);
     const yawDiff = Math.atan2(Math.sin(yaw - look.yaw), Math.cos(yaw - look.yaw));
     look.yaw += yawDiff * k;
-    look.pitch += ((mode === 'eyes' ? aim.rotation.x : -0.22) - look.pitch) * k;
+    look.pitch += ((mode === 'eyes' ? 0 : -0.22) - look.pitch) * k;
   } else {
     const v = speedNow() * dt;
     const f = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
@@ -1130,7 +1080,7 @@ function every(ms, fn) {  // the first run happens even in a background tab, so 
 }
 await tickWhere();
 every(8000, tickSpace);  // a place named at any time shows within seconds
-every(400, tickWhere);
+every(1000, tickWhere);
 every(15000, tickDay);
 every(10000, tickReminders);
 every(3000, tickSee);
