@@ -18,6 +18,11 @@ test('nothing in the way and a quiet night say so, or nothing at all when there 
   assert.deepEqual(await homeSummary({api: none, live: true, day: '2026-11-15'}), {clearUp: '', night: ''});
 });
 
+test('hazards guessed from one splat say "possible"', async () => {
+  const api = {hazards: async () => ({method: 'shape (one splat, no change information)', hazards: [{in_the_way: true}, {in_the_way: true}]}), night: notFound};
+  assert.equal((await homeSummary({api, live: true, day: '2026-11-15'})).clearUp, '2 possible trip hazards');
+});
+
 test('other errors are not hidden as "no data"', async () => {
   const broken = {hazards: () => Promise.reject(Object.assign(new Error('down'), {status: 503})), night: notFound};
   await assert.rejects(homeSummary({api: broken, live: true, day: '2026-11-15'}));

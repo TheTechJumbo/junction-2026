@@ -19,6 +19,8 @@ const LOW_M = 0.45, HIGH_M = 2.1;
 const mix = (a, b, f) => a.map((v, k) => v + (b[k] - v) * f);
 const clock = t => new Date(t).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Helsinki'});
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// Hazards from one splat's shape alone (splat_hazards.py) are a guess and say so.
+const guessed = h => String(h?.method || '').startsWith('shape');
 const times = n => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
 
 /** Home-level data the hero shows: how many things to clear up, and last night in a few words. */
@@ -27,7 +29,8 @@ export async function homeSummary({api, live, day, signal}) {
   const clear = (data.hazards?.hazards || []).filter(h => h.in_the_way);
   const s = data.night?.summary;
   return {
-    clearUp: clear.length ? `${count(clear.length, 'thing', 'things')} to clear up` : '',
+    clearUp: !clear.length ? '' : guessed(data.hazards) ? count(clear.length, 'possible trip hazard', 'possible trip hazards')
+      : `${count(clear.length, 'thing', 'things')} to clear up`,
     night: s && s.trips ? `Up ${times(s.trips)} last night` : s ? 'Slept through last night' : '',
   };
 }
@@ -125,7 +128,9 @@ export class Home3D {
     }
     this.space.layer('walks', s); this.space.layer('hazards', over, {depth: false});
     const clear = h.hazards.filter(z => z.in_the_way).length;
-    this.say([label, clear ? `${count(clear, 'thing', 'things')} on the floor in the way of the night walks.` : 'Nothing on the floor in the way of the night walks.'].filter(Boolean).join(' '));
+    const maybe = guessed(h) ? ' possibly' : '';
+    this.say([label, clear ? `${count(clear, 'thing', 'things')} on the floor${maybe} in the way of the night walks.` : 'Nothing on the floor in the way of the night walks.',
+      guessed(h) ? 'Guessed from the 3D shape alone.' : ''].filter(Boolean).join(' '));
     const first = h.hazards.find(z => z.in_the_way);
     if (focusFirst && first) this.space.focus(at(first.centre), 0.75);
   }

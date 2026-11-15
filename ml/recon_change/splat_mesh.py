@@ -128,19 +128,24 @@ def mesh(m, include_movable=True, levels=None):
     return v, nrm, c, t, summary
 
 
-def from_splat(data, voxel=0.05, min_alpha=64, drop_largest=0.01):
+def from_splat(data, voxel=0.05, min_alpha=64, drop_largest=0.01, frame=None):
     """A trained splat file (the 32-byte .splat records: video_map.py's trained.splat, splat.py's
     output) -> (vertices, normals, colours, triangles). There are no cells or detail levels in it, so it
     is meshed at one voxel size. Near-transparent Gaussians (alpha below min_alpha) and the largest
     drop_largest share (trained splats keep big faint blobs for the background and stray floaters)
-    are left out, so the mesh follows the surfaces."""
+    are left out, so the mesh follows the surfaces. With a room frame (room_frame.py) the splat is moved
+    into the room map's frame first (metres, z up), where the captured walk and the named places are."""
     rec = np.frombuffer(bytes(data), sr.RECORD)
     keep = rec["rgba"][:, 3] >= min_alpha
     if drop_largest and keep.sum() > 100:
         size = rec["scale"].max(1)
         keep &= size <= np.quantile(size[keep], 1 - drop_largest)
     rec = rec[keep]
-    return surface_nets(rec["pos"].astype(np.float64), rec["rgba"][:, :3], disc_normals(rec["rot"]), voxel)
+    pos, normals = rec["pos"].astype(np.float64), disc_normals(rec["rot"])
+    if frame is not None:
+        import room_frame
+        pos, normals = room_frame.to_room(pos, frame), room_frame.turn(normals, frame)
+    return surface_nets(pos, rec["rgba"][:, :3], normals, voxel)
 
 
 def write_mesh(v, nrm, c, t, path, comments=()):
@@ -172,13 +177,22 @@ def write_ply(m, path, include_movable=True, comments=()):
 
 
 if __name__ == "__main__":
-    # A trained splat to the dashboard's mesh:  python splat_mesh.py trained.splat home.ply [voxel] [up]
-    # up is the splat's up axis: "-y" for VGGT's coordinates (the default), "z" for z-up scenes.
+    # A trained splat to the dashboard's mesh:
+    #   python splat_mesh.py trained.splat home.ply [voxel] [up] [--frame room.json]
+    # up is the splat's up axis: "-y" for VGGT's coordinates (the default), "z" for z-up scenes. With
+    # --frame the mesh is moved into the room map's frame (up z), so the captured walk lines up with it.
     import sys
-    src, out = sys.argv[1], sys.argv[2]
-    voxel = float(sys.argv[3]) if len(sys.argv) > 3 else 0.05
-    up = sys.argv[4] if len(sys.argv) > 4 else "-y"
-    v, nrm, c, t = from_splat(open(src, "rb").read(), voxel)
+    args = [a for a in sys.argv[1:]]
+    frame = None
+    if "--frame" in args:
+        i = args.index("--frame")
+        import room_frame
+        frame = room_frame.load(args[i + 1])
+        del args[i:i + 2]
+    src, out = args[0], args[1]
+    voxel = float(args[2]) if len(args) > 2 else 0.05
+    up = "z" if frame is not None else (args[3] if len(args) > 3 else "-y")
+    v, nrm, c, t = from_splat(open(src, "rb").read(), voxel, frame=frame)
     write_mesh(v, nrm, c, t, out, comments=[f"up {up}", f"from {src.split('/')[-1]}"])
     print(out, len(v), "vertices", len(t), "triangles")
 
