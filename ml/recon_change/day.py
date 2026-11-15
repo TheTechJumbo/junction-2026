@@ -164,6 +164,11 @@ def _squash(text):
     return re.sub(r"[^a-z0-9]+", "", str(text).casefold())
 
 
+def _the(place):
+    """A place with "the" before it, unless its name has its own ("our table", "my bed")."""
+    return place if str(place).lower().split()[:1] in (["our"], ["my"], ["the"], ["your"]) else f"the {place}"
+
+
 def _nice(name):
     return re.sub(r"[_\-]+", " ", str(name)).strip()
 
@@ -321,9 +326,9 @@ class DayLog:
         if isinstance(event.get("confidence"), (int, float)):
             record["c"] = round(float(event["confidence"]), 2)
         same = (lambda r: r.get("id") == record["id"]) if "id" in record else \
-            (lambda r: (r["type"], r["t"], r.get("object")) == (record["type"], record["t"], record["object"]))
+            (lambda r: (r.get("type"), r["t"], r.get("object")) == (record["type"], record["t"], record["object"]))
         with self.lock:
-            if any(r["k"] == "event" and same(r) for r in self.records(self.day_of(t))):
+            if any(r["k"] in ("event", "item") and same(r) for r in self.records(self.day_of(t))):
                 return None
             return self.add(record)
 
@@ -359,9 +364,10 @@ class DayLog:
                 added.append(self.add(record))
         return added
 
-    def item(self, name, at=None, near="", zone="", position=None):
+    def item(self, name, at=None, near="", zone="", position=None, id=None):
         """An item the glasses saw (keys, wallet). Recorded the first time each day, and again only
-        when it is seen somewhere else. Returns the record, or None when nothing new."""
+        when it is seen somewhere else. Returns the record, or None when nothing new. id: the event the
+        relay also sent to the event API for it (live/finder.py), so that event is not taken in again."""
         t = float(at if at is not None else self.now())
         try:
             spot = [round(float(v), 2) for v in position[:2]] if position else None
@@ -376,6 +382,8 @@ class DayLog:
             record = {"k": "item", "t": round(t, 1), "name": str(name), "near": str(near or ""), "z": str(zone or "")}
             if spot:
                 record["p"] = spot
+            if id:
+                record["id"] = str(id)
             return self.add(record)
 
     # ------------------------------------------------------------------------- the day, in entries
@@ -448,13 +456,13 @@ class DayLog:
                   basis(room), room["confidence_pct"], zone=room["zone"], ongoing=ongoing, fixes=room["fixes"])
         for visit in seen["places"]:
             ongoing = today and now - visit["end"] <= gap_s
-            entry("place", visit["start"], visit["end"], f"{v['Sub']} {v['were']} near the {visit['place']} {self.span(visit['start'], visit['end'])}.",
+            entry("place", visit["start"], visit["end"], f"{v['Sub']} {v['were']} near {_the(visit['place'])} {self.span(visit['start'], visit['end'])}.",
                   basis(visit, f", the closest {visit['closest']:.1f} m from the {visit['place']} (map metres)"),
                   visit["confidence_pct"], place=visit["place"], zone=visit["zone"], ongoing=ongoing, fixes=visit["fixes"])
         for walk in build_walks(seen["places"], seen["gaps"], "place"):
             entry("walk", walk["start"], walk["end"],
                   f"{v['Sub']} went from the {walk['from']} to the {walk['to']} {self.between(walk['start'], walk['end'])}.",
-                  f"seen near the {walk['from']} at {self.hhmm(walk['start'])}, then near the {walk['to']} at {self.hhmm(walk['end'])}",
+                  f"seen near {_the(walk['from'])} at {self.hhmm(walk['start'])}, then near {_the(walk['to'])} at {self.hhmm(walk['end'])}",
                   walk["confidence_pct"], place=walk["to"], zone=walk["zone"], origin=walk["from"])
         for walk in build_walks(seen["rooms"], seen["gaps"], "zone"):
             entry("walk", walk["start"], walk["end"],
@@ -495,7 +503,7 @@ class DayLog:
             if how == "same":
                 tail = f" while {v['sub']} {v['were']} next to it."
             elif how == "place":
-                tail = f" while {v['sub']} {v['were']} near the {visit['place']}."
+                tail = f" while {v['sub']} {v['were']} near {_the(visit['place'])}."
             elif how == "room":
                 tail = f" while {v['sub']} {v['were']} in the {_nice(visit['zone'])}."
             else:  # say that it is not known, never guess
@@ -554,7 +562,7 @@ class DayLog:
             if r["k"] != "item":
                 continue
             name, were = r["name"], "were" if r["name"].endswith("s") else "was"
-            near = f" near the {r['near']}" if r.get("near") else f" in the {_nice(r['z'])}" if r.get("z") else ""
+            near = f" near {_the(r['near'])}" if r.get("near") else f" in the {_nice(r['z'])}" if r.get("z") else ""
             before = last_spot.get((r["z"], name))
             if before:
                 moved = f", about {math.dist(before['p'], r['p']):.0f} m from where {'they' if were == 'were' else 'it'} {were} seen at {self.hhmm(before['t'])}" \
@@ -623,8 +631,8 @@ class DayLog:
                            f"for {_duration(sum(e['end'] - e['start'] for e in group))} in all.")
         for place in dict.fromkeys(e["place"] for e in places):  # one sentence per place
             group = [e for e in places if e["place"] == place]
-            out.append(f"{v['Sub']} {v['were']} near the {place} {spans(group)}." if len(group) <= 2 else
-                       f"{v['Sub']} {v['were']} near the {place} {_times(len(group))}, last {self.span(group[-1]['start'], group[-1]['end'])}.")
+            out.append(f"{v['Sub']} {v['were']} near {_the(place)} {spans(group)}." if len(group) <= 2 else
+                       f"{v['Sub']} {v['were']} near {_the(place)} {_times(len(group))}, last {self.span(group[-1]['start'], group[-1]['end'])}.")
         if not rooms and not places and (kinds("gap") or not out and not carer and unsure):
             out.append(f"{'I' if not carer else 'The glasses'} could not tell where {v['sub']} {v['were']} {label}.")
         events = kinds("event")
@@ -707,7 +715,7 @@ class DayLog:
         entries = [e for e in self.timeline(day, "wearer", now) if e["end"] >= lo and e["start"] < hi]
         visits = [e for e in entries if e["kind"] == kind and (e["place"] if kind == "place" else e["zone"]) == name]
         gaps = [e for e in entries if e["kind"] == "gap"]
-        where = f"near the {name}" if kind == "place" else f"in the {_nice(name)}"
+        where = f"near {_the(name)}" if kind == "place" else f"in the {_nice(name)}"
         label = self.label(day, part, now)
         doubtful = [e for e in visits if e["confidence_pct"] < SPEAK_PCT]
         visits = [e for e in visits if e not in doubtful]

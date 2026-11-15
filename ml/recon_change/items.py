@@ -153,6 +153,58 @@ SURFACE_SHARE = 0.15
 BATCH = os.environ.get("RECON_ITEMS_BATCH", "")
 
 
+# ---- "find me X" (live/finder.py on the relay decides; these are the facts it decides from) ----
+# A name with a colour word ("orange box") is also checked for that colour: the share of the pixels in the middle of
+# the box that have it (OpenCV HSV: hue 0..180). OWLv2 scores "orange box" on orange things and on boxes; the colour
+# share and the size (size_m, from the fix's depth) tell an orange box from an orange bottle or a brown carton.
+COLOURS = {  # name: (hue ranges, least saturation, least value, most value)
+    "red": (((0, 7), (170, 180)), 100, 60, 255), "orange": (((7, 22),), 120, 110, 255),
+    "yellow": (((22, 35),), 100, 100, 255), "green": (((35, 85),), 70, 50, 255), "blue": (((90, 130),), 80, 50, 255),
+    "purple": (((130, 160),), 60, 50, 255), "pink": (((160, 172),), 60, 110, 255), "brown": (((5, 25),), 60, 30, 150),
+    "white": (((0, 180),), 0, 180, 255), "black": (((0, 180),), 0, 0, 60), "grey": (((0, 180),), 0, 60, 180),
+    "gray": (((0, 180),), 0, 60, 180)}
+LOW_SATURATION = {"white": 40, "black": 255, "grey": 40, "gray": 40}  # these must also be this unsaturated or less
+COLOUR_MIDDLE = 0.6  # the middle share of the box's width and height that is looked at
+
+
+def colour_of(name):
+    """The colour word in a name ("orange box" -> "orange"), or None."""
+    return next((w for w in str(name).lower().split() if w in COLOURS), None)
+
+
+def colour_share(picture, box, name):
+    """The share (0..1) of the middle of a box (0..1 of the picture) that has the colour its name says, or None when
+    the name says no colour or the box is empty."""
+    colour = colour_of(name)
+    if colour is None:
+        return None
+    H, W = picture.shape[:2]
+    u0, v0, u1, v1 = box
+    du, dv = (u1 - u0) * (1 - COLOUR_MIDDLE) / 2, (v1 - v0) * (1 - COLOUR_MIDDLE) / 2
+    x0, x1 = int(np.clip((u0 + du) * W, 0, W - 1)), int(np.clip(np.ceil((u1 - du) * W), 1, W))
+    y0, y1 = int(np.clip((v0 + dv) * H, 0, H - 1)), int(np.clip(np.ceil((v1 - dv) * H), 1, H))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    hsv = cv2.cvtColor(picture[y0:y1, x0:x1], cv2.COLOR_BGR2HSV).reshape(-1, 3).astype(np.int32)
+    hues, least_s, least_v, most_v = COLOURS[colour]
+    hue = np.zeros(len(hsv), bool)
+    for low, high in hues:
+        hue |= (hsv[:, 0] >= low) & (hsv[:, 0] < high)
+    ok = hue & (hsv[:, 1] >= least_s) & (hsv[:, 2] >= least_v) & (hsv[:, 2] <= most_v)
+    if colour in LOW_SATURATION:
+        ok &= hsv[:, 1] <= LOW_SATURATION[colour]
+    return round(float(ok.mean()), 3)
+
+
+def box_size_m(box, window, depth, K, metres, shape):
+    """The long side of a box in metres: its size in pixels of the depth frame (shape H, W; the box is in 0..1 of the
+    picture whose part `window` that frame shows) at that depth (the pass's units; metres per unit)."""
+    H, W = shape
+    x0, y0, x1, y1 = window
+    bw, bh = (box[2] - box[0]) / (x1 - x0) * W, (box[3] - box[1]) / (y1 - y0) * H
+    return round(float(max(bw / K[0, 0], bh / K[1, 1]) * depth * metres), 2)
+
+
 def wanted(text=None):
     """The item names to look for, from RECON_ITEMS (comma separated). Unset: the default list.
     Empty: nothing, which turns the feature off."""
@@ -701,6 +753,8 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0, room=None):
         item = {"name": d["name"], "score": round(float(d["score"]), 2), "box": [round(float(v), 4) for v in d["box"]],
                 "position": None, "distance_m": None, "bearing_deg": None, "matched": d.get("matched", "text"),
                 "confidence_pct": d["confidence_pct"] if "confidence_pct" in d else confidence_pct(d)}
+        if d.get("colour") is not None:
+            item["colour"] = d["colour"]
         items.append(item)
         if state == "lost":
             item["note"] = "No position fix, so it is not on the map."
@@ -731,7 +785,7 @@ def place(found, r, base, q, valid, window, state, typical_m=2.0, room=None):
         east_m, north_m = at[0] - here[0], at[1] - here[1]
         bearing = (np.degrees(np.arctan2(east_m, north_m)) - heading + 180) % 360 - 180  # 0 ahead, + to the right
         item.update(position=[round(float(v), 2) for v in at], distance_m=round(float(np.hypot(east_m, north_m)), 1),
-                    bearing_deg=int(round(float(bearing))))
+                    bearing_deg=int(round(float(bearing))), size_m=box_size_m(d["box"], window, depth, K, metres, (H, W)))
         marks.append((world, 1.2 * 0.07 / metres, ITEM_COLOUR))
     return items, marks
 
@@ -837,6 +891,37 @@ def write_crops(picture, items, out):
             item["image"] = name
 
 
+def in_pictures(detector, names, r, pictures, frame_numbers, room, valid, floor=0.25, per_picture=3):
+    """Look for `names` in a zone's own pictures (the room map's pass, worker op "spots" with look_for): every box from
+    `floor` up, best `per_picture` per name and picture, placed on the map from the pass's depth, with its colour share
+    and size. pictures[i] is r's frame i (picture number frame_numbers[i]). Returns JSON-ready dicts."""
+    out = []
+    for i, picture in enumerate(pictures):
+        boxes = detector.candidates(picture, names, floor=floor)
+        for name in names:
+            mine = sorted((d for d in boxes if d["name"] == name and d["score"] >= floor), key=lambda d: -d["score"])[:per_picture]
+            for d in mine:
+                u, v = (d["box"][0] + d["box"][2]) / 2, (d["box"][1] + d["box"][3]) / 2
+                H, W = r.depth[i].shape
+                x, y = int(np.clip(round(u * (W - 1)), 0, W - 1)), int(np.clip(round(v * (H - 1)), 0, H - 1))
+                rx = max(2, int(round((d["box"][2] - d["box"][0]) * (W - 1) / 4)))
+                ry = max(2, int(round((d["box"][3] - d["box"][1]) * (H - 1) / 4)))
+                piece = r.depth[i][max(0, y - ry):y + ry + 1, max(0, x - rx):x + rx + 1]
+                ok = valid[i][max(0, y - ry):y + ry + 1, max(0, x - rx):x + rx + 1] & (piece > 0)
+                hit = {"name": name, "frame": int(frame_numbers[i]), "score": round(float(d["score"]), 3),
+                       "box": [round(float(b), 4) for b in d["box"]], "position": None, "size_m": None,
+                       "colour": colour_share(picture, d["box"], name)}
+                if ok.sum() >= 3:
+                    depth = float(np.median(piece[ok]))
+                    K = r.K[i]
+                    cam = np.array([(x - K[0, 2]) / K[0, 0] * depth, (y - K[1, 2]) / K[1, 1] * depth, depth])
+                    world = (cam - r.E[i][:, 3]) @ r.E[i][:, :3]
+                    hit["position"] = [round(float(c), 3) for c in locate.to_map(room, world)[0]]
+                    hit["size_m"] = box_size_m(d["box"], (0.0, 0.0, 1.0, 1.0), depth, K, room["metres"], (H, W))
+                out.append(hit)
+    return out
+
+
 def look(detector, names, clip, newest, like, r, base, q, valid, state, out, remembered=None):
     """The whole lost-items step of one position fix. newest: the wearer's newest frame before it
     was cropped for the model; like: a baseline frame (the shape it was cropped to); remembered:
@@ -854,6 +939,10 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
         picture, saw = newest, "newest frame"
     lowest = min([detector.score, CONFIRM] + ([CANDIDATES] if CANDIDATES > 0 else []))
     every = detector.candidates(picture, names, floor=lowest)  # down to the look-again and candidates limits
+    for d in every:  # "orange box": how much of the box is orange (None for a name without a colour word)
+        share = colour_share(picture, d["box"], d["name"])
+        if share is not None:
+            d["colour"] = share
     found = best_per_name([d for d in every if d["accepted"]])  # sightings: accepted boxes only
     room = locate.map_frame(r, base, valid)
     window = crop_window(newest.shape, like.shape)
@@ -865,7 +954,8 @@ def look(detector, names, clip, newest, like, r, base, q, valid, state, out, rem
         try:
             listed, _ = place([d for d in every if d["accepted"] or d.get("only_enrolled") or d["score"] >= CANDIDATES],
                               r, base, q, valid, window, state, room=room)
-            fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "confidence_pct", "position", "box", "matched", "distance_m", "bearing_deg")}
+            fields["items_candidates"] = [{k: c[k] for k in ("name", "score", "confidence_pct", "position", "box", "matched", "distance_m",
+                                                             "bearing_deg", "size_m", "colour") if k in c}
                                           for c in listed if c["position"] is not None]
         except Exception as error:
             fields["items_note"] = (fields.get("items_note", "") + f" Candidates were not listed: {type(error).__name__}: {error}").strip()[:300]
