@@ -764,7 +764,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 live_finds[zone] = {"at": taken, "done_at": time.time(), "boxes": boxes, "image": image, "job": header["job"],
                                     "latency_s": round(time.time() - taken, 2), "seconds": header["result"].get("seconds")}
                 now_fix = where.get(zone) or {}  # where the photo was taken from: the fix made from it (instant or full)
-                if boxes and now_fix.get("state") != "lost" and now_fix.get("position") and abs(now_fix.get("at", 0) - taken) < 3:
+                if boxes and now_fix.get("state") != "lost" and now_fix.get("position") and -3 < now_fix.get("at", 0) - taken < finds.LIVE_WITHIN_S:  # (a fix ends seconds after its photo)
                     pose = [float(now_fix["position"][0]), float(now_fix["position"][1]), float(now_fix.get("heading_deg") or 0)]
                     for name in {b["name"] for b in boxes}:
                         best = max((b for b in boxes if b["name"] == name), key=lambda b: b["score"])
