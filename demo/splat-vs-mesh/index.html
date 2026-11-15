@@ -77,7 +77,7 @@
 <header>
   <h1>Gaussian splat → our mesh</h1>
   <p id="scene-words">Mip-NeRF 360 "room" (public example, 1.59 M Gaussians). Right: <code>splat_mesh.from_splat()</code> in the family app's own viewer.</p>
-  <label>Mesh: <select id="which"><option value="room_blocks_fine.ply">blocks, 7 cm (~10k)</option><option value="room_blocks_mid.ply">blocks, 12 cm (~3k)</option><option value="room_10k.ply">~10k triangles (simplified surface)</option><option value="room_20k.ply">~20k triangles (simplified)</option><option value="room_lowpoly.ply">blocks, under 1k (lowpoly.py)</option><option value="room_mesh.ply" data-raw>coarse voxel</option><option value="room_mesh_fine.ply" data-raw>fine voxel</option></select></label>
+  <label>Quality: <select id="which"><option value="room_blocks_fine.ply">blocks, 7 cm (~10k)</option><option value="room_blocks_mid.ply">blocks, 12 cm (~3k)</option><option value="room_10k.ply">~10k triangles (simplified surface)</option><option value="room_20k.ply">~20k triangles (simplified)</option><option value="room_lowpoly.ply">blocks, under 1k (lowpoly.py)</option><option value="room_mesh.ply" data-raw>coarse voxel</option><option value="room_mesh_fine.ply" data-raw>fine voxel</option></select></label>
   <label><input type="checkbox" id="show-night" checked> Last night in 3D</label>
 </header>
 <main>
@@ -123,7 +123,7 @@
   const SCENES = {
     venue: {dir: 'venue/', splat: 'venue/venue-kitchen-glasses-anon.splat',
       words: 'Junction hacking hall, from our Ray-Ban Meta glasses (Seb’s splat, people anonymised; 1.02 M Gaussians).',
-      meshes: [['room_blocks_fine.ply', 'blocks, high (7 cm)'], ['room_blocks_mid.ply', 'blocks, medium (12 cm)']]},
+      meshes: [['room_blocks_fine.ply', 'high (7 cm blocks)'], ['room_blocks_mid.ply', 'medium (12 cm blocks)'], ['room_blocks_low.ply', 'low (30 cm blocks)']]},
     room: {dir: 'room/', splat: 'room/room.splat', words: 'Mip-NeRF 360 “room” (public example, 1.59 M Gaussians).',
       meshes: [['room_blocks_fine.ply', 'blocks, 7 cm (~10k)'], ['room_blocks_mid.ply', 'blocks, 12 cm (~3k)'], ['room_10k.ply', '~10k triangles (simplified surface)'],
         ['room_lowpoly.ply', 'blocks, under 1k'], ['room_mesh.ply', 'coarse voxel', true], ['room_mesh_fine.ply', 'fine voxel', true]]},
