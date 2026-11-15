@@ -2,8 +2,8 @@
 // It caches only the app's own static files (everything under /dashboard/), so the app opens
 // without a network and shows its offline message. Household data lives outside this scope
 // (/timeline, /summary, /evidence) and is never cached; neither is any request carrying the token.
-const CACHE = 'tuttu-shell-v8';
-const SHELL = ['./', 'index.html', 'base.css', 'app.js', 'client.js', 'day.js', 'space.js', 'home3d.js', 'manifest.json',
+const CACHE = 'tuttu-shell-v9';
+const SHELL = ['./', 'index.html', 'base.css', 'app.js', 'client.js', 'day.js', 'space.js', 'home3d.js', 'home-data.js', 'manifest.json',
   'themes/themes.json', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
