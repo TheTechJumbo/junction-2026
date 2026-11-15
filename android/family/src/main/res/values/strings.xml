@@ -8,4 +8,6 @@
     <string name="address_invalid">Use an https:// address with no path, for example https://home.example.org</string>
     <string name="shortcut_address_short">Home address</string>
     <string name="shortcut_address_long">Change home address</string>
+    <string name="glasses_title">Glasses</string>
+    <string name="glasses_long">Watch a pair of glasses live</string>
 </resources>

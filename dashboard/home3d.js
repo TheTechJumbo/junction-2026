@@ -9,6 +9,8 @@
 // Connected, everything comes from the home (GET /mesh, /hazards, /night). Otherwise, or while the
 // home has no 3D map yet, all three are the example home, labelled as such; never a mix of both.
 import {Space, parsePly, upright, shape, ring, disc, ribbon, wall, softRibbon, softWall, sphere, softDisc, dashes, pillar} from './space.js';
+import {count, guessed, loadData, times} from './home-data.js';
+export {homeSummary} from './home-data.js';
 
 const RED = [0.86, 0.27, 0.25], ORANGE = [0.95, 0.6, 0.25], AMBER = [0.95, 0.69, 0.29], TEAL = [0.3, 0.75, 0.7];
 const EARLY = [0.33, 0.36, 0.85], LATE = [0.97, 0.7, 0.3], DIM = [0.42, 0.45, 0.58];
@@ -20,50 +22,6 @@ const LIFT = 0.07;
 const LOW_M = 0.45, HIGH_M = 2.1;
 const mix = (a, b, f) => a.map((v, k) => v + (b[k] - v) * f);
 const clock = t => new Date(t).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Helsinki'});
-const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-// Hazards from one splat's shape alone (splat_hazards.py) are a guess and say so.
-const guessed = h => String(h?.method || '').startsWith('shape');
-const times = n => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
-
-/** Home-level data the hero shows: how many things to clear up, and last night in a few words. */
-export async function homeSummary({api, live, day, signal}) {
-  const data = await loadData({api, live, day, signal, mesh: false});
-  const clear = (data.hazards?.hazards || []).filter(h => h.in_the_way);
-  const s = data.night?.summary;
-  return {
-    clearUp: !clear.length ? '' : guessed(data.hazards) ? count(clear.length, 'possible trip hazard', 'possible trip hazards')
-      : `${count(clear.length, 'thing', 'things')} to clear up`,
-    night: s && s.trips ? `Up ${times(s.trips)} last night` : s ? 'Slept through last night' : '',
-  };
-}
-
-async function json(url, signal) {
-  const response = await fetch(url, {signal, cache: 'no-store'});
-  if (!response.ok) throw Object.assign(new Error('The example home is unavailable.'), {userFacing: true});
-  return response.json();
-}
-const missing = error => error && (error.status === 404);
-/** Mesh, hazards and night together: all from the home, or all from the example. */
-async function loadData({api, live, day, signal, mesh = true}) {
-  if (live) {
-    try {
-      const [buffer, hazards, night] = await Promise.all([
-        mesh ? api.mesh(signal) : Promise.resolve(null),
-        api.hazards(signal).catch(e => { if (missing(e)) return null; throw e; }),
-        api.night(day, signal).catch(e => { if (missing(e)) return null; throw e; }),
-      ]);
-      return {buffer, hazards, night, example: false};
-    } catch (error) {
-      if (!missing(error)) throw error; // no 3D map from home yet: the example, labelled
-    }
-  }
-  const [buffer, hazards, night] = await Promise.all([
-    mesh ? fetch('./fixtures/home.ply', {signal}).then(r => { if (!r.ok) throw Object.assign(new Error('The example room is unavailable.'), {userFacing: true}); return r.arrayBuffer(); }) : null,
-    json('./fixtures/hazards.json', signal), json('./fixtures/night.json', signal),
-  ]);
-  return {buffer, hazards, night, example: true, liveAsked: live};
-}
-
 export class Home3D {
   constructor({$, api, plain}) {
     Object.assign(this, {$, api, plain});
@@ -170,6 +128,9 @@ export class Home3D {
     const span0 = (this.t1 - this.t0) || 1;
     this.lift = t => floor + LOW_M + (HIGH_M - LOW_M) * (t - this.t0) / span0;
     for (const x of this.track) x.air = [x.p[0], this.lift(x.t), x.p[2]];
+    // The drawn trail keeps only the points that change its shape (2 cm), worked out once: far fewer
+    // triangles to rebuild on every step of the slider.
+    this.kept = simplify(this.track, 0.02);
     const s = n.summary;
     $('night-summary').textContent = s.trips
       ? `Up ${times(s.trips)} · ${s.minutes_up} min out of bed · ${s.metres} m walked${s.places.length ? ` · ${s.places.join(', ')}` : ''}`
@@ -303,7 +264,8 @@ export class Home3D {
     if (!this.track || this.tab !== 'night') return;
     const n = this.data.night, t = this.now(), span = (this.t1 - this.t0) || 1;
     let k = this.track.findIndex(x => x.t > t); if (k < 0) k = this.track.length;
-    const done = this.track.slice(0, Math.max(k, 1));
+    let kk = this.kept.findIndex(x => x.t > t); if (kk < 0) kk = this.kept.length;
+    const done = this.kept.slice(0, Math.max(kk, 1));
     // Where the wearer is now: between the last fix and the next.
     let here = done.at(-1).p;
     if (k > 0 && k < this.track.length) {
@@ -321,7 +283,7 @@ export class Home3D {
     this.space.layer('night-haze', haze, {blend: true, wave: 0.025});
     const trail = shape();
     ribbon(trail, air, 0.025, colourAt); wall(trail, air, 0.025, colourAt);
-    for (let i = 0; i < done.length; i += 6) {                                         // thin threads from the floor up to the trail
+    for (let i = 0; i < done.length; i += 3) {                                         // thin threads from the floor up to the trail
       const x = done[i]; pillar(trail, x.p, 0.006, x.air[1] - x.p[1], mix(colourAt(i), DIM, 0.4));
     }
     for (const stop of n.stops || []) {
@@ -352,4 +314,26 @@ export class Home3D {
     const near = (n.events || []).filter(e => Math.abs(Date.parse(e.t) - t) < 90 * 1000).map(e => e.type.replace(/_/g, ' '));
     this.$('night-clock').textContent = clock(t) + (near.length ? ` · ${near.join(', ')}` : '');
   }
+}
+
+/** The points of a track that change its shape by more than `tolerance` metres (Ramer-Douglas-Peucker on
+ * the trail in the air), first and last always kept. */
+function simplify(track, tolerance) {
+  const n = track.length;
+  if (n < 3) return track.slice();
+  const keep = new Uint8Array(n); keep[0] = keep[n - 1] = 1;
+  const stack = [[0, n - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop(), A = track[a].air, B = track[b].air;
+    const ab = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], len2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2 || 1e-12;
+    let worst = -1, at = -1;
+    for (let i = a + 1; i < b; i++) {
+      const P = track[i].air, ap = [P[0] - A[0], P[1] - A[1], P[2] - A[2]];
+      const f = Math.max(0, Math.min(1, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / len2));
+      const d = Math.hypot(ap[0] - f * ab[0], ap[1] - f * ab[1], ap[2] - f * ab[2]);
+      if (d > worst) { worst = d; at = i; }
+    }
+    if (worst > tolerance) { keep[at] = 1; stack.push([a, at], [at, b]); }
+  }
+  return track.filter((_, i) => keep[i]);
 }

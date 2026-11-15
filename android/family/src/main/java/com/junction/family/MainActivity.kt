@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
         container = FrameLayout(this).apply {
             setBackgroundColor(NIGHT)
             addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(glassesButton(), FrameLayout.LayoutParams(dp(56), dp(56), android.view.Gravity.BOTTOM or android.view.Gravity.END).apply { setMargins(0, 0, dp(18), dp(18)) })
         }
         // Keep the page clear of the status bar, navigation bar, cutouts and the keyboard; the
         // container's colour (matched to the page) shows behind the bars.
@@ -166,6 +167,16 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    /** Over the dashboard: the way to the glasses list (watch a pair live). */
+    private fun glassesButton() = android.widget.TextView(this).apply {
+        text = "👓"; textSize = 24f; gravity = android.view.Gravity.CENTER
+        background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(0xFFF2B04A.toInt()) }
+        elevation = dp(6).toFloat(); isClickable = true; isFocusable = true
+        contentDescription = getString(R.string.glasses_long)
+        setOnClickListener { startActivity(Intent(this@MainActivity, GlassesActivity::class.java)) }
+    }
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun syncBarsWithPage() {
         webView.evaluateJavascript(PAGE_BACKGROUND) { value ->

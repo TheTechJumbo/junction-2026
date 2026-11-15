@@ -613,9 +613,12 @@ def video_parts(path, fps, start_ms):
 SESSION_NAME = r"[A-Za-z0-9_-]{1,64}"
 AUTO_SPLATS_KEPT = 12  # with --splat-every-fix, only the newest few of those 3D files stay on disk (each about 4 MB)
 
+# What the watch-only key may read (GET only): the glasses display page and the replies it polls.
+VIEW_PATHS = {"/hud", "/where", "/reminders", "/status", "/waypoints"}
+
 
 def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None, api_token=None,
-                 splat_every_fix=False, quick=False, train_host=None, bg_link=None, remote_root=None):
+                 splat_every_fix=False, quick=False, train_host=None, bg_link=None, remote_root=None, view_token=None):
     # The event API's address without the /events at its end: where /ask and /speak live.
     api_base = re.sub(r"/events/?$", "", event_api).rstrip("/") if event_api and api_token else None
     history_file = evidence_dir / "history.json"
@@ -1528,16 +1531,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             # indented, and the event API refuses to read more than 64 kB from /where.
             self.send_bytes(code, json.dumps(body, separators=(",", ":")).encode(), "application/json")
 
-        def allowed(self, query):
+        def allowed(self, query, path=None):
             given = query.get("k", [""])[0] or self.headers.get("X-Key", "")
             if hmac.compare_digest(given.encode(), token.encode()):
+                return True
+            # The watch-only key (--view-token, what a shared pairing code carries): the glasses display
+            # and what it reads, nothing that spends GPU time or changes anything.
+            if view_token and path in VIEW_PATHS and hmac.compare_digest(given.encode(), view_token.encode()):
                 return True
             self.send_json(403, {"ok": False, "error": "Open the link that includes the access key (?k=...)."})
             return False
 
         def do_GET(self):
             url = urlparse(self.path)
-            if not self.allowed(parse_qs(url.query)):
+            if not self.allowed(parse_qs(url.query), url.path):
                 return
             pages = {"/": "phone.html", "/dashboard": "dashboard.html", "/viewer": "viewer.html",
                      "/hud": "hud.html", "/places": "places.html", "/care": "care.html"}
@@ -2156,6 +2163,8 @@ def main():
                     "for the live 3D page /viewer?live=ZONE (about 4 MB each: best with --local, not over SSH)")
     ap.add_argument("--local", metavar="FOLDER", help="no cluster: the gateway runs on this machine and keeps its files in "
                     "FOLDER; start live/worker.py here too, with BEACON_ROOT set to the same folder (see run_local.sh)")
+    ap.add_argument("--view-token", default=secrets.token_urlsafe(9),
+                    help="watch-only key: the glasses display and what it reads, nothing else (live/share.py hands it out)")
     args = ap.parse_args()
     if args.local:  # everything on this machine: the same gateway code, started here instead of over SSH
         Path(args.local).mkdir(parents=True, exist_ok=True)
@@ -2171,7 +2180,7 @@ def main():
     if not args.local:
         bg_link = Link(link.argv, name="Iridis (room maps)")
     handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, splat_every_fix=args.splat_every_fix, bg_link=bg_link,
-                           quick=args.quick, train_host=args.train_host, remote_root=args.remote_root)
+                           quick=args.quick, train_host=args.train_host, remote_root=args.remote_root, view_token=args.view_token)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     addresses = ["127.0.0.1"]
     if args.host == "0.0.0.0":
@@ -2185,6 +2194,7 @@ def main():
           "change live= to the room)", flush=True)
     if args.splat_every_fix:
         print("every fix also builds its own 3D file (--splat-every-fix)", flush=True)
+    print(f"watch-only key (for the apps' glasses list): python live/share.py --port {args.port} --view-token {args.view_token}", flush=True)
     print("questions (/ask, /speak): " + ("passed on to the event API" if event_api and api_token
                                            else "off (EVENT_API_URL and EVENT_API_TOKEN are not both set)"), flush=True)
     print(f"frame picking on this laptop: {'on' if rc else 'off (OpenCV not found)'}; evidence images in {evidence_dir}", flush=True)
