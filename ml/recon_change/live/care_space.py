@@ -32,6 +32,12 @@ def load_cameras(path):
         return np.asarray(got["E"], float)
 
 
+def load_keyframes(path):
+    """The recording frame number of each of a trained splat's keyframes (cameras.npz "keyframes"), or None."""
+    with np.load(path) as got:
+        return [int(n) for n in got["keyframes"]] if "keyframes" in got.files else None
+
+
 def wrap(deg):
     return (np.asarray(deg, float) + 180.0) % 360.0 - 180.0
 
@@ -82,12 +88,28 @@ def pair_in_order(a, b, gap=GAP_DEG):
     return pairs[::-1], float(cost[n, m])
 
 
-def space(E, cameras, scale_hint=None):
+def by_number(cameras, numbers):
+    """Pairs that are the same frame of the same recording: numbers = (the room map's keyframe_numbers, by baseline
+    picture; the trained splat's keyframes, by keyframe), both frame numbers in the recording. [(i, j), ...]"""
+    map_numbers, trained_numbers = numbers
+    where = {int(n): j for j, n in enumerate(trained_numbers)}
+    pairs = []
+    for i, c in enumerate(cameras):
+        f = int(c.get("frame", i))
+        if 0 <= f < len(map_numbers) and int(map_numbers[f]) in where:
+            pairs.append((i, where[int(map_numbers[f])]))
+    return pairs
+
+
+def space(E, cameras, scale_hint=None, numbers=None):
     """E: the trained splat's keyframe cameras, world-to-camera (N, 3, 4) in its own axes (video_map.py
     cameras.npz). cameras: the room map's cameras, [{"position": [east, north, up], "heading_deg"}, ...]
     (GET /room). scale_hint: metres per trained unit to use when the cameras hardly move (the room map's median
-    viewing distance over the trained splat's). Returns the 4x4 matrix (rows) that takes a point of the trained
-    splat to map axes, and how well the cameras agree; "ok" is False when they do not show the same views."""
+    viewing distance over the trained splat's). numbers: when both come from the same recording, the frame numbers
+    of the room map's pictures and of the trained keyframes (see by_number): the pairs are then the very same
+    photos, which pairing by heading cannot promise when each picked its own frames. Returns the 4x4 matrix (rows)
+    that takes a point of the trained splat to map axes, and how well the cameras agree; "ok" is False when they
+    do not show the same views."""
     E = np.asarray(E, float)
     if E.ndim != 3 or E.shape[1:] != (3, 4) or len(E) < MIN_PAIRS or len(cameras) < MIN_PAIRS:
         return {"ok": False, "why": "Too few cameras to line the trained splat up with the room map."}
@@ -95,13 +117,16 @@ def space(E, cameras, scale_hint=None):
     ahead = E[:, 2, :3] @ axes.T
     trained_heading = np.degrees(np.arctan2(ahead[:, 0], ahead[:, 1]))
     map_heading = np.array([float(c.get("heading_deg") or 0.0) for c in cameras])
-    # The two first cameras usually are the same view (turn 0), but need not be: try every turn, keep the best.
-    best = None
-    for turn in range(-180, 180, TRY_EVERY_DEG):
-        pairs, total = pair_in_order(map_heading, trained_heading + turn)
-        if best is None or total < best[0]:
-            best = (total, turn, pairs)
-    _, turn, pairs = best
+    pairs = by_number(cameras, numbers) if numbers else []
+    paired_by = "frame numbers"
+    if len(pairs) < MIN_PAIRS:
+        # The two first cameras usually are the same view (turn 0), but need not be: try every turn, keep the best.
+        best = None
+        for turn in range(-180, 180, TRY_EVERY_DEG):
+            pairs, total = pair_in_order(map_heading, trained_heading + turn)
+            if best is None or total < best[0]:
+                best = (total, turn, pairs)
+        pairs, paired_by = best[2], "headings"
     diffs = wrap([map_heading[i] - trained_heading[j] for i, j in pairs])
     turn = math.degrees(math.atan2(np.sin(np.radians(diffs)).mean(), np.cos(np.radians(diffs)).mean()))
     kept = [(i, j) for (i, j), d in zip(pairs, diffs) if abs(wrap(d - turn)) <= PAIR_DEG]
@@ -126,7 +151,7 @@ def space(E, cameras, scale_hint=None):
             f"The cameras are {rms:.1f} m apart on average after lining up: not the same pictures.",
             "matrix": [[round(float(v), 6) for v in row] for row in matrix],
             "scale": round(scale, 4), "scale_from": scale_from, "turn_deg": round(turn, 1),
-            "pairs": len(kept), "of": [len(cameras), len(E)], "rms_m": round(rms, 3),
+            "pairs": len(kept), "paired_by": paired_by, "of": [len(cameras), len(E)], "rms_m": round(rms, 3),
             "heading_rms_deg": round(float(np.sqrt((wrap(diffs - turn) ** 2).mean())), 1),
             # [baseline picture number, trained keyframe]: the same photo (see place_points)
             "paired": [[int(cameras[i].get("frame", i)), int(j)] for i, j in kept]}

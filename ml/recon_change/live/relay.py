@@ -898,8 +898,12 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             else:
                 hint = (got.get("median_depth_m") or 0) / trained["median_depth"] if trained.get("median_depth") else None
                 try:
-                    fit = care_space.space(care_space.load_cameras(evidence_dir / match[1] / "cameras.npz"),
-                                           got.get("cameras") or [], hint)
+                    cameras_file = evidence_dir / match[1] / "cameras.npz"
+                    # One recording behind both (Record room, then its training): pair the very same frames.
+                    same = got.get("session") and got.get("session") == trained.get("session") and got.get("keyframe_numbers")
+                    numbers = (got["keyframe_numbers"], care_space.load_keyframes(cameras_file)) if same else None
+                    fit = care_space.space(care_space.load_cameras(cameras_file), got.get("cameras") or [], hint,
+                                           numbers if numbers and numbers[1] else None)
                     why = fit.get("why")
                 except (OSError, KeyError, ValueError) as err:
                     why = f"The trained splat's cameras could not be read ({type(err).__name__}): the room map is shown."

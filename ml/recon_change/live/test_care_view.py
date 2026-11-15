@@ -72,6 +72,18 @@ def check_space():
     print(f"  lined up: {fit['pairs']} pairs, worst camera {err * 100:.1f} cm off, scale {fit['scale']}")
     same = sum(keep_map[f] == keep_trained[j] for f, j in fit["paired"])
     assert same >= len(fit["paired"]) - 1, f"only {same} of {len(fit['paired'])} pairs are the same photo"
+    assert fit["paired_by"] == "headings"
+
+    # One recording behind both, each with its own frames (every 3rd and every 2nd): paired by frame number, so
+    # every pair is the same photo even where no heading sequence could tell.
+    map_take, trained_take = list(range(0, len(positions), 3)), list(range(0, len(positions), 2))
+    cams = [{"frame": k, "position": positions[i].round(3).tolist(), "heading_deg": round(float(headings[i]), 1)}
+            for k, i in enumerate(map_take)]
+    fit = care_space.space(E[trained_take], cams, numbers=(map_take, trained_take))
+    assert fit["ok"] and fit["paired_by"] == "frame numbers", fit
+    assert all(map_take[f] == trained_take[j] for f, j in fit["paired"]) and fit["pairs"] == len(range(0, len(positions), 6)), fit["paired"]
+    assert care_space.space(E[trained_take], cams, numbers=([999] * len(map_take), trained_take))["paired_by"] == "headings"
+    print(f"  one recording: {fit['pairs']} pairs by frame number, rms {fit['rms_m']} m")
 
     # Other pictures: headings that do not follow the same walk are refused, not forced into place.
     rng = np.random.default_rng(3)
@@ -119,9 +131,11 @@ def check_relay():
             {"size": [518, 518], "depth_size": [130, 130], "K": [K.tolist()] * len(E), "E": E.tolist(), "depths": "depths.bin"}))
         np.full((len(E), 130, 130), 1.0, np.float16).tofile(evidence / "train-kitchen-x-1" / "depths.bin")
         np.savez(evidence / "train-kitchen-x-1" / "cameras.npz", E=E.astype(np.float32), K=np.zeros((len(E), 3, 3)), keyframes=np.arange(len(E)))
-        room = {"job": "job1", "splat": "/evidence/job1/room.splat", "cameras": cameras, "places": [{"name": "pill box", "position": [1.0, 2.0, 0.0]}],
+        room = {"job": "job1", "splat": "/evidence/job1/room.splat", "cameras": cameras, "session": "rec-1",
+                "keyframe_numbers": list(range(len(cameras))), "places": [{"name": "pill box", "position": [1.0, 2.0, 0.0]}],
                 "at": time.time(), "median_depth_m": 2.0, "fov_deg": 55,
-                "trained": {"splat": "/evidence/train-kitchen-x-1/trained.splat", "median_depth": 1.0, "gaussians": 10, "psnr": 24.0}}
+                "trained": {"splat": "/evidence/train-kitchen-x-1/trained.splat", "median_depth": 1.0, "gaussians": 10, "psnr": 24.0,
+                            "session": "rec-1"}}
         (evidence / "rooms.json").write_text(json.dumps({"kitchen": room, "hall": {**room, "job": "job2", "splat": "/evidence/job2/room.splat", "trained": None}}))
         handler = relay.make_handler(Gateway(), evidence, KEY, None, pick=None)
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -138,6 +152,7 @@ def check_relay():
             assert code == 200 and space["kind"] == "trained", space
             assert space["splat"].endswith("/trained.splat") and space["room_splat"] == "/evidence/job1/room.splat"
             assert space["fit"]["pairs"] == len(cameras) and space["fit"]["rms_m"] < 0.02, space["fit"]
+            assert space["fit"]["paired_by"] == "frame numbers", space["fit"]
             assert space["places"][0]["name"] == "pill box"
             # labels made again after training sit next to the splat and are found there (rooms.json has none)
             assert space["trained"]["labels"] == "/evidence/train-kitchen-x-1/labels.json", space["trained"]
