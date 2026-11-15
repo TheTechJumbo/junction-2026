@@ -225,6 +225,13 @@ A small dim "debug" under the map opens, on a long press only, a panel with no s
 
 Refresh asks the relay and backend now. Retry uploads sends the always-on chunks left on the
 phone (or makes a running recording retry at once). Copy puts the same text on the clipboard.
+Change settings edits, in place:
+- the relay addresses (USB and Wi-Fi) and its key
+- the recording zone and the map and guidance zone
+- the backend address and token
+
+Keys and tokens are never filled in: left empty they stay as they are. Full setup opens every setup
+card (the gear on the wearer screen does the same and scrolls to them).
 
 ## Always-on recording (screen off, until Stop)
 

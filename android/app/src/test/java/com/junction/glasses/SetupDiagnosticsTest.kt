@@ -188,4 +188,32 @@ class SetupDiagnosticsTest {
         assertFalse(report.contains("synthetic-setup-token"))
         dialog.dismiss(); drain()
     }
+
+    @Test fun theDebugPanelChangesSettingsWithoutEverShowingAKey() {
+        field("relayKey").set(activity, "synthetic-relay-key")
+        descendants(activity.window.decorView).filterIsInstance<TextView>()
+            .first { it.contentDescription?.toString()?.startsWith("Debug panel") == true }.performLongClick()
+        drain()
+        val panel = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        descendants(panel.window!!.decorView).filterIsInstance<Button>().first { it.text.toString() == "Change settings" }.performClick()
+        drain()
+        val settings = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        assertNotSame(panel, settings)
+        val fields = descendants(settings.window!!.decorView).filterIsInstance<EditText>().toList()
+        assertEquals(7, fields.size)
+        assertTrue("keys and tokens are never filled in", fields.none { it.text.toString().contains("synthetic") })
+        fields[1].setText("http://192.168.1.20:8090")
+        fields[3].setText("test-zone")
+        fields[4].setText("venue-a")
+        fields[5].setText("") // leave the backend alone
+        settings.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+        drain()
+        assertEquals("http://192.168.1.20:8090", field("relayLanUrl").get(activity))
+        assertEquals("test-zone", field("relayZone").get(activity))
+        assertEquals("synthetic-relay-key", field("relayKey").get(activity))
+        assertEquals("venue-a", activity.getSharedPreferences("venue", android.content.Context.MODE_PRIVATE).getString("zone", null))
+        val note = descendants(panel.window!!.decorView).filterIsInstance<TextView>().map { it.text.toString() }
+        assertTrue(note.toString(), note.any { it.startsWith("Saved: relay, map zone") })
+        panel.dismiss(); drain()
+    }
 }

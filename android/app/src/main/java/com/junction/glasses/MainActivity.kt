@@ -227,6 +227,8 @@ class MainActivity : ComponentActivity() {
     /** The newest map reply, so a found thing can be drawn without asking the relay again. */
     private var lastMapReply: NavReply? = null
     private lateinit var takeMeThere: Button
+    /** The whole screen (wearer panel, map, then the setup section), for scrolling to setup. */
+    private lateinit var page: ScrollView
     /**
      * The venue the map and guidance use (debug extra venue_zone, remembered), apart from the zone field
      * that recordings go to, so recordings can go to a test zone while the wearer is guided in the venue.
@@ -488,7 +490,7 @@ class MainActivity : ComponentActivity() {
             onDismiss = { screen.dismissNight() }
             onGo = { screen.startGuide(it) }
             onStopGuide = { screen.stopGuide() }
-            onSetup = { setup.visibility = if (setup.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE }
+            onSetup = { if (setup.visibility == android.view.View.VISIBLE) setup.visibility = android.view.View.GONE else openSetup() }
         }
         screen = WearerController(wearer, main, home, speak = { line -> audio.speakFallback(line) {} }, toGlasses = { card ->
             cardJob?.cancel()
@@ -505,7 +507,8 @@ class MainActivity : ComponentActivity() {
             stylePill(this, true)
             setOnClickListener { findWhat?.let { startNavigation(it) } }
         }
-        setContentView(ScrollView(this).apply {
+        page = ScrollView(this)
+        setContentView(page.apply {
             setBackgroundColor(WearerPanel.NIGHT); isFillViewport = true
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
@@ -1626,6 +1629,11 @@ class MainActivity : ComponentActivity() {
                     note.text = "Copied (addresses, key prints and states only: no keys or tokens)."
                 })
             })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL; setPadding(dp(8), 0, dp(8), 0)
+                addView(small("Change settings") { showSettingsDialog { message -> note.text = message; render() } })
+                addView(small("Full setup") { debugDialog?.dismiss(); openSetup() })
+            })
             addView(note)
             addView(ScrollView(this@MainActivity).apply { addView(report) },
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
@@ -1641,6 +1649,93 @@ class MainActivity : ComponentActivity() {
             .setOnDismissListener { main.removeCallbacks(ticker); debugDialog = null }
             .show()
         main.postDelayed(ticker, 2_000)
+    }
+
+    /** Shows the setup section (every setup card) and scrolls to it. */
+    private fun openSetup() {
+        setup.visibility = android.view.View.VISIBLE
+        if (::page.isInitialized) page.post { page.smoothScrollTo(0, setup.top) }
+    }
+
+    /**
+     * The settings the debug panel shows, editable: relay addresses, relay key, recording zone, map and
+     * guidance zone, backend address and token. Keys and tokens are never filled in or shown: left empty
+     * they stay as they are. Saved the same way as the adb extras (remembered in debug builds).
+     */
+    private fun showSettingsDialog(done: (String) -> Unit) {
+        fun field(hint: String, value: String?, secret: Boolean = false) = EditText(this).apply {
+            this.hint = hint; isSingleLine = true; isSaveEnabled = false
+            inputType = if (secret) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_VARIATION_URI
+            importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+            setText(value.orEmpty())
+        }
+        fun caption(text: String) = TextView(this).apply { this.text = text; textSize = 12f; setPadding(0, dp(10), 0, 0) }
+        val relayAddress = field("http://127.0.0.1:8090", relayUrl)
+        val relayWifi = field("http://<laptop LAN address>:8090 (optional)", relayLanUrl)
+        val relayKeyField = field("unchanged (print ${KeyPrint.of(relayKey)})", null, secret = true)
+        val recordingZone = field("always-on-test", cardZone())
+        val mapZone = field("kitchen (empty: the recording zone)", venueZone)
+        val backendAddress = field("http://127.0.0.1:8000", configuredOrigin ?: endpoint.text.toString().trim())
+        val backendToken = field("unchanged (print ${configuredClient?.tokenPrint ?: "not connected"})", null, secret = true)
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8))
+            addView(caption("Relay (USB, with adb reverse)")); addView(relayAddress)
+            addView(caption("Relay over Wi-Fi (when the cable is out)")); addView(relayWifi)
+            addView(caption("Relay key")); addView(relayKeyField)
+            addView(caption("Recording zone (where recordings go)")); addView(recordingZone)
+            addView(caption("Map and guidance zone (the venue)")); addView(mapZone)
+            addView(caption("Backend")); addView(backendAddress)
+            addView(caption("Backend token")); addView(backendToken)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Change settings")
+            .setView(ScrollView(this).apply { addView(form) })
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                done(applySettings(relayAddress.text.toString().trim(), relayWifi.text.toString().trim(), relayKeyField.text.toString().trim(),
+                    recordingZone.text.toString().trim(), mapZone.text.toString().trim(), backendAddress.text.toString().trim(),
+                    backendToken.text.toString().trim()))
+                relayKeyField.text.clear(); backendToken.text.clear()
+            }
+            .show()
+    }
+
+    /** Applies the settings dialog; returns what changed or what was not accepted (never a key or token). */
+    private fun applySettings(url: String, lanUrl: String, key: String, zone: String, mapZone: String, backendUrl: String, backendToken: String): String {
+        val problems = mutableListOf<String>()
+        val changed = mutableListOf<String>()
+        // Relay addresses and zone are checked with the client's own rules before anything is saved.
+        val keyForCheck = key.ifEmpty { relayKey.orEmpty() }.ifEmpty { "check" }
+        val urlOk = try { RelayClient(url, keyForCheck, RelayClient.DEFAULT_ZONE, allowLocalHttp = BuildConfig.DEBUG); true } catch (_: Exception) { false }
+        val lanOk = lanUrl.isEmpty() || try { RelayClient(lanUrl, keyForCheck, RelayClient.DEFAULT_ZONE, allowLocalHttp = BuildConfig.DEBUG); true } catch (_: Exception) { false }
+        if (!urlOk) problems += "relay address not accepted"
+        if (!lanOk) problems += "Wi-Fi address not accepted"
+        if (!RelayClient.isZone(zone)) problems += "recording zone uses a-z, 0-9, _ and -"
+        if (mapZone.isNotEmpty() && !RelayClient.isZone(mapZone)) problems += "map zone uses a-z, 0-9, _ and -"
+        if (urlOk && lanOk && RelayClient.isZone(zone)) {
+            if (url != relayUrl || lanUrl != relayLanUrl.orEmpty() || key.isNotEmpty() || zone != relayZone || zone != cardZone()) changed += "relay"
+            if (lanUrl.isEmpty() && relayLanUrl != null) { relayLanUrl = null; backendMemory?.saveRelayLanUrl(null) }
+            applyRelaySettings(url, key.ifEmpty { null }, zone, lanUrl.ifEmpty { null })
+        }
+        if (mapZone.isEmpty() || RelayClient.isZone(mapZone)) {
+            if (mapZone != venueZone.orEmpty()) changed += "map zone"
+            getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).edit().apply { if (mapZone.isEmpty()) remove(VENUE_ZONE) else putString(VENUE_ZONE, mapZone) }.apply()
+            navRelayFor = null
+            refreshMap()
+        }
+        // The backend: a new token, or a new address with the remembered token, reconnects it.
+        val origin = configuredOrigin
+        if (backendToken.isNotEmpty() || (backendUrl.isNotEmpty() && backendUrl != origin)) {
+            val secret = backendToken.ifEmpty { backendMemory?.load()?.second.orEmpty() }
+            if (secret.isEmpty()) problems += "enter the backend token for a new backend address"
+            else { endpoint.setText(backendUrl); connectAutomatically(secret); changed += "backend (checking)" }
+        }
+        return when {
+            problems.isNotEmpty() -> "Not saved: " + problems.joinToString("; ") + "." + if (changed.isNotEmpty()) " Saved: " + changed.joinToString() + "." else ""
+            changed.isEmpty() -> "Nothing changed."
+            else -> "Saved: " + changed.joinToString() + ". Refresh to check."
+        }
     }
 
     /** Asks each relay address (USB and Wi-Fi) for the zone's places and the backend for one event, then [done]. */
