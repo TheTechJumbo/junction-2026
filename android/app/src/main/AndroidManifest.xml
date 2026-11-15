@@ -29,7 +29,8 @@
         <meta-data android:name="com.meta.wearable.mwdat.CRASH_REPORTING_OPT_OUT" android:value="true" />
         <!-- singleTask: Meta AI's junctionglasses:// return and re-sent adb intents reach the running
              instance through onNewIntent instead of creating a second Activity without the session. -->
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

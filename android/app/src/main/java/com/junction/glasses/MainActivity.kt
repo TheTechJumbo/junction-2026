@@ -107,6 +107,8 @@ class MainActivity : ComponentActivity() {
         private const val SAMPLER_TICK_MS = 1_000L
         private const val VENUE_PREFS = "venue"
         private const val VENUE_ZONE = "zone"
+        /** The wearer chose the 3D view: it stays chosen across restarts. */
+        private const val VIEW_3D = "view_3d"
     }
     private val main = Handler(Looper.getMainLooper())
     private lateinit var glasses: MetaGlassesAdapter
@@ -258,6 +260,8 @@ class MainActivity : ComponentActivity() {
     private var room3d: android.webkit.WebView? = null
     private var room3dUrl: String? = null
     private var show3d = false
+    /** Renderer crashes of the 3D page in the last minute: it is reloaded, and only a crash loop falls back to the map. */
+    private val room3dCrashes = ArrayDeque<Long>()
     private val pageProxy = RelayPageProxy({ pageTarget() })
     /**
      * The venue the map and guidance use (debug extra venue_zone, remembered), apart from the zone field
@@ -603,6 +607,7 @@ class MainActivity : ComponentActivity() {
         refreshPhoneVideos()
         startAutomaticSetup()
         maybeAutoStartAlwaysOn()
+        if (getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).getBoolean(VIEW_3D, false)) main.post { setRoomView(true) }
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -1793,6 +1798,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         show3d = threeD
+        getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).edit().putBoolean(VIEW_3D, threeD).apply()
         stylePill(mapToggle, !threeD); stylePill(roomToggle, threeD)
         if (!threeD) {
             room3d?.let { it.onPause(); it.visibility = android.view.View.GONE }
@@ -1842,11 +1848,17 @@ class MainActivity : ComponentActivity() {
                 request.url.host != android.net.Uri.parse(RelayPageProxy.ORIGIN).host // stay on the page
 
             override fun onRenderProcessGone(view: android.webkit.WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
-                // The 3D page is heavy: on a renderer crash, drop it and go back to the flat map.
+                // The 3D page is heavy: on a renderer crash, drop that WebView and load the page again in a new one.
+                // Only three crashes within a minute go back to the flat map.
                 roomSlot.removeView(view); view.destroy()
                 room3d = null; room3dUrl = null
-                setRoomView(false)
-                if (::wearer.isInitialized) wearer.setStatus("3D view closed; the map is shown")
+                val now = SystemClock.elapsedRealtime()
+                room3dCrashes.addLast(now)
+                while (room3dCrashes.isNotEmpty() && now - room3dCrashes.first() > 60_000) room3dCrashes.removeFirst()
+                if (room3dCrashes.size >= 3) {
+                    setRoomView(false)
+                    if (::wearer.isInitialized) wearer.setStatus("3D view kept crashing; the map is shown")
+                } else if (show3d) main.post { setRoomView(true) }
                 return true
             }
         }
