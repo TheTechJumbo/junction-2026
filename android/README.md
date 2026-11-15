@@ -29,6 +29,9 @@ optionally the vision relay's `/reminders` and `/where` (key in `X-Key`), every 
 Directions use the relay's route around the furniture when it has one (else the straight line). Any
 place the carer named on the relay's `/places` page can be asked for; while walking, `/where` is read
 every 2 s. An opened pill box never shows the way back to it.
+With glasses that have no display (Gen 2, the default), the guide, reminder, night and going-out
+cards are also spoken in a few words ("Pill box: turn left, 3 metres"), once and again only when the
+direction or distance step changes, never over an answer being spoken. Setup can turn this off.
 Setup › **Wearer demo: next scene** steps through nine example scenes with no hardware.
 
 ## Build and install
