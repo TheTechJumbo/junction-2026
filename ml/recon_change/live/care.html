@@ -639,7 +639,12 @@ $('showPath').onchange = () => { pathLine.visible = timeAnchors.visible = $('sho
 async function tickSpace() {
   let info;
   try {
-    info = await getJson(`/care/space?zone=${encodeURIComponent(zone)}${WEARER ? '&lite=1' : ''}`);
+    try {
+      info = await getJson(`/care/space?zone=${encodeURIComponent(zone)}${WEARER ? '&lite=1' : ''}`);
+    } catch (err) {  // a proxy that forwards only ?zone=: ask without &lite=1 (lite.splat next to the splat still serves)
+      if (!WEARER || err.status !== 404) throw err;
+      info = await getJson(`/care/space?zone=${encodeURIComponent(zone)}`);
+    }
   } catch (err) {
     $('loadText').textContent = err.status === 404 ? `No 3D room for "${nice(zone)}" yet. Record the room first.` : `Could not reach the laptop: ${err.message}`;
     return;
