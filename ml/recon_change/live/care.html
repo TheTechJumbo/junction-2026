@@ -54,6 +54,23 @@
   #see img { width: 100%; border-radius: 10px; display: block; background: #0b1118; aspect-ratio: 4 / 3; object-fit: cover; }
   #see figcaption { margin-top: 4px; }
   ul, ol { list-style: none; margin: 0; padding: 0; }
+  .tag.found { color: #1a0d00; background: #ff9a1f; border-color: #ffd29a; font-weight: 700; }
+  .seen { padding: 8px 0; }
+  .seen + .seen { border-top: 1px solid #172230; }
+  .seen .what { color: #ff9a1f; font-weight: 700; }
+  .seen .pic { position: relative; margin-top: 6px; border-radius: 8px; overflow: hidden; background: #0b1118; cursor: pointer; }
+  .seen .pic img { width: 100%; display: block; }
+  .seen .pic .outline { position: absolute; border: 3px solid #ff9a1f; border-radius: 4px; box-shadow: 0 0 0 2px rgba(0,0,0,.5); }
+  #live { position: fixed; left: 12px; bottom: 34px; width: min(38vw, 380px); border-radius: 12px; overflow: hidden;
+    background: #0b1118; border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+  #live .frame { position: relative; }
+  #live img { width: 100%; display: block; }
+  #live .outline { position: absolute; border: 3px solid #ff9a1f; border-radius: 4px; box-shadow: 0 0 0 2px rgba(0,0,0,.55); display: none; }
+  #live .outline span { position: absolute; left: -3px; top: -22px; background: #ff9a1f; color: #1a0d00; font-size: 12px; font-weight: 700;
+    padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  #live .bar { display: flex; justify-content: space-between; gap: 8px; padding: 5px 9px; font-size: 12px; color: var(--muted); }
+  #live .bar b { color: var(--green); }
+  @media (max-width: 760px) { #live { top: 96px; bottom: auto; width: 44vw; } }
   .tag.time { color: #bfe0ff; border-color: rgba(74, 163, 255, .5); font-weight: 500; font-size: 11px; padding: 1px 7px; }
   .tag.goal { color: #05070a; background: var(--yellow); border-color: #fff3b0; animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(255, 210, 40, .25); } }
@@ -121,6 +138,10 @@
   <label title="Things the camera recognised" id="objectsLabel" hidden><input type="checkbox" id="showObjects" checked> objects</label>
 </div>
 <div id="hint" role="status" hidden></div>
+<div id="live" hidden aria-label="What the glasses see now, with what was found outlined">
+  <div class="frame"><img id="liveImg" alt="What the glasses see now"><div class="outline" id="liveBox"><span id="liveName"></span></div></div>
+  <div class="bar"><span><b>●</b> Live from the glasses</span><span id="liveWhen"></span></div>
+</div>
 <div id="help"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd><kbd>E</kbd> down / up · <kbd>Shift</kbd> faster ·
   drag to look · right-drag to slide · <kbd>F</kbd> follow · <kbd>V</kbd> their view · click a label to go there</div>
 <aside id="panel" aria-label="What the wearer is doing">
@@ -142,6 +163,10 @@
     <canvas id="above" width="330" height="240" aria-label="Today's path seen from above, with times"></canvas>
     <div class="muted small" id="aboveNote" style="margin-top:4px"></div>
     <ul id="visits" style="margin-top:6px"><li class="muted small">No visits to a named place yet today.</li></ul>
+  </section>
+  <section id="foundSection">
+    <h2>Found</h2>
+    <ul id="found"><li class="muted small">Nothing found yet. Things the glasses find show here with the photo they were seen in, and as an outlined box in 3D.</li></ul>
   </section>
   <section id="changesSection">
     <h2>Changes in view</h2>
@@ -741,6 +766,112 @@ function mergePlaces(list) {  // the room map's places, then the fix's, then tho
   if (JSON.stringify(next) !== JSON.stringify(places)) { places = next; drawPlaces(); renderWent(); }
 }
 
+// ---- found things (relay /find, else the sightings /where carries): an outlined box in 3D and the photo ----
+const FIND = (q.get('find') || 'orange box').split(',').map((w) => w.trim()).filter(Boolean);
+const SHOW_FOUND_3D = q.get('found3d') === '1';  // boxes in the splat only when asked for (?found3d=1)
+const foundGroup = new THREE.Group();
+space.add(foundGroup);
+let findDown = 0;  // when /find last answered 404 (not there yet): asked again a minute later
+let foundFromFind = [];
+function sizeOf(size) {  // size_m as one number (a cube) or [x, y, z]; 0.3 m when not given
+  if (Array.isArray(size) && size.length >= 3 && size.every((v) => Number(v) > 0)) return size.slice(0, 3).map(Number);
+  const one = Number(size);
+  return one > 0 ? [one, one, one] : [0.3, 0.3, 0.3];
+}
+function asFound(x, fallbackName) {  // one /find answer or sighting, as {name, position, size, at, image, box2d}
+  if (!x || !Array.isArray(x.position) || x.position.length < 2) return null;
+  const at = Number(x.at || x.seen_at || x.time_s) || null;
+  return { name: String(x.name || x.what || fallbackName || 'thing'), position: x.position.map(Number), size: sizeOf(x.size_m),
+    at, image: x.image || x.photo || null, box2d: Array.isArray(x.box2d) && x.box2d.length === 4 ? x.box2d.map(Number) : null,
+    doubt: !!x.doubt };
+}
+async function tickFind() {
+  if (Date.now() - findDown < 60000) return;
+  const out = [];
+  for (const what of FIND) {
+    let reply;
+    try {
+      const r = await fetch(api(`/find?zone=${encodeURIComponent(zone)}&what=${encodeURIComponent(what)}`), { cache: 'no-store' });
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 404 && body.error === 'not found') { findDown = Date.now(); return; }  // no /find on this relay yet
+      if (!r.ok) continue;
+      reply = body;
+    } catch { continue; }
+    const list = Array.isArray(reply) ? reply : reply.items || reply.results || reply.found_items || (reply.found === false ? [] : [reply]);
+    for (const x of list) { const f = asFound(x, what); if (f) out.push(f); }
+  }
+  foundFromFind = out;
+  drawFound();
+}
+let foundShown = '';
+function drawFound() {
+  const since = (room && room.map_at) || 0;  // a position from before this room map is in another map's axes
+  const sightings = ((fix && fix.seen) || []).map((x) => asFound(x)).filter(Boolean);
+  const byName = new Map();
+  for (const f of [...sightings, ...foundFromFind]) if (!f.at || f.at >= since) byName.set(f.name.toLowerCase(), f);
+  const list = [...byName.values()].sort((a, b) => (b.at || 0) - (a.at || 0));
+  const key = JSON.stringify(list);
+  if (key === foundShown) return;
+  foundShown = key;
+  foundGroup.clear();
+  const keep = new Set();
+  list.forEach((f, i) => {
+    if (!SHOW_FOUND_3D) return;  // looked for in the live camera, not in the splat (see tickLive)
+    const g = new THREE.Group();
+    g.position.set(f.position[0], f.position[1], f.position[2] || 0);
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(...f.size)),
+      new THREE.LineBasicMaterial({ color: f.doubt ? 0xffd29a : 0xff9a1f, transparent: true }));
+    const fill = new THREE.Mesh(new THREE.BoxGeometry(...f.size), new THREE.MeshBasicMaterial({ color: 0xff9a1f, transparent: true, opacity: 0.12 }));
+    for (const m of [edges, fill]) { m.renderOrder = 24; m.material.depthTest = false; m.material.depthWrite = false; }
+    const top = new THREE.Object3D();
+    top.position.z = f.size[2] / 2 + 0.05;
+    g.add(fill, edges, top);
+    foundGroup.add(g);
+    const id = `f:${f.name}`;
+    keep.add(id);
+    tag(id, `${f.name}${f.at ? ` · ${clock(f.at)}` : ''}`, 'found', top, () => lookAtPoint(g.getWorldPosition(new THREE.Vector3()), 1.0, 0.35));
+  });
+  dropTags('f:', keep);
+  $('found').innerHTML = list.length ? list.map((f, i) => `<li class="seen"><div><span class="what">${esc(f.name)}</span>
+      <span class="muted small">${f.at ? ` seen at ${clock(f.at)}` : ''}${f.doubt ? ' · not seen there since' : ''}</span>
+      <button data-i="${i}" style="float:right">Show</button></div>
+      ${f.image ? `<div class="pic" data-i="${i}"><img loading="lazy" src="${esc(api(f.image))}" alt="${esc(f.name)}, as the glasses saw it">${f.box2d ? `<div class="outline" style="left:${(100 * f.box2d[0]).toFixed(1)}%;top:${(100 * f.box2d[1]).toFixed(1)}%;width:${(100 * (f.box2d[2] - f.box2d[0])).toFixed(1)}%;height:${(100 * (f.box2d[3] - f.box2d[1])).toFixed(1)}%"></div>` : ''}</div>` : ''}</li>`).join('')
+    : `<li class="muted small">Nothing found yet${since ? ` since this room map was made (${clock(since)})` : ''}. Looking for: ${esc(FIND.join(', '))}.</li>`;
+  $('found').querySelectorAll('[data-i]').forEach((el) => {
+    el.onclick = () => {
+      const f = list[Number(el.dataset.i)];
+      if (f) lookAtPoint(toWorld(f.position), 1.0, 0.35);
+    };
+  });
+}
+
+// ---- live camera: what the glasses see now, and what /find found in it, outlined (in real time, not in the splat) ----
+let liveUrl = null, liveBusy = false;
+const LIVE_FOUND_S = 4;  // a /find answer is outlined on the live picture while it is at most this old
+async function tickLive() {
+  if (liveBusy || document.hidden) return;
+  if (!fix || !fresh(fix)) { $('live').hidden = true; return; }
+  liveBusy = true;
+  try {
+    const reply = await fetch(api(`/frame?zone=${encodeURIComponent(zone)}`), { cache: 'no-store' });
+    if (!reply.ok) throw new Error();
+    const url = URL.createObjectURL(await reply.blob());
+    $('liveImg').src = url;
+    if (liveUrl) URL.revokeObjectURL(liveUrl);
+    liveUrl = url;
+    $('live').hidden = false;
+    const now = Date.now() / 1000;
+    const hit = foundFromFind.filter((f) => f.box2d && f.at && now - f.at <= LIVE_FOUND_S).sort((a, b) => b.at - a.at)[0];
+    const box = $('liveBox');
+    if (hit) {
+      const [u0, v0, u1, v1] = hit.box2d;
+      Object.assign(box.style, { display: 'block', left: `${100 * u0}%`, top: `${100 * v0}%`, width: `${100 * (u1 - u0)}%`, height: `${100 * (v1 - v0)}%` });
+      $('liveName').textContent = `${hit.name} · ${Math.max(0, Math.round(now - hit.at))} s ago`;
+    } else box.style.display = 'none';
+    $('liveWhen').textContent = clock(fix.at);
+  } catch { $('live').hidden = true; } finally { liveBusy = false; }
+}
+
 // ---- where they went: visits to the named places, the path from above with times, where they are going ----
 const VISIT_IN_M = 1.0, VISIT_OUT_M = 1.5, VISIT_GAP_S = 180;  // within 1 m is a visit; it ends past 1.5 m or after 3 min unseen
 function visitsOf(track) {
@@ -1004,6 +1135,7 @@ async function tickWhere() {
     }
   }
   updateWearer();
+  drawFound();
   renderNow();
   renderCheck();
   renderPlaces();
@@ -1168,6 +1300,8 @@ every(15000, tickDay);
 every(10000, tickReminders);
 every(3000, tickSee);
 every(2000, tickChanges);
+every(1500, tickFind);
+every(900, tickLive);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) runs.forEach((run) => run()); });
 window.__care = { camera, look, space, splatFrame, get fix() { return fix; }, get room() { return room; }, get places() { return places; }, wearer };
 </script>
