@@ -42,8 +42,10 @@ NEAR_M = 1.5        # the named place within this is "near"; within ON_M, "on" a
 ON_M = 1.0
 FRESH_FIX_S = 60    # "ahead on your left" only from a position fix this recent
 OLD_S = 2 * 3600    # a sighting older than this is said to be a while ago
+STALE_S = 60        # GET /find: a sighting older than this is "stale" (the caretaker's live outline wants seconds)
 WATCH = [n.strip().lower() for n in os.environ.get("BEACON_FIND_WATCH", "orange box").split(",") if n.strip()]
 
+WORKER_ITEMS = {"keys", "glasses", "wallet", "phone", "remote control"}  # tuned on the worker: only its accepted boxes count
 ARTICLES = {"the", "my", "our", "a", "an", "your", "his", "her", "their", "some", "this", "that", "these", "those"}
 PRONOUNS = {"it", "they", "them", "that", "this", "i", "me", "we", "you", "he", "she", "everything", "something",
             "anything", "there", "here", "home"}
@@ -66,6 +68,7 @@ PLACE_LIKE = {"room", "kitchen", "bathroom", "toilet", "loo", "wc", "garage", "b
               "exit", "entrance", "stairs", "lift", "elevator", "office", "lounge", "shop", "street", "station", "stage",
               "booth", "table", "fridge", "desk", "bed", "sofa", "couch", "corridor", "lobby", "reception", "car", "house",
               "home", "flat", "building", "floor", "venue", "area", "zone", "place"}
+OUTLINE = ("image", "box2d", "dims", "fix_position")  # kept from the newest view: the photo, the box in it, its size
 SURFACES = ("table", "desk", "shelf", "counter", "bench", "worktop", "bed", "sofa", "couch", "chair", "stool", "cabinet")
 STANDS = ("booth", "stand", "stall", "stage", "station")
 
@@ -253,6 +256,8 @@ class Finder:
         name = box.get("name")
         if not box.get("position"):
             return False, "no position"
+        if name in WORKER_ITEMS and not box.get("accepted"):
+            return False, "the worker did not accept it (its own limits and second look)"
         limit = LIMITS.get(name, DEFAULT_LIMIT)
         if (box.get("score") or 0) < limit:
             return False, f"score {box.get('score')} < {limit}"
@@ -291,7 +296,8 @@ class Finder:
                 thing = self.things.setdefault(zone, {}).setdefault(name, {"views": [], "sighting": None, "moves": []})
                 view = {"position": [round(float(c), 3) for c in box["position"][:3]], "score": round(float(box["score"]), 3),
                         "at": round(at, 1), "job": job, "size_m": box.get("size_m"), "colour": box.get("colour"),
-                        "source": source, **({"image": image} if image else {})}
+                        "source": source, **({"image": image} if image else {}),
+                        **{k: box[k] for k in ("box2d", "dims") if box.get(k) is not None}}
                 thing["views"] = [v for v in thing["views"] if v["job"] != job][-VIEWS_KEPT + 1:] + [view]
                 got = self.settle(zone, name, thing, view, places)
                 if got:
@@ -306,6 +312,7 @@ class Finder:
         old = thing.get("sighting")
         if old and math.dist(old["position"], view["position"]) <= AGREE_M and view["at"] >= old["at"]:
             old["at"], old["last_job"] = view["at"], view["job"]  # seen again where it was: the time moves on
+            old.update({k: view[k] for k in OUTLINE if k in view})  # and the outline is the newest photo's
             return None
         group = [v for v in thing["views"] if abs(v["at"] - view["at"]) <= AGREE_S and
                  math.dist(v["position"], view["position"]) <= AGREE_M]
@@ -319,7 +326,7 @@ class Finder:
                     "confirmed_at": round(self.now(), 1), "views": len({v["job"] for v in group}),
                     "score": max(v["score"] for v in group), "near": near[0] if near else "",
                     "near_m": round(near[1], 2) if near else None, "source": view.get("source", "fix"),
-                    "last_job": view["job"], **({"image": view["image"]} if view.get("image") else {})}
+                    "last_job": view["job"], **{k: view[k] for k in OUTLINE if k in view}}
         thing["sighting"] = sighting
         when = clock(sighting["at"], self.tz)
         where = at_place(near[0], near[1]) if near else "in a new spot"
@@ -428,6 +435,41 @@ class Finder:
         else:
             reply["answer"] = f"I have not seen the {name} yet. I am watching for it: look around slowly, then ask me again."
         return reply
+
+    def reply(self, zone, name, fix=None, places=None, looking=False):
+        """GET /find?what=: {found, looking, answer, place, position, at, moved_from, distance_m, bearing_deg, stale,
+        confirmed, box2d, image, size_m}. box2d is 0..1 in `image`, the photo the detection ran on; size_m is
+        [width, height, depth] in metres, rough (from the box, the distance and the camera's field of view)."""
+        now = self.now()
+        said = self.answer(zone, name, fix, places, looking=looking)
+        thing = (self.things.get(zone) or {}).get(name) or {}
+        found = self.sighting(zone, name)
+        record = found or self.single_view(zone, name)
+        out = {"what": name, "name": name, "found": record is not None, "confirmed": found is not None,
+               "looking": record is None or looking, "answer": said["answer"], "place": said.get("near") or None,
+               "position": None, "at": None, "moved_from": None, "distance_m": None, "bearing_deg": None, "stale": True,
+               "box2d": None, "image": None, "size_m": None, "target": said.get("target")}
+        if record is None:
+            return out
+        near = nearest(record["position"], places, skip=name)
+        moves = thing.get("moves") or []
+        out.update(position=record["position"], at=record["at"], place=near[0] if near else (record.get("near") or None),
+                   stale=now - record["at"] > STALE_S or found is None, box2d=record.get("box2d"), image=record.get("image"),
+                   size_m=record.get("dims"))
+        if found and moves and moves[-1]["at"] == found["at"]:
+            out["moved_from"] = moves[-1].get("from_near") or None
+        if fix and fix.get("state") != "lost" and fix.get("position") and now - fix.get("at", 0) < FRESH_FIX_S:
+            east, north = record["position"][0] - fix["position"][0], record["position"][1] - fix["position"][1]
+            out["distance_m"] = round(math.hypot(east, north), 2)
+            out["bearing_deg"] = int(round((math.degrees(math.atan2(east, north)) - (fix.get("heading_deg") or 0) + 180) % 360 - 180))
+        return out
+
+    def sentence(self, zone, name, distance, bearing, places=None):
+        """/navigate's instruction for a thing: "The orange box is on the snack table, 3 metres ahead on your left"."""
+        record = self.sighting(zone, name) or self.single_view(zone, name)
+        near = nearest(record["position"], places, skip=name) if record else None
+        here = "right by you" if distance < 0.8 else f"{metres(distance)} {side_words(bearing)}"
+        return f"The {name} is {at_place(*near)}, {here}" if near else f"The {name} is {here}"
 
     def listing(self, zone):
         """GET /find: the watch list, each thing's sighting, its maybe, its moves and the last box not taken (and why)."""

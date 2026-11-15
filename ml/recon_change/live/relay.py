@@ -761,12 +761,31 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                          "object": e["name"], "evidence_url": None, "confidence": 0.6 if e.get("views", 0) >= 3 else 0.5}
                 threading.Thread(target=lambda ev=event: _post_quietly(event_api, [ev], api_token), daemon=True).start()
 
-    def find_seen(zone, result, job, at, images=None, source="fix"):
-        """A fix's (or a search's) boxes of watched names -> the finder; returns its events, already logged."""
-        boxes = [b for b in (result.get("items") or []) + (result.get("items_candidates") or []) if b.get("position")]
+    def find_seen(zone, result, job, at, images=None, source="fix", photo=None):
+        """A fix's (or a search's) boxes of watched names -> the finder; returns its events, already logged. With the
+        photo the fix was made from, it is kept as evidence/<job>/seen.jpg: the picture each box2d outlines."""
+        accepted = [{**b, "accepted": True} for b in result.get("items") or []]
+        boxes = [b for b in accepted + list(result.get("items_candidates") or []) if b.get("position")]
         if not boxes:
             return []
         image = next(((images or {}).get(b.get("image") or "") for b in boxes if b.get("image")), None)
+        watched = set(found_things.watched(zone)) | set(found_things.things.get(zone) or {})
+        mine = [b for b in boxes if b.get("name") in watched]
+        if mine and photo is not None:
+            try:
+                (evidence_dir / job).mkdir(parents=True, exist_ok=True)
+                (evidence_dir / job / "seen.jpg").write_bytes(photo)
+                image = f"/evidence/{job}/seen.jpg"
+            except OSError:
+                pass
+            shape = None
+            try:
+                shape = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_8).shape if cv2 is not None else None
+            except Exception:  # noqa: BLE001
+                shape = None
+            for b in mine:
+                b["box2d"] = b.get("box")
+                b["dims"] = find_dims(zone, b, result.get("position"), shape)
         try:
             events = found_things.observe(zone, boxes, find_places(zone), job, at=at, image=image, source=source)
         except Exception as err:  # noqa: BLE001  the finder is an extra: the fix must still go out
@@ -785,7 +804,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                                                            "look_for": [name], "remembered": []}, one_photo(photo))
                     if header.get("ok"):
                         images, _ = keep_evidence(header["job"], blob)
-                        find_seen(zone, header["result"], header["job"], taken, images, source="recent")
+                        find_seen(zone, header["result"], header["job"], taken, images, source="recent", photo=photo)
                 except Exception as err:  # noqa: BLE001
                     sys.stderr.write(f"find: recent photo not searched: {type(err).__name__}: {err}\n")
             room = rooms.get(zone) or {}
@@ -803,6 +822,40 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 sys.stderr.write(f"find: pictures not searched: {type(err).__name__}: {err}\n")
 
         threading.Thread(target=run, daemon=True).start()
+
+    def find_dims(zone, box, standpoint, shape):
+        """[width, height, depth] of a box in metres, rough: its share of the photo (h, w shape) at its distance from
+        the camera, with the room's horizontal field of view; depth taken as the smaller of the two."""
+        try:
+            u0, v0, u1, v1 = box["box"]
+            d = math.dist(box["position"], standpoint)
+            half = math.tan(math.radians(float((rooms.get(zone) or {}).get("fov_deg") or 65.0)) / 2)
+            tall = shape[0] / shape[1] if shape else 1.0
+            w, h = (u1 - u0) * 2 * d * half, (v1 - v0) * 2 * d * half * tall
+            return [round(w, 2), round(h, 2), round(min(w, h), 2)]
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    def find_reply(zone, what):
+        """GET /find?zone=Z&what=X: always 200. X is watched from now on (and, if new, searched in the latest photos and
+        the zone's pictures); the reply says whether and where it was seen, with the outline for the caretaker's page."""
+        fix = where.get(zone) or max(where.values(), key=lambda f: f["at"], default=None)
+        zone = zone or (fix or {}).get("zone", "")
+        fix = where.get(zone) or fix
+        thing = finds.object_in(what) or " ".join(w for w in finds.plain(what).split() if w not in finds.ARTICLES)
+        if not thing:
+            return {"ok": False, "zone": zone, "what": what, "found": False, "looking": False,
+                    "answer": "Say what to find, for example: find the orange box.", "error": "GET /find?zone=Z&what=orange+box"}
+        name, new = found_things.want(zone, thing)
+        if new:
+            find_search(zone, name)
+        reply = found_things.reply(zone, name, fix, find_places(zone, fix), looking=new)
+        spot = seen.get(zone, {}).get(name)
+        if not reply["found"] and spot and home_time(spot["at"]).date() == home_time(time.time()).date():
+            said = item_answer(name, zone, f"where is {name}")  # one of the worker's own items, seen once (seen.json)
+            reply.update(found=True, looking=False, answer=said["answer"], position=spot["position"], at=spot["at"],
+                         place=spot.get("near") or None, stale=time.time() - spot["at"] > finds.STALE_S, target=name)
+        return {"ok": True, "zone": zone, **reply}
 
     def pictures_taken(room):
         """When a zone's pictures were taken: the recording's start (session 20261115_025911_...), else the map's time."""
@@ -1607,13 +1660,16 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             distance = straight
             bearing = int(round((math.degrees(math.atan2(goal[0] - here[0], goal[1] - here[1])) - heading + 180) % 360 - 180))
         arrived = straight <= NAV_ARRIVED_M
+        instruction = turn_words(bearing, straight)
+        if places[name].get("kind") == "object" and not arrived:  # find me X: the whole sentence, to be said as it is
+            instruction = found_things.sentence(zone, name, float(distance), float(bearing), find_places(zone, fix))
         if arrived:  # there: the guidance is over
             guiding.pop(zone, None)
         else:
             guiding[zone] = {"name": name, "active": True, "distance_m": round(float(distance), 1), "at": time.time()}
         return 200, {"ok": True, "zone": zone, "to": name, "asked": asked, "arrived": arrived,
                      "distance_m": round(float(distance), 2), "straight_m": round(straight, 2), "bearing_deg": int(bearing),
-                     "instruction": turn_words(bearing, straight), "route": route, "position": here,
+                     "instruction": instruction, "route": route, "position": here,
                      "heading_deg": int(round(heading)), "at": fix["at"], "age_s": round(age, 1), "state": fix.get("state"),
                      "stale": why is not None, **({"stale_reason": why} if why else {}), "places": listing,
                      "plan": plan_of(fix), "route_note": plan.get("note") or ""}
@@ -1745,11 +1801,18 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     guiding.pop(zone, None)
                     return self.send_json(200, {"ok": True, "zone": zone, "stopped": True})
                 return self.send_json(*navigate(zone, parse_qs(url.query).get("to", [""])[0]))
+            if url.path == "/find" and parse_qs(url.query).get("what", [""])[0].strip():  # find me X (the app, the care page)
+                return self.send_json(200, find_reply(zone, parse_qs(url.query)["what"][0].strip()[:80]))
             if url.path == "/find":  # find me X: the watch list, the sightings, the moves and the last box not taken
                 return self.send_json(200, {"ok": True, "zone": zone, "watching": found_things.watched(zone),
                                             "things": found_things.listing(zone)})
             if url.path == "/waypoints":
                 header, _ = link.call({"op": "waypoints", "zone": zone})
+                if header.get("ok"):  # find me X: a thing seen is listed too ("kind": "object"), so "where is" can go there
+                    named = {w.get("name") for w in header.get("waypoints") or []}
+                    header = {**header, "waypoints": list(header.get("waypoints") or []) + [
+                        {"name": t["name"], "position": t["position"], "kind": "object"} for t in found_things.targets(zone)
+                        if t["name"] not in named]}
                 return self.send_json(200 if header.get("ok") else 404, header)
             if url.path == "/watch":  # the zone's watched spots
                 if not re.fullmatch(ZONE_NAME, zone):
@@ -2257,7 +2320,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 except OSError:
                     pass
                 remember_items(zone, result, images)
-                fix["found"] = find_seen(zone, result, header["job"], t0, images)  # find me X: sightings and moves
+                fix["found"] = find_seen(zone, result, header["job"], t0, images, photo=shot)  # find me X: sightings, moves
                 if shot is not None:  # a newly asked name is also looked for in the latest photos
                     shots[zone] = (shots.get(zone) or [])[-(FIND_RECENT - 1):] + [(t0, shot)]
                 if AUTO_PLACES and result.get("items"):
