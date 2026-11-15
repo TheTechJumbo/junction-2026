@@ -20,5 +20,19 @@
             </intent-filter>
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
+        <!-- Glasses: the pairs this phone can watch live; pairing links daylight://pair?c=DL1-... open it. -->
+        <activity
+            android:name=".GlassesActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:label="@string/glasses_title"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="daylight" android:host="pair" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

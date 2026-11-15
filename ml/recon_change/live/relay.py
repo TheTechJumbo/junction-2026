@@ -424,7 +424,11 @@ def item_photo(photo):
 REPO = "TheTechJumbo/junction-2026"
 
 
-def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None, api_token=None):
+# What the watch-only key may read (GET only): the glasses display page and the replies it polls.
+VIEW_PATHS = {"/hud", "/where", "/reminders", "/status", "/waypoints"}
+
+
+def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None, api_token=None, view_token=None):
     # The event API's address without the /events at its end: where /ask and /speak live.
     api_base = re.sub(r"/events/?$", "", event_api).rstrip("/") if event_api and api_token else None
     history_file = evidence_dir / "history.json"
@@ -787,16 +791,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             # indented, and the event API refuses to read more than 64 kB from /where.
             self.send_bytes(code, json.dumps(body, separators=(",", ":")).encode(), "application/json")
 
-        def allowed(self, query):
+        def allowed(self, query, path=None):
             given = query.get("k", [""])[0] or self.headers.get("X-Key", "")
             if hmac.compare_digest(given.encode(), token.encode()):
+                return True
+            # The watch-only key (--view-token, what a shared pairing code carries): the glasses display
+            # and what it reads, nothing that spends GPU time or changes anything.
+            if view_token and path in VIEW_PATHS and hmac.compare_digest(given.encode(), view_token.encode()):
                 return True
             self.send_json(403, {"ok": False, "error": "Open the link that includes the access key (?k=...)."})
             return False
 
         def do_GET(self):
             url = urlparse(self.path)
-            if not self.allowed(parse_qs(url.query)):
+            if not self.allowed(parse_qs(url.query), url.path):
                 return
             pages = {"/": "phone.html", "/dashboard": "dashboard.html", "/viewer": "viewer.html",
                      "/hud": "hud.html", "/places": "places.html"}
@@ -1193,13 +1201,15 @@ def main():
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets a phone on the same network reach the relay")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--token", default=secrets.token_urlsafe(9), help="access key; a random one is made if not given")
+    ap.add_argument("--view-token", default=secrets.token_urlsafe(9),
+                    help="watch-only key: the glasses display and what it reads, nothing else (live/share.py hands it out)")
     args = ap.parse_args()
     link = Link(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
                  "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, remote_command(args.remote_root)])
     evidence_dir = Path(tempfile.gettempdir()) / "beacon-evidence"
     evidence_dir.mkdir(exist_ok=True)
     event_api, api_token = os.environ.get("EVENT_API_URL"), os.environ.get("EVENT_API_TOKEN")
-    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token)
+    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, view_token=args.view_token)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     addresses = ["127.0.0.1"]
     if args.host == "0.0.0.0":
@@ -1209,6 +1219,7 @@ def main():
         print(f"  http://{address}:{args.port}/?k={args.token}", flush=True)
     print(f"dashboard: http://127.0.0.1:{args.port}/dashboard?k={args.token}", flush=True)
     print(f"day log:   http://127.0.0.1:{args.port}/dayview?k={args.token}", flush=True)
+    print(f"watch-only key (for the apps' glasses list): python live/share.py --port {args.port} --view-token {args.view_token}", flush=True)
     print("questions (/ask, /speak): " + ("passed on to the event API" if event_api and api_token
                                            else "off (EVENT_API_URL and EVENT_API_TOKEN are not both set)"), flush=True)
     print(f"frame picking on this laptop: {'on' if rc else 'off (OpenCV not found)'}; evidence images in {evidence_dir}", flush=True)
