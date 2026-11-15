@@ -308,4 +308,28 @@ class LiveRelayTest {
             }
         }
     }
+
+    @Test fun findAsksForTheThingInTheZoneWithTheKeyHeader() {
+        runBlocking {
+            MockWebServer().use { server ->
+                server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+                    .setBody("""{"ok":true,"what":"orange box","found":true,"place":"snack table","position":[1.0,2.0],"answer":"On the snack table."}"""))
+                server.enqueue(MockResponse().setResponseCode(404).setHeader("Content-Type", "application/json").setBody("""{"ok":false,"error":"Not found"}"""))
+                server.start()
+                val client = RelayClient(server.url("/").toString(), "synthetic-relay-key", "kitchen", allowLocalHttp = true)
+                val reply = client.find("orange box")
+                assertTrue(reply.found)
+                assertEquals("On the snack table.", reply.answer)
+                val request = server.takeRequest(1, TimeUnit.SECONDS)!!
+                assertEquals("GET", request.method)
+                assertEquals("/find", request.requestUrl!!.encodedPath)
+                assertEquals("kitchen", request.requestUrl!!.queryParameter("zone"))
+                assertEquals("orange box", request.requestUrl!!.queryParameter("what"))
+                assertEquals("synthetic-relay-key", request.getHeader("X-Key"))
+                assertNull(request.requestUrl!!.queryParameter("k"))
+                val missing = try { client.find("orange box"); null } catch (e: RelayFailure) { e }
+                assertEquals("not live yet: the app says so instead of crashing", 404, missing?.status)
+            }
+        }
+    }
 }

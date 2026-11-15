@@ -70,6 +70,7 @@ import com.junction.glasses.wearer.WearerMap
 import com.junction.glasses.live.FailoverRelay
 import com.junction.glasses.live.ChunkDrain
 import com.junction.glasses.live.ChunkQueue
+import com.junction.glasses.live.RelayFailure
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import com.junction.glasses.core.RelayClient as WearerRelayClient
@@ -218,6 +219,14 @@ class MainActivity : ComponentActivity() {
     private var navStartedLive = false
     private var navRelayFor: String? = null
     private var navRelayCached: FailoverRelay<RelayClient>? = null
+    // "Find me X" (core/FindMe.kt): the running search, the thing asked for, whether and where it was found.
+    private var findJob: Job? = null
+    private var findWhat: String? = null
+    private var findFound = false
+    private var foundItem: NavPlace? = null
+    /** The newest map reply, so a found thing can be drawn without asking the relay again. */
+    private var lastMapReply: NavReply? = null
+    private lateinit var takeMeThere: Button
     /**
      * The venue the map and guidance use (debug extra venue_zone, remembered), apart from the zone field
      * that recordings go to, so recordings can go to a test zone while the wearer is guided in the venue.
@@ -491,12 +500,18 @@ class MainActivity : ComponentActivity() {
             onPlaceTap = { name -> startNavigation(name) }
             onStop = { stopNavigation("Stopped.") }
         }
+        takeMeThere = Button(this).apply {
+            isAllCaps = false; textSize = 20f; visibility = android.view.View.GONE
+            stylePill(this, true)
+            setOnClickListener { findWhat?.let { startNavigation(it) } }
+        }
         setContentView(ScrollView(this).apply {
             setBackgroundColor(WearerPanel.NIGHT); isFillViewport = true
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
                 addView(wearer)
                 addView(navMap, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(320)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
+                addView(takeMeThere, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), dp(4), dp(20), dp(4)) })
                 // Small and dim, and it opens only on a long press, so the wearer does not open it by accident.
                 addView(TextView(this@MainActivity).apply {
                     text = "debug"; textSize = 11f; setTextColor(Color.argb(110, 255, 255, 255))
@@ -1406,12 +1421,18 @@ class MainActivity : ComponentActivity() {
     private fun submit(text: String) {
         cancelDiagnostic()
         stopRecognition(); glasses.stopListening()
+        // "Take me there": to the thing just found.
+        val find = FindPhrases.parse(text)
+        if (find == FindCommand.TakeMeThere && findFound) { findWhat?.let { startNavigation(it); return } }
         // "Take me to / where is / how do I get to <place>" and "stop" are guidance, not questions.
         when (val command = NavPhrases.parse(text, knownPlaces)) {
             is NavCommand.GoTo -> { startNavigation(command.place); return }
             NavCommand.Stop -> if (navGuide != null) { stopNavigation("Stopped."); return }
             null -> Unit
         }
+        // "Find me / where is / where did I put / have you seen <thing>" that is not a named place: the relay looks.
+        // Without a relay the question goes on to the backend as before.
+        if (find is FindCommand.Find && navRelay() != null) { startFind(find.what); return }
         if (screen.ask(text)) return // the wearer demo answers by itself
         if (controller == null) { status.text = "Connect the backend first."; if (::wearer.isInitialized) wearer.setStatus("Not connected"); return }
         lastQuestion = text
@@ -1690,9 +1711,67 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun renderMap(reply: NavReply, target: String?) {
+        lastMapReply = reply
         if (reply.places.isNotEmpty()) knownPlaces = (knownPlaces + reply.places.map { it.name }).distinct()
-        navMap.show(reply.plan, reply.places, reply.position, reply.headingDeg, if (target != null) reply.route else emptyList(),
-            target, if (!reply.ok) reply.error else null)
+        val found = foundItem?.takeIf { f -> reply.places.none { it.name.equals(f.name, ignoreCase = true) } }
+        navMap.show(reply.plan, reply.places + listOfNotNull(found), reply.position, reply.headingDeg, if (target != null) reply.route else emptyList(),
+            target, if (!reply.ok) reply.error else null, foundItem?.name)
+    }
+
+    // ---- "Find me X" ----
+
+    /**
+     * Asks the relay's /find for [what] (in the venue zone) and says the answer through the selected audio
+     * (the glasses'), on the wearer screen and as a ring on the map. When the relay is still looking it says
+     * "I'll look for the X" and asks again every 3 s for up to a minute. "Take me there" then guides to it.
+     */
+    private fun startFind(what: String) {
+        val relay = navRelay() ?: run {
+            if (::wearer.isInitialized) wearer.setStatus("Set up the relay first")
+            speak("I can't look for the $what: the laptop is not set up.")
+            return
+        }
+        findJob?.cancel()
+        findWhat = what; findFound = false; foundItem = null
+        updateTakeMeThere(); redrawMap()
+        if (::wearer.isInitialized) wearer.setStatus("Looking for the $what…")
+        val search = FindSearch(what,
+            fetch = { relay.call { it.find(what) } },
+            say = { line -> speak(line); if (::wearer.isInitialized) wearer.setStatus(line) },
+            shown = { reply ->
+                if (reply.found) {
+                    findFound = true
+                    reply.position?.let { foundItem = NavPlace(what, it) }
+                    updateTakeMeThere(); redrawMap()
+                }
+            },
+            now = { SystemClock.elapsedRealtime() },
+            sleep = { delay(it) },
+            failure = { e -> findFailure(what, e) })
+        findJob = lifecycleScope.launch { search.run() }
+    }
+
+    private fun findFailure(what: String, e: Exception): String {
+        val relayFailure = e as? RelayFailure
+        return when {
+            relayFailure?.status == 404 -> "Finding things isn't set up on the laptop yet."
+            relayFailure?.unreachable == true -> "I can't reach the laptop to look for the $what."
+            else -> "I couldn't look for the $what."
+        }
+    }
+
+    private fun updateTakeMeThere() {
+        if (!::takeMeThere.isInitialized) return
+        val what = findWhat
+        takeMeThere.visibility = if (what != null && findFound) android.view.View.VISIBLE else android.view.View.GONE
+        if (what != null) takeMeThere.text = "Take me there: $what"
+    }
+
+    /** The map again with the found thing, from the newest map reply (or just the thing when there is none yet). */
+    private fun redrawMap() {
+        if (!::navMap.isInitialized) return
+        lastMapReply?.let { renderMap(it, navGuide?.place); return }
+        navMap.show(emptyList(), listOfNotNull(foundItem), null, null, emptyList(), null, null, foundItem?.name)
     }
 
     /** Guides the wearer to [place]: map route, spoken directions on each new fix, until there or "stop". */
@@ -1782,6 +1861,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         debugDialog?.dismiss(); debugDialog = null
         navJob?.cancel(); navGuide = null
+        findJob?.cancel(); findJob = null
         stopLiveCamera("Live camera is off.")
         stopRecording("Recording stopped.")
         videoRecorder?.release()
