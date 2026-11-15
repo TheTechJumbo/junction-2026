@@ -154,7 +154,7 @@
 </div>
 <div id="hint" role="status" hidden></div>
 <div id="say" role="status" aria-live="polite"></div>
-<div id="me"><button id="whereAmI">Where am I?</button><button id="centre">Centre on me</button></div>
+<div id="me"><button id="whereAmI">Where am I?</button><button id="toggleView">From above</button></div>
 <div id="live" hidden aria-label="What the glasses see now, with what was found outlined">
   <div class="frame" id="liveFrame"><img id="liveImg" alt="What the glasses see now"></div>
   <div class="bar"><span><b>●</b> Live from the glasses</span><span id="liveWhen"></span></div>
@@ -236,6 +236,7 @@ const base = location.pathname.replace(/\/care\/?$/, '');
 const WEARER = q.get('view') === 'wearer';
 if (WEARER) document.body.classList.add('wearer');
 let autoFollow = WEARER;  // the wearer's view keeps following them until they move the view themselves
+let wearerView = 'eyes';  // the wearer's page: 'eyes' (first person, from their own eyes) or 'follow' (from above, behind)
 const api = (path) => base + path + (key ? `${path.includes('?') ? '&' : '?'}k=${encodeURIComponent(key)}` : '');
 async function getJson(path) {
   const reply = await fetch(api(path), { cache: 'no-store' });
@@ -639,7 +640,12 @@ $('showPath').onchange = () => { pathLine.visible = timeAnchors.visible = $('sho
 async function tickSpace() {
   let info;
   try {
-    info = await getJson(`/care/space?zone=${encodeURIComponent(zone)}${WEARER ? '&lite=1' : ''}`);
+    try {
+      info = await getJson(`/care/space?zone=${encodeURIComponent(zone)}${WEARER ? '&lite=1' : ''}`);
+    } catch (err) {  // a proxy that forwards only ?zone=: ask without &lite=1 (lite.splat next to the splat still serves)
+      if (!WEARER || err.status !== 404) throw err;
+      info = await getJson(`/care/space?zone=${encodeURIComponent(zone)}`);
+    }
   } catch (err) {
     $('loadText').textContent = err.status === 404 ? `No 3D room for "${nice(zone)}" yet. Record the room first.` : `Could not reach the laptop: ${err.message}`;
     return;
@@ -658,7 +664,7 @@ async function tickSpace() {
     const p = startPose();
     camera.position.copy(p.pos);
     look.yaw = p.yaw; look.pitch = p.pitch;
-    if (fix && fresh(fix) && wearerPose(fix)) setMode('follow');
+    if (fix && fresh(fix) && wearerPose(fix)) setMode(WEARER ? wearerView : 'follow');
   }
   if (!WEARER) {  // the wearer's view: no labels of things and no map from above (less to load on the phone)
     objectLabels(info);
@@ -705,7 +711,7 @@ function nearestPlace(pose) {
 
 function updateWearer() {
   const pose = knownPose();
-  if (!pose) { wearer.visible = false; dropTags('wearer', new Set()); return; }
+  if (!pose) { wearer.visible = false; dropTags('wearer', new Set()); if (WEARER) finding(true); return; }
   const stale = pose.stale;
   if (!stale) lastSeen = { position: pose.position, heading: pose.heading, at: pose.at };
   wearer.visible = true;
@@ -718,10 +724,11 @@ function updateWearer() {
   marker.radiusWant = uncertainty(fix, pose);
   ringLine.visible = ringFill.visible = pulse.visible = !stale;
   ringDash.visible = stale;
+  if (WEARER) finding(stale);
   const words = WEARER ? (stale ? 'Finding you… look around slowly' : 'You are here')
     : stale ? `Last seen ${clock(pose.at)}` : `Here now · ±${metres(marker.radiusWant)}`;
   const t = tag('wearer', words, 'wearer', wearerTagAt, () => toWearer('follow'));
-  if (WEARER && autoFollow && mode === 'free' && !flight) setMode('follow');
+  if (WEARER && autoFollow && mode === 'free' && !flight) setMode(wearerView);
   t.el.classList.toggle('stale', stale);
   t.hidden = () => mode === 'eyes';
 }
@@ -883,13 +890,17 @@ function drawFound() {
 }
 
 // ---- the wearer's two buttons ----
-let sayTimer = 0;
-function say(text, more) {
+let sayTimer = 0, sticky = false;
+function finding(on) {  // the wearer's page while there is no live position: a note that stays until there is one
+  if (on && !sticky) { sticky = true; clearTimeout(sayTimer); say("I'm still finding you…", 'Look around the room slowly.', true); }
+  if (!on && sticky) { sticky = false; $('say').classList.remove('on'); }
+}
+function say(text, more, keep) {
   const el = $('say');
   el.innerHTML = `${esc(text)}${more ? `<small>${esc(more)}</small>` : ''}`;
   el.classList.add('on');
   clearTimeout(sayTimer);
-  sayTimer = setTimeout(() => el.classList.remove('on'), 8000);
+  if (!keep) sayTimer = setTimeout(() => { el.classList.remove('on'); if (sticky) { sticky = false; finding(true); } }, 8000);
 }
 $('whereAmI').onclick = () => {
   const pose = knownPose();
@@ -902,15 +913,17 @@ $('whereAmI').onclick = () => {
   say(where, g ? `Going to the ${g.name}${g.d != null ? `, ${metres(g.d)} away` : ''}.` : pose.stale ? 'Look around slowly so I can find you again.' : '');
   autoFollow = true;
   flight = null;
-  setMode('follow');
+  setMode(wearerView);
 };
-function followMe() {  // the wearer's buttons always follow (never toggle it off)
+function showView(view) {  // the wearer's button: from their own eyes, or from above and behind them; never off
+  wearerView = view;
+  $('toggleView').textContent = view === 'eyes' ? 'From above' : 'My view';
   autoFollow = true;
   flight = null;
-  if (!knownPose()) return say('I am still finding you.', 'Look around the room slowly.');
-  setMode('follow');
+  if (!knownPose()) return say("I'm still finding you…", 'Look around the room slowly.');
+  setMode(view);
 }
-$('centre').onclick = followMe;
+$('toggleView').onclick = () => showView(wearerView === 'eyes' ? 'follow' : 'eyes');
 
 // ---- live camera: what the glasses see now, and what /find found in it, outlined (in real time, not in the splat) ----
 let liveUrl = null, liveBusy = false;
@@ -1364,7 +1377,7 @@ renderer.setAnimationLoop((now) => {
     const want = mode === 'eyes' ? w.clone() : w.clone().addScaledVector(ahead, -back).add(new THREE.Vector3(0, back * 0.47, 0));
     const k = 1 - Math.exp(-dt * 4);
     camera.position.lerp(want, k);
-    let aimYaw = yaw, aimPitch = 0;
+    let aimYaw = yaw, aimPitch = WEARER ? -0.2 : 0;  // the wearer's own view looks a little down: the route on the floor
     if (mode === 'follow') {  // look at the middle of the marker (between head and puck) from where the camera is now
       const at = w.clone().add(new THREE.Vector3(0, FLOOR / 2, 0)).sub(camera.position);
       aimYaw = Math.atan2(-at.x, -at.z);
