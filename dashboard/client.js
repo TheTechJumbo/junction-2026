@@ -69,3 +69,13 @@ export class ApiClient {
   }
   evidence(path, signal) { return this.request(path,{image:true,signal}); }
 }
+
+// Count durable sensor records, never inferred medication use. Preserve distinct
+// close-together openings; debounce belongs to the physical sensor producer.
+export function medicationOpenings(timeline) {
+  const unique = new Map();
+  for (const event of timeline.events) {
+    if (event.source === 'sensor' && event.type === 'pillbox_open' && localDay(new Date(event.ts)) === timeline.day) unique.set(event.id, event);
+  }
+  return sortedEvents([...unique.values()]);
+}
