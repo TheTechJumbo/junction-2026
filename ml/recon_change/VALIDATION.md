@@ -30,8 +30,8 @@ by replaying his own 90 s glasses video (02:59, recorded in the venue) through t
 
 ## Setup as found, and clocks
 
-- Event API on 127.0.0.1:8000 (up since 01:34). The relay on :8090 was restarted by other sessions at 02:51, 03:14:26 and
-  03:32:39. Workers on Iridis: GPU on ecsai04 (L4), CPU on ruby047.
+- Event API on 127.0.0.1:8000 (up since 01:34). The relay on :8090 was restarted by other sessions at 02:51, ~03:10,
+  03:14:26 and 03:32:39 (see Incidents). Workers on Iridis: GPU on ecsai04 (L4), CPU on ruby047.
 - `adb reverse` was **empty** at 02:31, which cut the phone off from the event API (it listens on 127.0.0.1 only).
   I re-added `tcp:8000` and `tcp:8090` at 02:34, as `phone_setup.py` does.
 - **Phone vs laptop clock:** the phone is +24 to +183 ms ahead (bounds from 15 adb round trips). Iridis logs are in UTC
@@ -102,6 +102,45 @@ How: the whole 90 s walk was sent like the app's Live camera (one `/locate` in f
   Under 2 s is not possible with the relay as it runs; it would need the cheap gate's verdict pushed as an event.
 - **5b sensor:** not run (see table). The path itself is plain HTTP into the event API (loopback reads 4–6 ms median,
   20 calls). The app's Pills? tile asks `/ask`, which answers from those events.
+
+## Incidents during the run
+
+1. **Stray kitchen recording (my error).** At 02:45:29 an `adb shell input swipe` on the setup page registered as a
+   tap on Always-on **Start recording** (zone kitchen), and a later swipe stopped it. The relay got session
+   `aon-20261115-024529`: 282 frames, final at 02:46:24. It rebuilt kitchen's room from that session at 02:47:09 and
+   trained it (Iridis job 2226520, done 02:50). Seb chose to keep it, with no restore. From then on I tapped only
+   by exact button text, and scrolled from the left margin.
+2. **Uploads cut by relay restarts.** The relay was restarted at 02:51, at about 03:10 (per the parent, to bring
+   `/navigate` live), at 03:14:26 and at 03:32:39. The ~03:10 restart cut the app's first kitchen upload of the 02:59
+   video (chunk 0 only, per the parent). By 03:46, kitchen's session `20261115_025911_0a9dfa62` was complete anyway
+   (1347 frames, 12 chunks, final, accepted 03:12:52, splat 21.97 dB). The 03:14:26 restart came 90 s after
+   validate-room's upload finished. Its room map failed (`BadZipFile`), and the resumed training gave up on an SSH
+   reset at 03:17:16, while the Iridis job (2226699) ran on regardless. I re-ran the map (a repeated empty final
+   chunk, done 03:21). The parent set the training back to "running" before the 03:32:39 restart, which attached the
+   splat at 03:42.
+3. **403 after the key rotation.** RELAY_KEY was rotated around 02:51. The relay log shows clients still on the old key
+   getting `403` (e.g. `POST /map?zone=kitchen` twice at 02:53:40, not from this session). The app was relaunched with
+   the new key. This session's helper reads the key from `.env.demo` on every call, so it was not affected.
+4. **adb reverse lost.** It was empty at 02:31 (USB reconnect); restored at 02:34.
+5. **Concurrent uploads.** The same 02:59 video went to kitchen (from the app) and to validate-room (from the laptop)
+   at the same time. Together they took 7.4 min of frame picking and SSH upload.
+
+## What still needs testing
+
+- **1a:** a question answered on the wearer screen (tap Pills?, see and hear the answer); the glasses app with the new
+  zone `always-on-test` set by the parent.
+- **1b:** the whole family app. Install a build whose signing key matches the one on the phone (or uninstall the 02:36
+  build first, with its owner's OK). Connect it to `http://127.0.0.1:8000` with the API token typed by Seb, and check
+  that its timeline matches `/timeline`.
+- **2, live:** a real object moved while the wearer holds still. Measure how still a head must be for `local` rather
+  than `moved`.
+- **3:** a change or watched-spot event reaching the day log and the event API. This needs code (none exists today).
+- **4, live:** Seb walking with the glasses streaming. The bird's-eye wearer marker on **kitchen**, whose `/care/space`
+  now fits (0.38 m, per the demo session; not seen by me). Full-fix vs instant-fix scale on a map not built from the
+  same video.
+- **5a:** a physical box opening with a watched spot (`POST /watch`) on the box, timed against a clock in view.
+- **5b:** a simulated or real `pillbox_open`, then the Pills? tile and the family app. Note that it changes the day's
+  pills answer.
 
 ## Bugs and risks (for the parent to forward)
 
