@@ -274,7 +274,7 @@
    "id": "h10"
   }
  ],
- "generated_at": "2026-11-15T06:38:33+02:00",
+ "generated_at": "2026-11-15T07:00:51+02:00",
  "places": {
   "our table": [
    0.036,
@@ -314,6 +314,40 @@
    "from": "labels.json",
    "on_tables": 14,
    "seats": 28
-  }
+  },
+  "overlaid": [
+   {
+    "folder": "train-kitchen-glasses-20261115-001625-1",
+    "used": true,
+    "scale_vs_expected": 1.01,
+    "landed_8cm": 0.36,
+    "agree": 0.42,
+    "squares_both_saw": 1778
+   },
+   {
+    "folder": "train-kitchen-20261115_004109_27dacab9-1",
+    "used": false,
+    "scale_vs_expected": 0.86,
+    "landed_8cm": 0.34,
+    "agree": 0.26,
+    "squares_both_saw": 3373
+   },
+   {
+    "folder": "train-kitchen-aon-20261115-010701-1",
+    "used": false,
+    "scale_vs_expected": 0.59,
+    "landed_8cm": 0.94,
+    "agree": 0.05,
+    "squares_both_saw": 936
+   },
+   {
+    "folder": "train-kitchen-aon-20261115-024529-1",
+    "used": false,
+    "scale_vs_expected": 0.15,
+    "landed_8cm": 0.81,
+    "agree": 0.08,
+    "squares_both_saw": 967
+   }
+  ]
  }
 }

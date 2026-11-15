@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """A recorded place as the family's home in 3D: blocks, possible trip hazards and a simulated night
-walk, from ONE trained splat and the relay's room data. No GPU, no model: a few seconds on a laptop.
+walk, from a trained splat and the relay's room data. No GPU, no model: seconds on a laptop CPU
+(about a minute with --overlay).
 
-    python venue_home.py --relay http://127.0.0.1:8090 --zone kitchen OUT_DIR [--fixture]
-    python venue_home.py --space care_space.json OUT_DIR [--splat trained.splat]
+    python venue_home.py OUT_DIR --relay http://127.0.0.1:8090 --zone kitchen [--fixture] [--overlay FOLDER ...]
+    python venue_home.py OUT_DIR --space care_space.json [--splat trained.splat]
 
 The relay's GET /care/space?zone=<zone> (key in X-Key; --relay reads RELAY_KEY from the environment)
 gives everything else: the matrix from the trained splat into the room map's axes (room_frame), the
 named places in those axes, and where the recording's cameras stood. The splat is the one that reply
-names, under --evidence (the relay's evidence folder), unless --splat says otherwise.
+names, under --evidence (the relay's evidence folder), unless --splat says otherwise. --overlay names
+more trained splats of the same place (folders under --evidence): each is registered onto this one
+(ICP with scale, needs scipy), kept only when it fits (overlay), and laid over it by vote.
 
-    home.ply            the place as a floor plan in blocks (floor_plan, meshed by lowpoly.py), in the
-                        room map's axes (z up): low clutter, seats and tables, tall things
+    home.ply            the place as a floor plan in blocks (plan_levels, meshed by lowpoly.py), in the
+                        room map's axes (z up): low clutter, tables, tall things, and seats where the
+                        vision labels saw chairs; only what was measured, close to where the glasses were
     hazards.json        splat_hazards.py's guesses, for the walks from --base to every other place
     night-<day>.json    night.py on a SIMULATED night (night.json with --fixture): the wearer walks from
                         --base to the places in --trips and back, routed round what stands by route.py,
@@ -27,11 +31,15 @@ hall is not a flat:
              least FLOOR_SHARE of the Gaussians (or --floor).
     outline  the room's box takes in every named place and camera, so a place at the far end of a
              sparse recording (a fridge by the door) is not outside the walls.
+    axes     the plan is drawn along the venue's own axes (axis_of: rows of tables and walls are
+             straight), then turned back into the room map's.
     blocks   lowpoly square by square (--raw) gives every 12 cm square its own noisy height and colour:
-             a pixel city nobody can read. floor_plan smooths the heights, snaps them to three
-             levels with one colour each, drops specks, what was not seen from nearby and where the
-             glasses walked, and leaves out what is more than --ceiling above the floor (a hall's
-             ceiling, lights and people standing; they would also hide the night trail).
+             a pixel city nobody can read. plan_levels smooths the heights (by vote over --overlay
+             recordings), snaps them to three levels with one colour each, puts tables under the
+             laptops and cups the vision labels found, keeps the path the glasses walked as floor,
+             redraws each level as whole rectangles, and leaves out what was not seen from within
+             SEEN_M and what is more than --ceiling above the floor (a hall's ceiling, lights and
+             people standing; they would also hide the night trail).
 """
 import argparse
 import json
@@ -72,15 +80,100 @@ def fetch_space(relay, zone):
         return json.load(reply)
 
 
-def load_splat(data, frame):
-    """Positions in the room map's axes and colours, faint and huge Gaussians left out (as lowpoly.from_splat)."""
+def raw_splat(data):
+    """A trained splat's Gaussians in its own frame (positions, colours), faint and huge ones left out
+    (as lowpoly.from_splat)."""
     rec = np.frombuffer(bytes(data), sr.RECORD)
     keep = rec["rgba"][:, 3] >= sh.MIN_ALPHA
     if keep.sum() > 100:
         size = rec["scale"].max(1)
         keep &= size <= np.quantile(size[keep], 1 - sh.DROP_LARGEST)
     rec = rec[keep]
-    return room_frame.to_room(rec["pos"].astype(np.float64), frame), rec["rgba"][:, :3]
+    return rec["pos"].astype(np.float64), rec["rgba"][:, :3]
+
+
+def load_splat(data, frame):
+    """Positions in the room map's axes and colours."""
+    own, rgb = raw_splat(data)
+    return room_frame.to_room(own, frame), rgb
+
+
+OVERLAY_SCALE = 0.25   # an overlaid recording's fitted scale may differ this much from what its size suggests ...
+OVERLAY_AGREE = 0.3    # ... and where both saw the room, this share of the squares either says stand must agree
+
+
+def camera_centres(folder):
+    """Where a trained splat's cameras stood, in its own frame (cameras.npz: world-to-camera E)."""
+    e = np.load(Path(folder) / "cameras.npz")["E"]
+    return -np.einsum("nji,nj->ni", e[:, :, :3], e[:, :, 3])
+
+
+def similarity(a, b):
+    """The scale, turn and shift that best put points a on points b (Umeyama), as a 4x4."""
+    ma, mb = a.mean(0), b.mean(0)
+    u, dg, vt = np.linalg.svd((b - mb).T @ (a - ma) / len(a))
+    fix = np.diag([1.0, 1.0, np.sign(np.linalg.det(u) * np.linalg.det(vt))])
+    turn3 = u @ fix @ vt
+    scale = np.trace(np.diag(dg) @ fix) / ((a - ma) ** 2).sum(1).mean()
+    m = np.eye(4)
+    m[:3, :3], m[:3, 3] = scale * turn3, mb - scale * turn3 @ ma
+    return m
+
+
+def register(src, target, guess, rounds=30):
+    """Another recording of the same place onto the main one: ICP with scale (similarity) from `src`
+    (its own frame) onto `target` (the main splat in the room map), started from `guess` (the main's
+    matrix with the scale corrected for the scenes' sizes: both recordings start at camera 0) turned
+    round the up axis every 15 degrees. Returns the 4x4 and the share of points that landed within 8 cm."""
+    from scipy.spatial import cKDTree  # only --overlay needs scipy
+    tree = cKDTree(target)
+
+    def icp(m, sample, rounds, start, end):
+        for k in range(rounds):
+            reach = start * (end / start) ** (k / max(rounds - 1, 1))
+            dist, idx = tree.query(sample @ m[:3, :3].T + m[:3, 3], distance_upper_bound=reach)
+            ok = np.isfinite(dist)
+            if ok.sum() < 200:
+                break
+            m = similarity(sample[ok], target[idx[ok]])
+        dist, _ = tree.query(sample @ m[:3, :3].T + m[:3, 3])
+        return m, float((dist < 0.08).mean())
+
+    best = (None, -1.0)
+    for yaw in np.radians(np.arange(0, 360, 15)):
+        spin = np.eye(4)
+        spin[:2, :2] = [[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]]
+        m = spin @ guess
+        m[:3, 3] = guess[:3, 3]  # turned round the main's first camera, where both recordings began
+        fit = icp(m, src[::4], 12, 1.0, 0.15)
+        if fit[1] > best[1]:
+            best = fit
+    return icp(best[0], src, rounds, 0.4, 0.05)
+
+
+def overlay(folder, main_own, target, matrix, angle, floor, outline, main, ceiling):
+    """One more recording of the place, registered and checked against the main one. Returns its
+    (top grid, seen grid) for overlay_tops, or None when it does not fit, and what was found."""
+    own, _ = raw_splat((Path(folder) / "trained.splat").read_bytes())
+    scale_main = float(np.cbrt(abs(np.linalg.det(np.asarray(matrix, float)[:3, :3]))))
+    expected = scale_main * np.median(np.linalg.norm(main_own, axis=1)) / np.median(np.linalg.norm(own, axis=1))
+    guess = np.asarray(matrix, float).copy()
+    guess[:3, :3] *= expected / scale_main
+    sample = own[np.random.default_rng(1).choice(len(own), min(40_000, len(own)), replace=False)]
+    m, landed = register(sample, target, guess)
+    scale = float(np.cbrt(abs(np.linalg.det(m[:3, :3]))))
+    p = own @ m[:3, :3].T + m[:3, 3]
+    cams = camera_centres(folder) @ m[:3, :3].T + m[:3, 3]
+    top = squares(turn(p[:, :2], angle), p[:, 2] - floor, outline, ceiling, PLAN_MIN * len(own) / len(main_own))
+    seen = seen_from(turn(cams[:, :2], angle), outline, top.shape)
+    main_top, main_seen = main
+    both = seen & main_seen
+    a, b = (top > 0) & both, (main_top > 0) & both
+    agree = float((a & b).sum() / max((a | b).sum(), 1))
+    ok = abs(scale / expected - 1) <= OVERLAY_SCALE and agree >= OVERLAY_AGREE
+    found = {"folder": Path(folder).name, "used": bool(ok), "scale_vs_expected": round(scale / expected, 2),
+             "landed_8cm": round(landed, 2), "agree": round(agree, 2), "squares_both_saw": int(both.sum())}
+    return ((top, seen) if ok else None), found
 
 
 def floor_of(height, share=FLOOR_SHARE):
@@ -102,7 +195,7 @@ def outline_of(flat, spots, pct=OUTLINE_PCT, margin=MARGIN_M):
 PLAN_M = 0.12          # the floor plan's squares (lowpoly's "medium")
 PLAN_MIN = 60          # a square stands when this many Gaussians are in it between ankle and --ceiling (a trained glasses splat) ...
 PLAN_TOP = 75          # ... as high as this percentile of them
-SEEN_M = 3.0           # squares farther than this from where the glasses went (or a named place) were not seen well
+SEEN_M = 2.0           # squares farther than this from where the glasses were (or a named place) are not drawn: depth that far is smear
 PIECE_MIN = 4          # pieces of fewer squares are noise
 RECT_SIDE = 3          # a table is at least this many squares each way (36 cm)
 WALKED_M = 0.35        # the glasses walked here (between two standing cameras in a row, route.WALK_GAP_M apart at most): floor
@@ -112,7 +205,7 @@ LEVELS = (  # (from height, drawn height, colour): low clutter, tables, tall thi
     (0.08, 0.16, (205, 196, 178)),  # seats, which only the vision labels say (a chair is as high as a table's edge)
     (0.30, 0.48, (186, 138, 88)),
     (0.80, 1.04, (112, 122, 148)),
-    (None, 0.32, (92, 104, 116)),
+    (None, 0.32, (64, 62, 60)),
 )
 ON_TABLES = ("laptop", "monitor", "cup", "bottle", "crisp packet", "3D printer", "keyboard", "mug", "plate")
 SEATS = ("chair", "stool", "sofa", "bench")
@@ -156,13 +249,9 @@ def vision_objects(folder, frame, angle, floor):
     return [(o["name"], turn(q[:2], angle), float(q[2] - floor)) for o, q in zip(objects, p)]
 
 
-def plan_levels(uv, h, outline, spots, cameras, eyes, objects=(), ceiling=CEILING_M):
-    """The splat as a calm floor plan on PLAN_M squares in the venue's own axes: a splat of a busy hall
-    is too noisy to mesh square by square (every square its own height and colour: a pixel city). Each
-    square gets a robust height, smoothed over its neighbours and snapped to one of LEVELS; the vision
-    labels put tables under laptops and cups and seats where chairs are; table pieces become rectangles;
-    pieces smaller than PIECE_MIN squares, squares not seen from nearby and the path the glasses walked
-    standing are floor. Returns the grid of levels (-1 floor) and its origin."""
+def squares(uv, h, outline, ceiling=CEILING_M, enough=PLAN_MIN):
+    """How high things stand on each PLAN_M square of one recording: PLAN_TOP percentile of the Gaussians
+    between ankle and ceiling, on squares with at least `enough` of them (0 elsewhere)."""
     (x0, y0), (x1, y1) = outline
     w, d = int(np.ceil((x1 - x0) / PLAN_M)), int(np.ceil((y1 - y0) / PLAN_M))
     body = (h > LEVELS[LOW][0]) & (h < ceiling)
@@ -175,19 +264,77 @@ def plan_levels(uv, h, outline, spots, cameras, eyes, objects=(), ceiling=CEILIN
     cells, starts, counts = np.unique(key[order], return_index=True, return_counts=True)
     top = np.zeros(w * d)
     for k, s, n in zip(cells, starts, counts):
-        if n >= PLAN_MIN:
+        if n >= enough:
             top[k] = np.percentile(hb[s:s + n], PLAN_TOP)
-    top = top.reshape(w, d)
+    return top.reshape(w, d)
+
+
+def centres_of(outline, shape, cell=PLAN_M):
+    (x0, y0), _ = outline
+    return np.stack(np.meshgrid((np.arange(shape[0]) + 0.5) * cell + x0, (np.arange(shape[1]) + 0.5) * cell + y0, indexing="ij"), -1)
+
+
+def seen_from(spots, outline, shape, cell=PLAN_M):
+    """Squares within SEEN_M of any of the spots (where a recording's cameras stood, or named places)."""
+    centres = centres_of(outline, shape, cell)
+    near = np.zeros(shape, bool)
+    for s in np.asarray(spots, float).reshape(-1, 2):
+        near |= ((centres - s) ** 2).sum(-1) <= SEEN_M ** 2
+    return near
+
+
+def walked_mask(cameras, eyes, outline, shape, cell=PLAN_M):
+    """Squares the glasses walked through standing (between two standing cameras in a row): floor, an
+    aisle. Seated at a table the head moves too, so only cameras at standing height count."""
+    centres = centres_of(outline, shape, cell)
+    walked = np.zeros(shape, bool)
+    standing = eyes >= STANDING * np.median(eyes) if len(eyes) else np.zeros(0, bool)
+    for (a, b), up in zip(zip(cameras, cameras[1:]), standing[:-1] & standing[1:]):
+        if up and np.linalg.norm(b - a) <= route.WALK_GAP_M:
+            ab = b - a
+            f = np.clip(((centres - a) @ ab) / max(ab @ ab, 1e-9), 0, 1)
+            walked |= (((centres - a) - f[..., None] * ab) ** 2).sum(-1) <= WALKED_M ** 2
+    return walked
+
+
+def overlay_tops(tops):
+    """Recordings laid over each other, [(top grid, seen grid)], main first: a square stands when more
+    than half of the recordings that saw it say so (noise in one is outvoted by the others; one that
+    alone saw a square decides it), as high as the median of those that say it stands."""
+    stack = np.stack([t for t, _ in tops])
+    seen = np.stack([s for _, s in tops])
+    stands = (stack > 0) & seen
+    voters, yes = seen.sum(0), stands.sum(0)
+    keep = (2 * yes > voters) | ((voters == 1) & (yes == 1))  # a strict majority: of two, both must agree
+    with np.errstate(all="ignore"):
+        tall = np.nanmedian(np.where(stands, stack, np.nan), 0) if stack.shape[0] > 1 else stack[0]
+    return np.nan_to_num(np.where(keep, tall, 0.0))
+
+
+def plan_levels(uv, h, outline, spots, cameras, eyes, objects=(), ceiling=CEILING_M, others=()):
+    """The splat as a calm floor plan on PLAN_M squares in the venue's own axes: a splat of a busy hall
+    is too noisy to mesh square by square (every square its own height and colour: a pixel city). Each
+    square gets a robust height (with `others`, [(top grid, seen grid)] of overlaid recordings, by vote),
+    smoothed over its neighbours and snapped to one of LEVELS; the vision labels put tables under
+    laptops and cups and seats where chairs are; furniture becomes rectangles; pieces smaller than
+    PIECE_MIN squares, squares not seen from nearby and the path the glasses walked standing are
+    floor. Returns the grid of levels (-1 floor) and its origin."""
+    (x0, y0), (x1, y1) = outline
+    w, d = int(np.ceil((x1 - x0) / PLAN_M)), int(np.ceil((y1 - y0) / PLAN_M))
+    top = squares(uv, h, outline, ceiling)
+    if others:
+        top = overlay_tops([(top, seen_from(spots, outline, (w, d)))] + list(others))
     pad = np.pad(top, 1)  # smoothed: the median of each square and its 8 neighbours (an empty square counts as floor)
     top = np.median(np.stack([pad[1 + a:1 + a + w, 1 + b:1 + b + d] for a in (-1, 0, 1) for b in (-1, 0, 1)]), 0)
     level = np.full((w, d), -1)
     for n in (LOW, TABLE, TALL):
         level[top >= LEVELS[n][0]] = n
-    centres = np.stack(np.meshgrid((np.arange(w) + 0.5) * PLAN_M + x0, (np.arange(d) + 0.5) * PLAN_M + y0, indexing="ij"), -1)
-    near = np.zeros((w, d), bool)
-    for s in spots:
-        near |= ((centres - s) ** 2).sum(-1) <= SEEN_M ** 2
+    near = seen_from(spots, outline, (w, d))
+    for _, seen in others:
+        near |= seen
     level[~near] = -1
+    # Where the glasses walked standing is floor: nobody walks through a table (smeared depth puts table tops there).
+    walked = walked_mask(cameras, eyes, outline, (w, d))
     # What the vision labels say: a table under what stands on tables, a seat where a chair is.
     for name, at, _ in objects:
         i, j = np.floor((np.asarray(at) - (x0, y0)) / PLAN_M).astype(int)
@@ -198,14 +345,7 @@ def plan_levels(uv, h, outline, spots, cameras, eyes, objects=(), ceiling=CEILIN
             level[patch] = np.where(level[patch] == TALL, TALL, TABLE)
         elif name in SEATS:
             level[patch] = np.where(level[patch] <= LOW, SEAT, level[patch])
-    # Where the glasses walked standing is floor: nobody walks through a table (smeared depth puts table
-    # tops there). Seated at a table the head moves too, so only cameras at standing height count.
-    standing = eyes >= STANDING * np.median(eyes) if len(eyes) else np.zeros(0, bool)
-    for (a, b), up in zip(zip(cameras, cameras[1:]), standing[:-1] & standing[1:]):
-        if up and np.linalg.norm(b - a) <= route.WALK_GAP_M:
-            ab = b - a
-            f = np.clip(((centres - a) @ ab) / max(ab @ ab, 1e-9), 0, 1)
-            level[(((centres - a) - f[..., None] * ab) ** 2).sum(-1) <= WALKED_M ** 2] = -1
+    level[walked] = -1
     # Furniture is rectangles: each level is redrawn as the largest whole rectangles that fit in it
     # (tables at least RECT_SIDE squares each way); what is left over (ragged edges, slivers) is floor.
     out = np.full((w, d), -1)
@@ -359,6 +499,8 @@ def main():
     ap.add_argument("--floor", type=float, help="the floor's height in the room map (default: worked out)")
     ap.add_argument("--ceiling", type=float, default=CEILING_M, help="blocks leave out what is higher above the floor than this (metres)")
     ap.add_argument("--axis", type=float, help="the venue's direction in degrees from east (default: worked out)")
+    ap.add_argument("--overlay", nargs="*", default=[], help="more trained splat folders of the same place (names under --evidence): "
+                    "registered onto this one and laid over it by vote, to cut the noise (needs scipy)")
     ap.add_argument("--base", default=DEFAULT_BASE, help="where the night starts and ends (a named place)")
     ap.add_argument("--trips", default=DEFAULT_TRIPS, help='"HH:MM place/minutes, place/minutes; HH:MM ..."')
     ap.add_argument("--day", default="2026-11-15")
@@ -370,7 +512,8 @@ def main():
         raise SystemExit(f"{a.zone}: the relay has no trained splat placed in the room map yet ({space.get('why') or space.get('error')}).")
     frame = room_frame.from_matrix(space["matrix"])
     splat = Path(a.splat) if a.splat else Path(a.evidence) / Path(*space["splat"].split("/")[2:])
-    pos, rgb = load_splat(splat.read_bytes(), frame)
+    own_main, rgb = raw_splat(splat.read_bytes())
+    pos = room_frame.to_room(own_main, frame)
     flat, height = hz.split_up(pos, "z")
     places = {p["name"]: [float(v) for v in p["position"]] for p in space.get("places") or []}
     places.update({p["name"]: [float(v) for v in p["position"]] for p in space.get("named") or []})  # placed on this splat's depth
@@ -391,7 +534,18 @@ def main():
 
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    level, origin = plan_levels(uv, h, outline, spots, cams_uv, cameras3[:, 2] - floor, objects, a.ceiling)
+    others, overlays = [], []  # more recordings of the same place, laid over this one by vote
+    if a.overlay:
+        target = pos[np.random.default_rng(0).choice(len(pos), min(150_000, len(pos)), replace=False)]
+        main_top = squares(uv, h, outline, a.ceiling)
+        main = (main_top, seen_from(spots, outline, main_top.shape))
+        for name in a.overlay:
+            folder = Path(name) if Path(name).is_dir() else Path(a.evidence) / name
+            got, found = overlay(folder, own_main, target, space["matrix"], angle, floor, outline, main, a.ceiling)
+            overlays.append(found)
+            if got is not None:
+                others.append(got)
+    level, origin = plan_levels(uv, h, outline, spots, cams_uv, cameras3[:, 2] - floor, objects, a.ceiling, others)
     if a.raw:  # lowpoly square by square, on the splat's own colours
         low = h < a.ceiling
         v, n, c, t = lowpoly.build(np.column_stack([uv[low], height[low]]), rgb[low], "z", a.quality, floor=floor, outline=outline)
@@ -406,7 +560,8 @@ def main():
 
     source = {"zone": a.zone, "splat": splat.parent.name, "session": trained.get("session"), "psnr": trained.get("psnr"),
               "fit_rms_m": (space.get("fit") or {}).get("rms_m"), "axis_deg": round(float(np.degrees(angle)), 1),
-              "vision": {"from": "labels.json", "on_tables": sum(o[0] in ON_TABLES for o in objects), "seats": sum(o[0] in SEATS for o in objects)}}
+              "vision": {"from": "labels.json", "on_tables": sum(o[0] in ON_TABLES for o in objects), "seats": sum(o[0] in SEATS for o in objects)},
+              "overlaid": overlays}
     walks = [(a.base.lower(), k.lower()) for k in places if k != a.base]
     found = sh.find(pos, places, walks, "z", floor=floor)
     found.update(generated_at=datetime.now().astimezone().isoformat(timespec="seconds"), places=places, label=label, source=source)
@@ -427,7 +582,7 @@ def main():
 
     print(json.dumps({
         "splat": str(splat.parent.name), "gaussians_used": len(pos), "floor": round(floor, 3),
-        "axis_deg": source["axis_deg"], "vision": source["vision"],
+        "axis_deg": source["axis_deg"], "vision": source["vision"], "overlaid": overlays,
         "levels": {name: int((level == k).sum()) for k, name in enumerate(("low", "table", "tall", "seat"))},
         "mesh": {"vertices": len(v), "triangles": len(t), "bytes": (out / "home.ply").stat().st_size},
         "hazards": {"found": len(found["hazards"]), "in_the_way": sum(z["in_the_way"] for z in found["hazards"]),

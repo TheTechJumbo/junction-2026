@@ -5,6 +5,7 @@
             points exactly as the matrix does, also when the matrix is rounded
   floor     with far more table than floor in view, the floor is still the floor (hazards.floor_height
             would pick the table top)
+  overlay   recordings laid over each other by vote: agreement stands, one recording's noise is outvoted
   pipeline  the example home written as a trained splat, with a /care/space reply that places it
             (scaled, turned and shifted), comes out as a floor plan of blocks (the table where it is),
             hazards and a simulated night in the room's axes: the night starts and ends at --base, visits each place of --trips, the door
@@ -59,6 +60,22 @@ def test_floor():
     check("(the home's own guess would be the table top)", abs(hz.floor_height(h, np.ones(len(h), bool)) + 0.3) < 0.05)
 
 
+def test_overlay():
+    seen = np.ones((4, 4), bool)
+    seen[3, 3] = False               # the first two never saw (3, 3)
+    main, other = np.zeros((4, 4)), np.zeros((4, 4))
+    main[0, 0] = main[1, 1] = 0.5   # (0, 0): a table both saw; (1, 1): noise in the main recording only
+    other[0, 0] = 0.6
+    only = np.zeros((4, 4), bool)
+    only[3, 3] = True
+    third = np.zeros((4, 4))
+    third[3, 3] = 1.0                # (3, 3): only a third recording saw it, and it stands
+    top = vh.overlay_tops([(main, seen), (other, seen), (third, only)])
+    check("overlay: what two recordings agree on stands, at their median height", abs(top[0, 0] - 0.55) < 1e-9)
+    check("overlay: noise in one recording is outvoted where the other saw floor", top[1, 1] == 0)
+    check("overlay: a square only one recording saw is that recording's", top[3, 3] == 1.0)
+
+
 def test_pipeline():
     m = similarity()
     inverse = np.linalg.inv(m)
@@ -111,6 +128,7 @@ def test_pipeline():
 if __name__ == "__main__":
     test_frame()
     test_floor()
+    test_overlay()
     test_pipeline()
     print(f"{len(failures)} failed" if failures else "all passed")
     sys.exit(1 if failures else 0)
