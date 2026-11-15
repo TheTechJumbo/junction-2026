@@ -18,7 +18,7 @@ Compile `arduino/arduino_binary_sketch` with UNO Q core 0.54.1 and installed Rou
 
 The Mac demo backend can be started from this checkout using its configured private environment file and `scripts/run_local.py --host 0.0.0.0 --port 8000`. The current board target is `http://10.0.41.83:8000`. Update the private board environment and restart its service when the backend address changes. The Mac must remain powered and connected for central API delivery.
 
-## Verification so far
+## Verification
 
 - Junction2026 profile saved on the board with autoconnect enabled. Board address observed as 10.0.33.248.
 - NTP synchronized automatically after Wi-Fi connection and corrected UTC. The RTC previously reported 1970, so boot-time synchronization is necessary.
@@ -29,12 +29,14 @@ The Mac demo backend can be started from this checkout using its configured priv
 - A synthetic opening persisted on the board passed through the installed sender to the real Mac API, completed an active reminder in the relay, and appeared in the day timeline. Dashboard and day-view pages returned HTTP 200. This used an isolated temporary relay and exercised its real sensor integration.
 - Board and Mac UTC epoch seconds matched during a paired check. The installed service is enabled and active, and Bridge reports no queue overflow.
 - A user-confirmed close/open at 00:20:19 UTC produced exactly one API event, cleared the MCU queue, appeared visibly in the day log and completed an active reminder. Sensor-to-queue was 101 ms, sensor-to-API-receipt was 1167.0 ms and the HTTP request took 241.3 ms. This single measurement includes sender scheduling and the HTTP return path.
+- The corrected build passed an external-power restart with USB disconnected. SSH verified a new Linux boot ID, automatic Junction2026 connection, synchronized NTP and an active reader. The user opened the box at 00:28:48 UTC. Exactly one API row was accepted for `unoq-pillbox-5cf8cfadce2f472cb01da0c95badb0cc-1`. Sensor-to-queue was 100 ms, sensor-to-API-receipt 1389.3 ms and HTTP duration 488.2 ms.
+- A physical opening during a 90-second Wi-Fi interruption was persisted at 00:30:28 UTC. The reader was restarted while the event was still undelivered. Automatic reconnection delivered the same ID and timestamp once. Both the API table and its replay stream contained one entry. The recovered opening appeared in the day timeline, and the MCU queue drained. External power and USB disconnection were maintained throughout this recovery test.
 - Queue identity/restart, authentication failure, malformed receipt and successful delivery unit tests passed.
 - `make check` passed 470 tests, lint and schema checks.
 
 The stock uploader encountered an OpenOCD flash-write timeout. Direct reset/halt flashing succeeded, but the MCU core differed from the installed 0.54.1 toolchain and the sketch did not start. A 2 MiB backup was saved on the board at `/home/arduino/junction-mcu-backup.bin` before updating the MCU core. The matching 0.54.1 core and automatic-start sketch were then flashed successfully. Bridge `pillbox_peek` responds and the Linux reader restarts successfully. The backup captures the MCU at the diagnostic stage, including earlier sketch-flash attempts, and is not a verified working original sketch image.
 
-The first external-power check received no event. USB diagnosis showed automatic Linux reader startup, Wi-Fi autoconnection and NTP recovery, while MCU Bridge methods were unavailable. Both the flashed core and sketch differed from the previously validated build. The matching build was restored and read-back verified. Startup was corrected to the default Linux-ready mode, and the acknowledgment encoding was fixed. External-power/USB-free acceptance of this corrected build is pending. JUN-13 remains In Progress.
+The first external-power check received no event. USB diagnosis showed automatic Linux reader startup, Wi-Fi autoconnection and NTP recovery, while MCU Bridge methods were unavailable. Both the flashed core and sketch differed from the previously validated build. The matching build was restored and read-back verified. Startup was corrected to the default Linux-ready mode, and the acknowledgment encoding was fixed. The corrected build subsequently passed the external-power test described above.
 
 ## Rollback
 
