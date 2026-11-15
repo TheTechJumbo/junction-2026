@@ -104,6 +104,16 @@
   .mesh-pane { display: flex; flex-direction: column; }
   .stage { position: relative; flex: 1; min-height: 200px; }
   .status { position: absolute; z-index: 4; bottom: 10px; left: 12px; color: var(--soft); font: 12px/1.2 var(--label); background: var(--chip); padding: 5px 9px; border-radius: 8px; }
+  /* The real photos from the glasses: a slow slideshow. */
+  .photos { position: absolute; inset: 0; background: #000; }
+  .photos img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1s; }
+  .photos img.on { opacity: 1; }
+  .photo-nav { position: absolute; z-index: 4; bottom: 10px; right: 12px; display: flex; gap: 6px; }
+  .photo-nav button { width: 34px; height: 34px; border: 0; background: var(--chip); color: var(--text); display: grid; place-items: center; }
+  .photo-wait { position: absolute; inset: 0; display: grid; place-content: center; gap: 10px; text-align: center; padding: 24px; color: var(--soft); }
+  .photo-wait svg { width: 56px; height: 56px; margin: 0 auto; color: var(--accent); opacity: .8; }
+  .photo-wait b { color: var(--text); font: var(--display-weight) 18px/1.2 var(--display); text-transform: var(--display-case); }
+  .photo-wait code { font: 12px/1.4 var(--label); background: var(--chip); padding: 2px 6px; border-radius: 6px; }
   .labels { position: absolute; inset: 0; pointer-events: none; z-index: 2; overflow: hidden; }
   .room-tag { position: absolute; left: 0; top: 0; padding: 3px 8px; border-radius: 999px; font: 11.5px/1.2 var(--label); white-space: nowrap; color: var(--text);
     background: var(--chip); box-shadow: inset 0 0 0 1px var(--line); }
@@ -187,8 +197,16 @@
     <canvas id="actual" class="pane-canvas" tabindex="0" aria-label="3D view of the room as it really is"></canvas>
     <div class="labels" id="actual-labels"></div><div class="status" id="actual-status">Loading…</div>
   </section>
+  <section id="photo-pane" hidden>
+    <div class="pane-head"><span class="step">1</span><div><h2>Real life</h2><p id="photo-words">what the glasses filmed</p></div></div>
+    <div class="photos" id="photos"></div>
+    <div class="photo-wait" id="photo-wait"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3 8h3l2-3h8l2 3h3v11H3z"/><circle cx="12" cy="13" r="4"/></svg>
+      <b>Glasses frames go here</b><span>Only the anonymised splat was cleared for sharing. Put the anonymised keyframes in<br><code>venue/photos/</code> (never committed) and they play here.</span></div>
+    <div class="photo-nav" id="photo-nav" hidden><button type="button" id="photo-prev" aria-label="Previous photo">‹</button><button type="button" id="photo-next" aria-label="Next photo">›</button></div>
+    <div class="status" id="photo-status" hidden></div>
+  </section>
   <section id="splat-pane">
-    <div class="pane-head"><span class="step" id="splat-step">2</span><div><h2>As the glasses see it</h2><p>Gaussian splat · the scanned room only</p></div></div>
+    <div class="pane-head"><span class="step" id="splat-step">2</span><div><h2>As the glasses see it</h2><p id="splat-words">Gaussian splat</p></div></div>
     <div id="splat"></div><div class="status" id="splat-status">Loading…</div>
   </section>
   <section class="mesh-pane">
@@ -281,7 +299,7 @@
   const SCENES = {
     home: {name: 'Example home', dir: 'home/', splat: 'home/home.splat', actual: 'actual.ply', house: true,
       meshes: [['blocks_high.ply', 'High', '7 cm'], ['blocks_medium.ply', 'Medium', '12 cm'], ['blocks_low.ply', 'Low', '30 cm']]},
-    venue: {name: 'Hacking hall', dir: 'venue/', splat: 'venue/venue-kitchen-glasses-anon.splat',
+    venue: {name: 'Hacking hall', dir: 'venue/', splat: 'venue/venue-kitchen-glasses-anon.splat', photos: 'venue/photos/',
       meshes: [['room_blocks_fine.ply', 'High', '7 cm'], ['room_blocks_mid.ply', 'Medium', '12 cm'], ['room_blocks_low.ply', 'Low', '30 cm']]},
     room: {name: 'Public room', dir: 'room/', splat: 'room/room.splat', hidden: true,
       meshes: [['room_blocks_fine.ply', 'High', '7 cm'], ['room_blocks_mid.ply', 'Medium', '12 cm'], ['room_10k.ply', 'Surface', '~10k'],
@@ -296,7 +314,43 @@
     b.addEventListener('click', () => { if (id !== sceneId) { params.set('scene', id); location.search = params; } });
     $('scenes').append(b);
   }
-  if (!scene.actual) { $('splat-step').textContent = '1'; $('mesh-step').textContent = '2'; words[2].textContent = 'the family app'; }
+  if (scene.house) $('splat-words').textContent = 'Gaussian splat · the scanned room only';
+  if (scene.photos) $('splat-words').textContent = 'Gaussian splat · 50 frames, 105 s of training';
+  if (scene.photos) {
+    $('photo-pane').hidden = false; $('panes').classList.add('three');
+    $('panes').after($('night-panel')); $('night-panel').classList.add('night-wide');
+    words[2].textContent = 'the family app';
+    loadPhotos(scene.photos);
+  } else if (!scene.actual) { $('splat-step').textContent = '1'; $('mesh-step').textContent = '2'; words[2].textContent = 'the family app'; }
+
+  // The glasses' own frames: photos.json ({"photos": [{"file", "caption"}]}) if there is one, otherwise
+  // whatever pictures the folder holds (the local server lists it). Shown one after another.
+  async function loadPhotos(dir) {
+    let list = [];
+    try { const r = await fetch(dir + 'photos.json'); if (r.ok) list = (await r.json()).photos; } catch { /* none */ }
+    if (!list.length) {
+      try {
+        const r = await fetch(dir); if (r.ok) {
+          const html = new DOMParser().parseFromString(await r.text(), 'text/html');
+          list = [...html.querySelectorAll('a[href]')].map(a => decodeURIComponent(a.getAttribute('href')))
+            .filter(f => /\.(jpe?g|png|webp)$/i.test(f)).sort().map(file => ({file}));
+        }
+      } catch { /* none */ }
+    }
+    if (!list.length) return;
+    $('photo-wait').hidden = true; $('photo-nav').hidden = false; $('photo-status').hidden = false;
+    const imgs = list.map(({file, caption}) => Object.assign(document.createElement('img'), {src: dir + file, alt: caption || 'A frame from the glasses', loading: 'lazy'}));
+    $('photos').append(...imgs);
+    setStat('built', list.length, list.length === 1 ? 'frame filmed' : 'frames filmed');
+    let at = -1, timer = 0;
+    const show = k => {
+      imgs[at]?.classList.remove('on'); at = (k + imgs.length) % imgs.length; imgs[at].classList.add('on');
+      $('photo-status').textContent = `frame ${at + 1} of ${imgs.length}` + (list[at].caption ? ` · ${list[at].caption}` : '');
+      clearTimeout(timer); timer = setTimeout(() => show(at + 1), 2500);
+    };
+    $('photo-prev').addEventListener('click', () => show(at - 1)); $('photo-next').addEventListener('click', () => show(at + 1));
+    show(0);
+  }
 
   const space = new Space($('mesh'));
   const nightView = new NightView({$, space});
