@@ -1,0 +1,15 @@
+{
+  "answer": "The pill box was opened at 08:00. I cannot confirm that the pills were taken.",
+  "evidence": [
+    {
+      "id": "synthetic-pills-open",
+      "type": "pillbox_open",
+      "source": "sensor",
+      "ts": "2026-11-14T08:00:00+02:00",
+      "zone": "kitchen",
+      "object": "pillbox",
+      "evidence_url": null,
+      "confidence": 1
+    }
+  ]
+}

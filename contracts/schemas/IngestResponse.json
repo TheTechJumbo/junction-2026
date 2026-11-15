@@ -1,0 +1,115 @@
+{
+  "$defs": {
+    "Event": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "ge": 0,
+          "le": 1,
+          "title": "Confidence"
+        },
+        "evidence_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Url"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "object": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Object"
+        },
+        "source": {
+          "enum": [
+            "sensor",
+            "vision",
+            "voice"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "type": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Type",
+          "type": "string"
+        },
+        "zone": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Zone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "source",
+        "ts",
+        "zone",
+        "object",
+        "evidence_url",
+        "confidence"
+      ],
+      "title": "Event",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "durability": {
+      "enum": [
+        "local",
+        "replicated"
+      ],
+      "title": "Durability",
+      "type": "string"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/Event"
+      },
+      "title": "Events",
+      "type": "array"
+    }
+  },
+  "required": [
+    "events",
+    "durability"
+  ],
+  "title": "IngestResponse",
+  "type": "object"
+}

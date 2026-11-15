@@ -1,0 +1,16 @@
+[
+  {
+    "type": "object_gone",
+    "source": "vision",
+    "ts": "2026-11-14T09:00:00+02:00",
+    "zone": "kitchen",
+    "object": null,
+    "evidence_url": null,
+    "confidence": 0.6,
+    "size_cm": [
+      10,
+      20,
+      30
+    ]
+  }
+]

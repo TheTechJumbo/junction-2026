@@ -63,9 +63,15 @@ def gaussians(r, detail, max_gaussians=200_000, max_frames=6):
     return np.concatenate(pos), np.concatenate(scale), np.concatenate(rgba), np.concatenate(quat)
 
 
-def write_splat(r, detail, path, max_gaussians=200_000):
-    """Write the `.splat` file. Returns how many Gaussians it holds."""
+def write_splat(r, detail, path, max_gaussians=200_000, marks=()):
+    """Write the `.splat` file. Returns how many Gaussians it holds.
+    marks: extra coloured balls, each (world position, radius, RGB colour), e.g. where the wearer is."""
     pos, scale, rgba, quat = gaussians(r, detail, max_gaussians)
+    if marks:
+        pos = np.concatenate([pos, np.array([m[0] for m in marks], np.float32)])
+        scale = np.concatenate([scale, np.array([[m[1]] * 3 for m in marks], np.float32)])
+        rgba = np.concatenate([rgba, np.array([[*m[2], 255] for m in marks], np.uint8)])
+        quat = np.concatenate([quat, np.tile([1.0, 0.0, 0.0, 0.0], (len(marks), 1))])
     record = np.zeros(len(pos), dtype=[("pos", "<f4", 3), ("scale", "<f4", 3), ("rgba", "u1", 4), ("rot", "u1", 4)])
     record["pos"], record["scale"], record["rgba"] = pos, scale, rgba
     record["rot"] = np.clip(quat * 128 + 128, 0, 255).astype(np.uint8)

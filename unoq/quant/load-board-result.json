@@ -1,0 +1,5 @@
+{
+  "load_seconds": 21.811879054999963,
+  "inference": "load_only",
+  "peak_rss_kib": 369404
+}

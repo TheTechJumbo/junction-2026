@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en" data-theme="kaamos">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>From glasses to home</title>
+<style>
+  /* The family app's four looks (dashboard/themes), as palettes and type for this page. */
+  @font-face { font-family: "Josefin Sans"; font-weight: 300; font-display: swap; src: url("../../dashboard/themes/kaamos/fonts/josefin-sans-latin-300-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Josefin Sans"; font-weight: 600; font-display: swap; src: url("../../dashboard/themes/kaamos/fonts/josefin-sans-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Albert Sans"; font-weight: 400; font-display: swap; src: url("../../dashboard/themes/kaamos/fonts/albert-sans-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Albert Sans"; font-weight: 600; font-display: swap; src: url("../../dashboard/themes/kaamos/fonts/albert-sans-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Barlow Condensed"; font-weight: 600; font-display: swap; src: url("../../dashboard/themes/ryijy/fonts/barlow-condensed-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Barlow Condensed"; font-weight: 700; font-display: swap; src: url("../../dashboard/themes/ryijy/fonts/barlow-condensed-latin-700-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Atkinson Hyperlegible"; font-weight: 400; font-display: swap; src: url("../../dashboard/themes/ryijy/fonts/atkinson-hyperlegible-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Atkinson Hyperlegible"; font-weight: 700; font-display: swap; src: url("../../dashboard/themes/ryijy/fonts/atkinson-hyperlegible-latin-700-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Schibsted Grotesk"; font-weight: 400; font-display: swap; src: url("../../dashboard/themes/almanakka/fonts/schibsted-grotesk-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Schibsted Grotesk"; font-weight: 700; font-display: swap; src: url("../../dashboard/themes/almanakka/fonts/schibsted-grotesk-latin-700-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Schibsted Grotesk"; font-weight: 900; font-display: swap; src: url("../../dashboard/themes/almanakka/fonts/schibsted-grotesk-latin-900-normal.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-display: swap; src: url("../../dashboard/themes/almanakka/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+
+  :root, [data-theme="kaamos"] {
+    --bg: #0b1029; --bg-low: #121a35; --panel: #18213f; --panel-top: #1d2748; --line: #3b4763; --text: #eef2f6; --soft: #b3bfd4;
+    --accent: #f2b04a; --accent-ink: #1b1407; --notice: #f08c98; --chip: rgba(11,16,41,.72);
+    --display: "Josefin Sans", "Avenir Next", sans-serif; --body: "Albert Sans", "Segoe UI", sans-serif; --label: var(--body);
+    --display-weight: 600; --display-case: none; --band: none; color-scheme: dark;
+  }
+  [data-theme="talviryijy"] {
+    --bg: #0d1430; --bg-low: #141c38; --panel: #1b2547; --panel-top: #212c52; --line: #687391; --text: #eef2f6; --soft: #c3cee0;
+    --accent: #f2b04a; --accent-ink: #1b1407; --notice: #d9604f; --chip: rgba(13,20,48,.75);
+    --display: "Barlow Condensed", sans-serif; --body: "Albert Sans", sans-serif; --label: "Barlow Condensed", sans-serif;
+    --display-weight: 700; --display-case: uppercase;
+    --band: repeating-linear-gradient(90deg, #eef2f6 0 6px, #9c2f2a 6px 12px, #1d2a4a 12px 18px, #f2b04a 18px 24px);
+  }
+  [data-theme="ryijy"] {
+    --bg: #24221f; --bg-low: #2a2724; --panel: #2f2c28; --panel-top: #36322d; --line: #6f6553; --text: #ebe5d8; --soft: #b8ab92;
+    --accent: #d9a441; --accent-ink: #24221f; --notice: #d9604f; --chip: rgba(36,34,31,.78);
+    --display: "Barlow Condensed", sans-serif; --body: "Atkinson Hyperlegible", sans-serif; --label: "Barlow Condensed", sans-serif;
+    --display-weight: 700; --display-case: uppercase;
+    --band: repeating-linear-gradient(90deg, #9c2f2a 0 8px, #2c3d6b 8px 16px, #d9a441 16px 24px, #2e4a36 24px 32px);
+  }
+  [data-theme="almanakka"] {
+    --bg: #e9edf0; --bg-low: #dfe5ea; --panel: #f7f8f4; --panel-top: #ffffff; --line: #a3b0bd; --text: #1f3a5f; --soft: #46586e;
+    --accent: #c8322b; --accent-ink: #ffffff; --notice: #a8261f; --chip: rgba(247,248,244,.85);
+    --display: "Schibsted Grotesk", sans-serif; --body: "Schibsted Grotesk", sans-serif; --label: "IBM Plex Mono", monospace;
+    --display-weight: 900; --display-case: none; --band: none; color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
+  body { display: flex; flex-direction: column; color: var(--text); font: 15px/1.4 var(--body);
+    background: radial-gradient(120% 90% at 15% -10%, var(--panel-top), transparent 55%), linear-gradient(var(--bg), var(--bg-low)); transition: background .4s, color .4s; }
+  button, select { font: inherit; color: inherit; }
+
+  /* ---------- Top bar ---------- */
+  .top { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px 20px; padding: 14px 16px 10px; }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .corner { display: flex; align-items: center; gap: 10px; }
+  .top .tools { grid-column: 1 / -1; }
+  .stats span { white-space: nowrap; }
+  .mark { width: 44px; height: 44px; border-radius: 12px; flex: none; box-shadow: 0 0 0 1px var(--line); overflow: hidden; background: var(--panel); }
+  .mark img { width: 100%; height: 100%; display: block; }
+  h1 { margin: 0; font: var(--display-weight) clamp(20px, 2.2vw, 28px)/1.1 var(--display); text-transform: var(--display-case); letter-spacing: .01em; white-space: nowrap; }
+  .rotor { display: inline-grid; vertical-align: bottom; overflow: hidden; height: 1.15em; color: var(--accent); }
+  .rotor span { grid-area: 1 / 1; transform: translateY(110%); opacity: 0; transition: transform .55s cubic-bezier(.2,.8,.2,1), opacity .4s; }
+  .rotor span.on { transform: none; opacity: 1; }
+  .rotor span.off { transform: translateY(-110%); opacity: 0; }
+  .stats { display: flex; gap: 6px 14px; flex-wrap: wrap; margin-top: 4px; font: 13px/1.2 var(--label); color: var(--soft); }
+  .stats b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .stats .arrow { opacity: .5; }
+
+  .tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .group { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border-radius: 12px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--line); }
+  .group-name { font: 11px/1 var(--label); text-transform: uppercase; letter-spacing: .1em; color: var(--soft); padding: 0 6px 0 8px; }
+  .seg { border: 0; background: none; padding: 7px 12px; border-radius: 9px; cursor: pointer; color: var(--soft); line-height: 1.1; text-align: center; transition: background .2s, color .2s; }
+  .seg small { display: block; font: 10.5px/1.1 var(--label); opacity: .75; }
+  .seg:hover { color: var(--text); }
+  .seg[aria-pressed="true"], .seg[aria-checked="true"] { background: var(--accent); color: var(--accent-ink); }
+  .icon-chip { display: inline-flex; align-items: center; gap: 7px; border: 0; padding: 8px 12px; border-radius: 9px; background: none; color: var(--soft); cursor: pointer; }
+  .icon-chip svg { width: 18px; height: 18px; flex: none; }
+  .icon-chip[aria-pressed="true"] { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .icon-chip:hover { color: var(--text); }
+  .home-button { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .home-button:hover { color: var(--accent-ink); filter: brightness(1.08); }
+  .swatch { width: 30px; height: 30px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; display: grid; place-items: center; background: none; }
+  .swatch i { width: 22px; height: 22px; border-radius: 50%; display: block; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+  .swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- Panels ---------- */
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 12px 10px; flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  main.three { grid-template-columns: 1fr 1fr 1fr; }
+  section { position: relative; background: linear-gradient(var(--panel-top), var(--panel)); border-radius: 16px; overflow: hidden; min-height: 300px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--line) 60%, transparent), 0 10px 30px rgba(0,0,0,.18); }
+  section::before { content: ""; position: absolute; inset: 0 0 auto; height: 5px; background: var(--band); z-index: 3; }
+  .pane-head { position: absolute; z-index: 4; top: 12px; left: 12px; right: 12px; display: flex; align-items: center; gap: 10px; pointer-events: none; }
+  .step { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font: 700 13px/1 var(--label); background: var(--accent); color: var(--accent-ink); flex: none; }
+  .pane-head h2 { margin: 0; font: var(--display-weight) 16px/1.1 var(--display); text-transform: var(--display-case); }
+  .pane-head p { margin: 2px 0 0; font: 12px/1.2 var(--label); color: var(--soft); }
+  .pane-head > div { background: var(--chip); padding: 6px 12px 7px; border-radius: 10px; backdrop-filter: blur(6px); }
+  .pane-canvas, #mesh { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  .pane-canvas:active, #mesh:active { cursor: grabbing; }
+  #splat { position: absolute; inset: 0; }
+  .mesh-pane { display: flex; flex-direction: column; }
+  .stage { position: relative; flex: 1; min-height: 200px; }
+  .status { position: absolute; z-index: 4; bottom: 10px; left: 12px; color: var(--soft); font: 12px/1.2 var(--label); background: var(--chip); padding: 5px 9px; border-radius: 8px; }
+  /* The real photos from the glasses: a slow slideshow. */
+  .photos { position: absolute; inset: 0; background: #000; }
+  .photos img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1s; }
+  .photos img.on { opacity: 1; }
+  .photo-nav { position: absolute; z-index: 4; bottom: 10px; right: 12px; display: flex; gap: 6px; }
+  .photo-nav button { width: 34px; height: 34px; border: 0; background: var(--chip); color: var(--text); display: grid; place-items: center; }
+  .photo-wait { position: absolute; inset: 0; display: grid; place-content: center; gap: 10px; text-align: center; padding: 24px; color: var(--soft); }
+  .photo-wait svg { width: 56px; height: 56px; margin: 0 auto; color: var(--accent); opacity: .8; }
+  .photo-wait b { color: var(--text); font: var(--display-weight) 18px/1.2 var(--display); text-transform: var(--display-case); }
+  .photo-wait code { font: 12px/1.4 var(--label); background: var(--chip); padding: 2px 6px; border-radius: 6px; }
+  .labels { position: absolute; inset: 0; pointer-events: none; z-index: 2; overflow: hidden; }
+  .room-tag { position: absolute; left: 0; top: 0; padding: 3px 8px; border-radius: 999px; font: 11.5px/1.2 var(--label); white-space: nowrap; color: var(--text);
+    background: var(--chip); box-shadow: inset 0 0 0 1px var(--line); }
+  .room-tag-focus { background: var(--accent); color: var(--accent-ink); box-shadow: none; font-weight: 600; }
+  @media (max-width: 900px) { body { display: block; height: auto; } main, main.three { grid-template-columns: 1fr; grid-auto-rows: minmax(60vh, auto); } h1 { white-space: normal; } }
+  @media (prefers-reduced-motion: reduce) { .rotor span { transition: none; } }
+
+  /* ---------- The night controls (the family app's, dashboard/base.css) ---------- */
+  .night-panel { padding: 8px 12px 10px; border-top: 1px solid var(--line); }
+  .night-panel.night-wide { margin: 0 12px 12px; background: linear-gradient(var(--panel-top), var(--panel)); border: 0; border-radius: 16px; flex: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--line) 60%, transparent); }
+  .night-summary { margin: 0 0 4px; font: var(--display-weight) 16px/1.2 var(--display); text-transform: var(--display-case); }
+  .night-note { margin: 0 0 6px; color: var(--soft); font-size: 13px; }
+  .night-row { display: flex; align-items: center; gap: .5rem 1rem; flex-wrap: wrap; }
+  button { border-radius: 9px; cursor: pointer; }
+  .ghost { background: transparent; border: 1px solid var(--line); }
+  .ghost:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+  .primary { background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); }
+  .link-button { background: none; border: 0; padding: 2px 0; color: var(--soft); text-decoration: underline; text-underline-offset: 3px; }
+  .visually-hidden{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .trip-list{list-style:none;margin:.35rem 0 0;padding:0;display:flex;gap:.25rem 1rem;flex-wrap:wrap;font-size:13px}
+  .trip-list button{text-align:start}
+  .night-controls{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+  .night-controls .icon-button,.night-options .icon-button{display:inline-grid;place-items:center;min-width:2.75rem;min-height:2.75rem}
+  .media-icon{width:1.25rem;height:1.25rem}
+  .night-options{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+  .night-speed{display:flex;align-items:center;gap:.5rem}
+  .speed-dial{width:3.25rem;height:3.25rem;cursor:ns-resize;touch-action:none;border-radius:50%;color:var(--accent)}
+  .speed-dial svg{display:block;width:100%;height:100%}
+  .speed-dial .dial-track{opacity:.25}
+  .speed-text{font-variant-numeric:tabular-nums;min-width:5.5em}
+  .night-skip[aria-pressed="true"]{outline:2px solid currentColor;outline-offset:-2px}
+  .night-skip[aria-pressed="false"]{opacity:.6}
+  #night-rewind[aria-pressed="true"]{outline:2px solid var(--accent);outline-offset:-2px}
+  [data-tip]{position:relative}
+  .tip{position:absolute;bottom:calc(100% + .5rem);left:50%;transform:translateX(-50%);z-index:5;padding:.35rem .6rem;border-radius:.4rem;
+    background:rgba(12,16,32,.94);color:#fff;font-size:.8rem;line-height:1.3;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s}
+  [data-tip]:hover>.tip,[data-tip]:focus-visible>.tip,[data-tip][data-tip-open]>.tip{opacity:1}
+  @media (hover:none){[data-tip]:hover>.tip{opacity:0}[data-tip][data-tip-open]>.tip{opacity:1}}
+  .night-ends{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-size:.85rem;opacity:.75}
+  .night-clock{font-variant-numeric:tabular-nums;font-size:1.6rem;font-weight:600;margin-inline-start:.25rem;min-width:5ch;font-family:var(--display)}
+  .night-time{width:100%;margin:.25rem 0;accent-color:var(--accent)}
+  .night-strip{position:relative;height:1.1rem;margin-top:.5rem;cursor:pointer;color:var(--accent);background:color-mix(in srgb, var(--text) 6%, transparent);border-radius:3px}
+  .night-strip span{position:absolute;inset-block:0;inset-inline-start:calc(var(--from,0) * 100%);width:calc(var(--span,0) * 100%);min-width:3px;border-radius:2px;background:currentColor;opacity:.35}
+  .night-strip span[data-kind="event"]{width:3px;opacity:1;color:#7fd3c9}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"
+} }
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="mark"><img id="mark" src="../../dashboard/themes/kaamos/assets/mark.svg" alt=""></span>
+    <div>
+      <h1 id="title"><span id="title-from">From glasses</span> to <span class="rotor" id="rotor"><span class="on">a Gaussian splat</span><span>a block mesh</span><span>a whole home</span></span></h1>
+      <div class="stats" id="stats" aria-live="polite"></div>
+    </div>
+  </div>
+  <div class="corner">
+    <button id="home" class="icon-chip home-button" type="button" title="Back to the start view (0)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.2 12 4l9 7.2V20a1 1 0 0 1-1 1h-5.5v-6h-5v6H4a1 1 0 0 1-1-1z" fill="currentColor"/></svg>Home</button>
+    <div class="group" role="radiogroup" aria-label="Look" id="themes"><span class="group-name">Look</span></div>
+  </div>
+  <div class="tools">
+    <div class="group" role="group" aria-label="Scene" id="scenes"></div>
+    <div class="group" role="radiogroup" aria-label="Mesh quality"><span class="group-name">Quality</span><span id="which"></span></div>
+    <div class="group" role="group" aria-label="Layers">
+      <button id="show-house" class="icon-chip" type="button" aria-pressed="true" title="The rest of the house, see-through around the scanned room">
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 10.5 12 3.5l9 7V20H3z"/><path d="M9.5 20v-5.5h5V20M3 14h6.5M14.5 14H21"/></svg>Whole house</button>
+      <button id="show-night" class="icon-chip" type="button" aria-pressed="true" title="Last night's walk, replayed in 3D">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="currentColor"/></svg>Last night</button>
+    </div>
+  </div>
+</header>
+<main id="panes">
+  <section id="actual-pane" hidden>
+    <div class="pane-head"><span class="step">1</span><div><h2>As built</h2><p>the real room, every surface</p></div></div>
+    <canvas id="actual" class="pane-canvas" tabindex="0" aria-label="3D view of the room as it really is"></canvas>
+    <div class="labels" id="actual-labels"></div><div class="status" id="actual-status">Loading…</div>
+  </section>
+  <section id="photo-pane" hidden>
+    <div class="pane-head"><span class="step">1</span><div><h2>Real life</h2><p id="photo-words">the photos the splat was made from</p></div></div>
+    <div class="photos" id="photos"></div>
+    <div class="photo-wait" id="photo-wait"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3 8h3l2-3h8l2 3h3v11H3z"/><circle cx="12" cy="13" r="4"/></svg>
+      <b>Photos go here</b><span>Put the photos the splat was made from in<br><code>room/photos/</code> (never committed) and they play here.</span></div>
+    <div class="photo-nav" id="photo-nav" hidden><button type="button" id="photo-prev" aria-label="Previous photo">‹</button><button type="button" id="photo-next" aria-label="Next photo">›</button></div>
+    <div class="status" id="photo-status" hidden></div>
+  </section>
+  <section id="splat-pane">
+    <div class="pane-head"><span class="step" id="splat-step">2</span><div><h2 id="splat-title">As the glasses see it</h2><p id="splat-words">Gaussian splat</p></div></div>
+    <div id="splat"></div><div class="status" id="splat-status">Loading…</div>
+  </section>
+  <section class="mesh-pane">
+    <div class="pane-head"><span class="step" id="mesh-step">3</span><div><h2>As the family app draws it</h2><p>block mesh made from the splat</p></div></div>
+    <div class="stage"><canvas id="mesh" tabindex="0" aria-label="3D view of the room. Drag or use the arrow keys to turn; scroll or plus and minus to zoom; double-click or 0 to reset."></canvas>
+      <div class="labels" id="mesh-labels"></div><div class="status" id="mesh-status">Loading…</div></div>
+    <div id="night-panel" class="night-panel">
+      <p id="night-summary" class="night-summary"></p>
+      <p id="night-note" class="night-note"></p>
+      <div class="night-row">
+        <div class="night-controls">
+<button id="night-prev" class="ghost icon-button" type="button" aria-label="Previous moment" data-tip="Previous moment"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.5v14H6zM19 5.5v13a1 1 0 0 1-1.5.86L9.6 12.86a1 1 0 0 1 0-1.72l7.9-6.5A1 1 0 0 1 19 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-rewind" class="ghost icon-button" type="button" aria-label="Play backwards" data-tip="Play backwards"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5.5v13a1 1 0 0 1-1.5.86L4.1 12.86a1 1 0 0 1 0-1.72L14.5 4.64A1 1 0 0 1 16 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-play" class="primary icon-button" type="button" aria-label="Play" data-tip="Play"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true" data-show="play"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor" stroke="none"></path></svg><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true" data-show="pause" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-next" class="ghost icon-button" type="button" aria-label="Next moment" data-tip="Next moment"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM5 5.5v13a1 1 0 0 0 1.5.86l7.9-6.5a1 1 0 0 0 0-1.72l-7.9-6.5A1 1 0 0 0 5 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<output id="night-clock" class="night-clock" for="night-time">--:--</output>
+        </div>
+        <div class="night-options">
+<div class="night-speed"><div id="speed-dial" class="speed-dial" role="slider" tabindex="0" aria-label="Playing speed" aria-valuemin="0.25" aria-valuemax="30" aria-valuenow="1" aria-valuetext="1 minute of night per second" data-tip="Speed: drag, scroll or use the arrow keys">
+<svg viewBox="0 0 48 48" aria-hidden="true"><path class="dial-track" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" d=""></path><path id="speed-arc" class="dial-fill" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" d=""></path><circle id="speed-knob" class="dial-knob" r="3.2" fill="currentColor" cx="24" cy="24"></circle></svg>
+</div><output id="speed-text" class="speed-text" for="speed-dial">1 min/s</output></div>
+<button id="night-skip" class="ghost icon-button night-skip" type="button" aria-pressed="true" aria-label="Skip time in bed" data-tip="Skip time in bed: play jumps from one trip to the next"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 20V10h2v5h16a2 2 0 0 1 2 2v3h-2v-2H4v2z" fill="currentColor" stroke="none"></path><path d="M5 12.6a1.6 1.6 0 1 0 3.2 0 1.6 1.6 0 0 0-3.2 0z" fill="currentColor" stroke="none"></path><path d="M10 4l4.5 3.5L10 11zM15.5 4l4.5 3.5-4.5 3.5z" fill="currentColor" stroke="none"></path></svg></button>
+        </div>
+      </div>
+      <div class="night-strip" id="night-strip" title="Click to jump; scroll to move a minute (Shift: ten)"></div>
+      <div class="night-ends"><time id="night-from">--:--</time><time id="night-to">--:--</time></div>
+      <label for="night-time" class="visually-hidden">Time of night. Arrow keys move a minute, with Shift ten; Home and End go to the ends.</label><input id="night-time" class="night-time" type="range" min="0" max="1000" value="0" step="1">
+      <ul id="trip-list" class="trip-list"></ul>
+    </div>
+  </section>
+</main>
+<script type="module">
+  import * as GS from '@mkkellogg/gaussian-splats-3d';
+  import {Space, parsePly} from '../../dashboard/space.js'; // the family app's own viewer
+  import {NightView} from './night.js';
+  import {loadHouse, showHouse} from './house.js';
+
+  const $ = id => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+
+  // ---------- Looks: the family app's themes ----------
+  const THEMES = [['kaamos', 'Kaamos', ['#1d2a4a', '#f2b04a', '#eef2f6']], ['talviryijy', 'Talviryijy', ['#1d2a4a', '#9c2f2a', '#f2b04a']],
+    ['ryijy', 'Ryijy', ['#9c2f2a', '#2c3d6b', '#d9a441']], ['almanakka', 'Almanakka', ['#1f3a5f', '#c8322b', '#e9edf0']]];
+  const stored = () => { try { return localStorage.getItem('splat-demo-look'); } catch { return null; } };
+  function setTheme(id, remember) {
+    if (!THEMES.some(t => t[0] === id)) id = 'kaamos';
+    document.documentElement.dataset.theme = id;
+    $('mark').src = `../../dashboard/themes/${id}/assets/mark.svg`;
+    document.querySelectorAll('#themes .swatch').forEach(b => b.setAttribute('aria-checked', String(b.value === id)));
+    if (window.demo) drawHouse(); // (not on the first call: the house is not in yet)
+    if (remember) { try { localStorage.setItem('splat-demo-look', id); } catch { /* private mode */ } }
+  }
+  for (const [id, name, [a, b, c]] of THEMES) {
+    const button = Object.assign(document.createElement('button'), {className: 'swatch', type: 'button', value: id, title: name});
+    button.setAttribute('role', 'radio'); button.setAttribute('aria-label', name);
+    const dot = document.createElement('i'); dot.style.background = `conic-gradient(${a} 0 50%, ${b} 50% 80%, ${c} 80%)`;
+    button.append(dot); button.addEventListener('click', () => setTheme(id, true));
+    $('themes').append(button);
+  }
+  setTheme(params.get('theme') || stored() || 'kaamos');
+
+  // ---------- The title: the word turns over ----------
+  const words = [...$('rotor').children];
+  let word = 0;
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) setInterval(() => {
+    words[word].className = 'off'; const leaving = words[word];
+    word = (word + 1) % words.length; words[word].className = 'on';
+    setTimeout(() => { if (leaving.className === 'off') leaving.className = ''; }, 600);
+  }, 2600);
+  function countUp(el, to) {
+    const t0 = performance.now(), from = Number(el.dataset.n || 0); el.dataset.n = to;
+    const step = now => { const f = Math.min(1, (now - t0) / 900), e = 1 - (1 - f) ** 3;
+      el.textContent = Math.round(from + (to - from) * e).toLocaleString('en'); if (f < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }
+  const stat = {};
+  function setStat(key, value, words) {
+    if (!stat[key]) {
+      const span = document.createElement('span'); const b = document.createElement('b'); span.append(b, ' ' + words);
+      stat[key] = b; const order = ['built', 'seen', 'blocks'];
+      const after = order.slice(order.indexOf(key) + 1).map(k => stat[k]?.parentElement).find(Boolean);
+      if (after) { $('stats').insertBefore(span, after); } else $('stats').append(span);
+      $('stats').querySelectorAll('.arrow').forEach(a => a.remove());
+      [...$('stats').children].slice(1).forEach(s => s.before(Object.assign(document.createElement('span'), {className: 'arrow', textContent: '→'})));
+    }
+    countUp(stat[key], value);
+  }
+
+  // ---------- Scenes ----------
+  const SCENES = {
+    home: {name: 'Example home', dir: 'home/', splat: 'home/home.splat', actual: 'actual.ply', house: true,
+      meshes: [['blocks_high.ply', 'High', '7 cm'], ['blocks_medium.ply', 'Medium', '12 cm'], ['blocks_low.ply', 'Low', '30 cm']]},
+    venue: {name: 'Hacking hall', hidden: true, dir: 'venue/', splat: 'venue/venue-kitchen-glasses-anon.splat',
+      meshes: [['room_blocks_fine.ply', 'High', '7 cm'], ['room_blocks_mid.ply', 'Medium', '12 cm'], ['room_blocks_low.ply', 'Low', '30 cm']]},
+    room: {name: 'Real room (Mip-NeRF 360)', dir: 'room/', splat: 'room/room.splat', photos: 'room/photos/',
+      meshes: [['room_blocks_fine.ply', 'High', '7 cm'], ['room_blocks_mid.ply', 'Medium', '12 cm'], ['room_10k.ply', 'Surface', '~10k'],
+        ['room_lowpoly.ply', 'Low', '<1k'], ['room_mesh.ply', 'Voxel', 'coarse', true], ['room_mesh_fine.ply', 'Voxel', 'fine', true]]},
+  };
+  const sceneId = SCENES[params.get('scene')] ? params.get('scene') : 'home';
+  const scene = SCENES[sceneId];
+  for (const [id, s] of Object.entries(SCENES)) {
+    if (s.hidden && id !== sceneId) continue;
+    const b = Object.assign(document.createElement('button'), {className: 'seg', type: 'button', textContent: s.name});
+    b.setAttribute('aria-pressed', String(id === sceneId));
+    b.addEventListener('click', () => { if (id !== sceneId) { params.set('scene', id); location.search = params; } });
+    $('scenes').append(b);
+  }
+  if (scene.house) $('splat-words').textContent = 'Gaussian splat · the scanned room only';
+  if (scene.photos) $('splat-words').textContent = 'Gaussian splat trained on those photos · 1.59 M Gaussians';
+  if (scene.photos) {
+    $('title-from').textContent = 'From photos'; $('splat-title').textContent = 'As a Gaussian splat'; document.title = 'From photos to the family app';
+    $('photo-pane').hidden = false; $('panes').classList.add('three');
+    $('panes').after($('night-panel')); $('night-panel').classList.add('night-wide');
+    words[2].textContent = 'the family app';
+    loadPhotos(scene.photos);
+  } else if (!scene.actual) { $('splat-step').textContent = '1'; $('mesh-step').textContent = '2'; words[2].textContent = 'the family app'; }
+
+  // The glasses' own frames: photos.json ({"photos": [{"file", "caption"}]}) if there is one, otherwise
+  // whatever pictures the folder holds (the local server lists it). Shown one after another.
+  async function loadPhotos(dir) {
+    let list = [];
+    try {
+      const r = await fetch(dir + 'photos.json');
+      if (r.ok) { const j = await r.json(); list = j.photos; if (j.credit) $('photo-words').textContent = j.credit; }
+    } catch { /* none */ }
+    if (!list.length) {
+      try {
+        const r = await fetch(dir); if (r.ok) {
+          const html = new DOMParser().parseFromString(await r.text(), 'text/html');
+          list = [...html.querySelectorAll('a[href]')].map(a => decodeURIComponent(a.getAttribute('href')))
+            .filter(f => /\.(jpe?g|png|webp)$/i.test(f)).sort().map(file => ({file}));
+        }
+      } catch { /* none */ }
+    }
+    if (!list.length) return;
+    $('photo-wait').hidden = true; $('photo-nav').hidden = false; $('photo-status').hidden = false;
+    const imgs = list.map(({file, caption}) => Object.assign(document.createElement('img'), {src: dir + file, alt: caption || 'A frame from the glasses', loading: 'lazy'}));
+    $('photos').append(...imgs);
+    setStat('built', list.length, list.length === 1 ? 'photo' : 'photos');
+    let at = -1, timer = 0;
+    const show = k => {
+      imgs[at]?.classList.remove('on'); at = (k + imgs.length) % imgs.length; imgs[at].classList.add('on');
+      $('photo-status').textContent = `photo ${at + 1} of ${imgs.length}` + (list[at].caption ? ` · ${list[at].caption}` : '');
+      clearTimeout(timer); timer = setTimeout(() => show(at + 1), 2500);
+    };
+    $('photo-prev').addEventListener('click', () => show(at - 1)); $('photo-next').addEventListener('click', () => show(at + 1));
+    show(0);
+  }
+
+  const space = new Space($('mesh'));
+  const nightView = new NightView({$, space});
+  let actual = null;
+  if (scene.actual) {
+    $('actual-pane').hidden = false; $('panes').classList.add('three');
+    $('panes').after($('night-panel')); $('night-panel').classList.add('night-wide');
+    actual = new Space($('actual'));
+  }
+  $('show-house').hidden = !scene.house;
+
+  // ---------- Quality ----------
+  let current = scene.meshes[0];
+  for (const m of scene.meshes) {
+    const b = Object.assign(document.createElement('button'), {className: 'seg', type: 'button'});
+    b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(m === current)); b.dataset.file = m[0];
+    b.append(m[1], Object.assign(document.createElement('small'), {textContent: m[2]}));
+    b.addEventListener('click', () => { if (m === current) return; current = m;
+      document.querySelectorAll('#which .seg').forEach(x => x.setAttribute('aria-checked', String(x === b))); load(m[0]); });
+    $('which').append(b);
+  }
+
+  // ---------- Layers: last night, the whole house ----------
+  const nightData = fetch(scene.dir + 'night.json').then(r => r.ok ? r.json() : null).catch(() => null);
+  const fits = () => !current[3]; // the voxel meshes are in the splat's own units: the walk does not fit them
+  const pressed = id => $(id).getAttribute('aria-pressed') === 'true';
+  async function overlay() {
+    const night = await nightData;
+    const on = pressed('show-night') && fits() && night;
+    $('night-panel').hidden = !on;
+    if (on) nightView.show(night); else nightView.hide();
+    $('show-night').disabled = !fits() || !night; $('show-night').hidden = !night;
+  }
+  $('show-night').addEventListener('click', () => { $('show-night').setAttribute('aria-pressed', String(!pressed('show-night'))); overlay(); });
+
+  let house = null;
+  const housePromise = scene.house ? loadHouse(scene.dir).then(h => (house = h)).catch(() => null) : Promise.resolve(null);
+  function drawHouse() {
+    if (!house) return;
+    const on = pressed('show-house');
+    const light = document.documentElement.dataset.theme === 'almanakka';
+    showHouse(space, house, $('mesh-labels'), on, {light});
+    if (actual) showHouse(actual, house, $('actual-labels'), on, {light});
+  }
+  $('show-house').addEventListener('click', () => { $('show-house').setAttribute('aria-pressed', String(!pressed('show-house'))); drawHouse(); goHome(); });
+
+  // ---------- The mesh, and the actual room turning with it ----------
+  async function load(name) {
+    const status = $('mesh-status');
+    status.textContent = 'Loading…';
+    const mesh = parsePly(await (await fetch(scene.dir + name)).arrayBuffer());
+    const view = space.home ? {...space.view} : null;
+    space.show(mesh); space.start();
+    if (view) Object.assign(space.view, view); // a quality change keeps where you are looking
+    if (actual) { actual.view = space.view; actual.requestDraw(); }
+    const tris = mesh.indices.length / 3;
+    status.textContent = `${tris.toLocaleString('en')} triangles · drag to turn · scroll to zoom`;
+    setStat('blocks', tris, 'block triangles');
+    drawHouse();
+    await overlay();
+  }
+  function linkViews() {
+    if (!actual || actual.linked) return;
+    actual.linked = true;
+    actual.view = space.view; actual.spinning = space.spinning = false;
+    for (const [a, b] of [[space, actual], [actual, space]]) {
+      for (const name of ['turn', 'zoom', 'reset', 'focus', 'overview']) {
+        const own = a[name].bind(a);
+        a[name] = (...args) => { const out = own(...args); b.requestDraw(); return out; };
+      }
+    }
+  }
+  const actualReady = !actual ? Promise.resolve() : fetch(scene.dir + scene.actual).then(r => r.arrayBuffer()).then(buffer => {
+    const mesh = parsePly(buffer);
+    actual.show(mesh); actual.start();
+    const tris = mesh.indices.length / 3;
+    $('actual-status').textContent = `${tris.toLocaleString('en')} triangles · turns with the mesh`;
+    setStat('built', tris, 'triangles built');
+  });
+
+  // ---------- Home: back to the start view, everywhere ----------
+  // With the house on, the start view steps back to take it all in; off, it is the scanned room.
+  const HOUSE_CENTRE = [3.9, 2.9, 0.4]; // file axes (z up): the house's middle, leaning to the scanned room
+  let tween = 0, start = null; // start: the first framing of the scanned room
+  function moveTo(to, ms = 900) {
+    const from = {...space.view, target: [...space.view.target]}, t0 = performance.now();
+    cancelAnimationFrame(tween); space.spinning = false;
+    const step = now => {
+      const f = Math.min(1, (now - t0) / ms), e = f < .5 ? 4 * f ** 3 : 1 - (-2 * f + 2) ** 3 / 2;
+      for (const k of ['yaw', 'pitch', 'distance']) space.view[k] = from[k] + (to[k] - from[k]) * e;
+      space.view.target = from.target.map((v, i) => v + (to.target[i] - v) * e);
+      space.draw(); actual?.draw();
+      if (f < 1) tween = requestAnimationFrame(step);
+    };
+    tween = requestAnimationFrame(step);
+  }
+  function goHome() {
+    if (!space.home) return;
+    const whole = house && pressed('show-house');
+    const [x, y, z] = HOUSE_CENTRE;
+    moveTo(whole ? {yaw: 0.55, pitch: 0.82, distance: space.home.distance * 1.62, target: [x, z, -y]}
+      : start ? {...start, target: [...start.target]} : {...space.view, target: [...space.view.target]});
+    if (splatView && cam) { splatView.camera.position.set(...cam.eye); splatView.controls.target.set(...cam.look); splatView.controls.update(); }
+  }
+  $('home').addEventListener('click', goHome);
+  addEventListener('keydown', e => { if (e.key === 'h' && !e.target.closest('input, [role="slider"]')) goHome(); });
+
+  window.demo = {space, actual, nightView, ready: Promise.all([load(current[0]), actualReady, housePromise]).then(() => {
+    // The start view: the reset framing, remembered so Home can come back to it.
+    space.reset(); start = {...space.view, target: [...space.view.target]};
+    if (actual) { linkViews(); }
+    drawHouse(); goHome();
+  })};
+
+  // ---------- The splat, rendered as a splat: only what the glasses scanned, so no house around it ----------
+  let splatView = null, cam = null;
+  cam = await (await fetch(scene.dir + 'camera.json')).json(); // the same "up" the mesh was levelled with
+  splatView = new GS.Viewer({
+    rootElement: $('splat'),
+    cameraUp: cam.up, initialCameraPosition: cam.eye, initialCameraLookAt: cam.look,
+    sharedMemoryForWorkers: false, gpuAcceleratedSort: false, selfDrivenMode: true,
+  });
+  fetch(scene.splat, {method: 'HEAD'}).then(r => { const n = Number(r.headers.get('content-length')) / 32; if (n) setStat('seen', n, 'Gaussians seen'); }).catch(() => {});
+  splatView.addSplatScene(scene.splat, {showLoadingUI: false, progressiveLoad: false, splatAlphaRemovalThreshold: 5})
+    .then(() => { splatView.start(); $('splat-status').textContent = 'drag to orbit · scroll to zoom'; window.demo.splat = true; drawHouse(); window.demo.ready.then(goHome); })
+    .catch(e => { $('splat-status').textContent = 'Could not load the splat: ' + e.message; });
+</script>
+</body>
+</html>

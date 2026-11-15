@@ -3,7 +3,9 @@
 
 A floor, a back wall and one box. Between "before" and "after" the box moves from A to B, so
 the detector should report one thing gone near A, one thing appeared near B, and no false
-alarms in the control. A second scene with nothing moved must report no change.
+alarms in the control. A second scene with nothing moved must report no change. A third scene
+has the box rebuilt 20 cm off in the second clip, which is what misaligned clips do to a tall
+object: the look-alike check must drop it, and must still let a box that moved far through.
 
     python test_synthetic.py
 """
@@ -20,6 +22,7 @@ BOX_A = np.array([-0.6, 1.2, 0.15])  # box centre before
 BOX_B = np.array([0.7, 1.7, 0.15])  # box centre after
 TARGET = np.array([0.0, 1.5, 0.2])  # every camera looks here
 K = np.array([[FOCAL, 0, W / 2], [0, FOCAL, H / 2], [0, 0, 1]], np.float32)
+BOX_RGB, ROOM_RGB = (200, 120, 40), (150, 150, 150)
 
 
 def camera(pos):
@@ -49,11 +52,17 @@ def render(E, box_centre, box_size, rng, noise):
     depth = np.minimum(np.minimum(floor, wall), box)
     hit = np.isfinite(depth)
     depth = np.where(hit, depth * (1 + noise * rng.standard_normal(depth.shape)), 0.0)
-    colour = np.where(depth[..., None] == 0, 0, np.where((box <= np.minimum(floor, wall))[..., None], (200, 120, 40), (150, 150, 150)))
+    colour = np.where(depth[..., None] == 0, 0, np.where((box <= np.minimum(floor, wall))[..., None], BOX_RGB, ROOM_RGB))
     return depth.astype(np.float32), hit, colour.astype(np.uint8)
 
 
-def scene(box_after, box_size=0.3, noise=0.01, seed=1):
+def patch_features(colour):
+    """Stand-in for learned patch features: how much of each 14 px patch is box, room or nothing."""
+    kinds = np.stack([(colour == BOX_RGB).all(-1), (colour == ROOM_RGB).all(-1), (colour == 0).all(-1)], -1)
+    return kinds.astype(np.float32).reshape(H // 14, 14, W // 14, 14, 3).mean((1, 3))
+
+
+def scene(box_after, box_size=0.3, noise=0.01, seed=1, features=False):
     rng = np.random.default_rng(seed)
     size = np.full(3, box_size)
     # 24 "before" views then 12 "after" views, on an arc in front of the scene at about head height
@@ -68,7 +77,8 @@ def scene(box_after, box_size=0.3, noise=0.01, seed=1):
         E.append(e)
         rgb.append(c)
     n = len(angles)
-    return Recon(np.stack(depth), np.stack(conf).astype(np.float32), np.repeat(K[None], n, 0), np.stack(E), np.stack(rgb))
+    return Recon(np.stack(depth), np.stack(conf).astype(np.float32), np.repeat(K[None], n, 0), np.stack(E), np.stack(rgb),
+                 np.stack([patch_features(c) for c in rgb]) if features else None)
 
 
 def near(clusters, where, tol):
@@ -106,6 +116,19 @@ def main():
     print(f"  verdict: {report['verdict']}")
     check(report["verdict"].startswith("NO CHANGE"), "verdict is NO CHANGE")
     check(not report["appeared"] and not report["gone"], "nothing reported")
+
+    print("Box rebuilt 20 cm off in the second clip (misaligned clips), look-alike check:")
+    shifted = scene(BOX_A + np.array([0.2, 0.0, 0.0]), features=True)
+    report, _ = analyse(shifted, 24, conf_pct=0, typical_m=2.5, lookalike=False)
+    check(bool(report["appeared"]) and bool(report["gone"]), "without the check it is reported as gone and appeared")
+    report, _ = analyse(shifted, 24, conf_pct=0, typical_m=2.5, reach=0.15)
+    print(f"  look-alike check: {report['lookalike_check']}")
+    check(not report["appeared"] and not report["gone"], "with the check nothing is reported")
+    report, _ = analyse(shifted, 24, conf_pct=0, typical_m=2.5)
+    check(not report["lookalike_check"]["active"], "the check stays off by itself when the clips line up (reach comes from the measured misalignment)")
+    report, _ = analyse(scene(BOX_B, features=True), 24, conf_pct=0, typical_m=2.5, reach=0.15)
+    check(len(near(report["appeared"], BOX_B, 0.25)) == 1 and len(near(report["gone"], BOX_A, 0.25)) == 1,
+          "a box moved far (1.4 m) is still found with the check on")
 
     print("Small box (6 cm) moved, for information only:")
     report, _ = analyse(scene(BOX_B, box_size=0.06), 24, conf_pct=0, typical_m=2.5)

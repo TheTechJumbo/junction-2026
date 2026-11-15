@@ -1,2 +1,22 @@
 .coord/
 __pycache__/
+
+.venv
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.data/
+*.sqlite*
+
+build/
+dist/
+
+# Android machine configuration and generated files
+.gradle/
+local.properties
+*.jks
+*.keystore
+.idea/

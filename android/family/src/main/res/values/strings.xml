@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Daylight</string>
+    <string name="address_title">Home service address</string>
+    <string name="address_message">The web address of your family\'s Daylight home service. You can change it later: touch and hold the app icon, then choose Change home address.</string>
+    <string name="address_hint">https://home.example.org</string>
+    <string name="address_save">Save</string>
+    <string name="address_later">Not now</string>
+    <string name="address_invalid">Use an https:// address with no path, for example https://home.example.org</string>
+    <string name="shortcut_address_short">Home address</string>
+    <string name="shortcut_address_long">Change home address</string>
+    <string name="glasses_title">Glasses</string>
+    <string name="glasses_long">Watch a pair of glasses live</string>
+</resources>

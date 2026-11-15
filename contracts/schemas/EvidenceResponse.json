@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "evidence_url": {
+      "title": "Evidence Url",
+      "type": "string"
+    }
+  },
+  "required": [
+    "evidence_url"
+  ],
+  "title": "EvidenceResponse",
+  "type": "object"
+}
