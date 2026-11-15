@@ -7,4 +7,12 @@
             android:targetPackage="com.junction.family"
             android:targetClass="com.junction.family.MainActivity" />
     </shortcut>
+    <shortcut android:shortcutId="change_relay" android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_relay_short"
+        android:shortcutLongLabel="@string/shortcut_relay_long">
+        <intent android:action="com.junction.family.CHANGE_RELAY"
+            android:targetPackage="com.junction.family"
+            android:targetClass="com.junction.family.MainActivity" />
+    </shortcut>
 </shortcuts>
