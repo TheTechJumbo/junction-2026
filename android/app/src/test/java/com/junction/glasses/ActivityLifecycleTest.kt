@@ -43,6 +43,7 @@ class ActivityLifecycleTest {
         // otherwise be in flight and cancel the microphone request they exercise.
         MainActivity.automaticSetup = false
         MainActivity.alwaysOnAutoStart = false
+        MainActivity.autoSampling = false
         val app = RuntimeEnvironment.getApplication()
         shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
         shadowOf(app.packageManager).addResolveInfoForIntent(
@@ -78,6 +79,7 @@ class ActivityLifecycleTest {
         drain()
         MainActivity.automaticSetup = true
         MainActivity.alwaysOnAutoStart = true
+        MainActivity.autoSampling = true
     }
 
     @Test fun stopRejectsAlreadyQueuedRecognitionAndErrorCallbacks() {

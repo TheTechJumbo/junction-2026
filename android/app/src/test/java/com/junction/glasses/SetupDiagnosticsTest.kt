@@ -41,6 +41,7 @@ class SetupDiagnosticsTest {
     @Before fun setup() {
         MainActivity.automaticSetup = false // manual setup controls only; see AutomaticSetupActivityTest
         MainActivity.alwaysOnAutoStart = false
+        MainActivity.autoSampling = false
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse =
@@ -58,6 +59,7 @@ class SetupDiagnosticsTest {
         owner.destroy(); server.shutdown(); drain()
         MainActivity.automaticSetup = true
         MainActivity.alwaysOnAutoStart = true
+        MainActivity.autoSampling = true
     }
     @Test fun connectionRequiresAuthenticatedResponseAndCanRecheckWithoutRetypingToken() {
         probes.add(page())
