@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Tuttu · family</title>
+<!--
+  The family app in a browser (no APK): served by the relay at /family?k=KEY&zone=kitchen.
+  Tabs: Live 3D (the caretaker page /care), Where things are (/find and /where: the things watched for and the
+  items seen, with when and where), Today (the day page /dayview), Glasses (the glasses display /hud).
+  Everything is read-only here: nothing in this page changes the relay.
+-->
+<style>
+  :root { --sky: #0b1029; --pane: #18213f; --line: #3b4763; --snow: #eef2f6; --soft: #b3bfd4; --lamp: #f2b04a; --ok: #5dff9a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--sky); color: var(--snow); font: 16px/1.45 "Segoe UI", system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header b { font-size: 20px; }
+  header .who { margin-left: auto; color: var(--soft); font-size: 14px; }
+  nav { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  nav button { font: inherit; color: var(--soft); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; cursor: pointer; white-space: nowrap; }
+  nav button[aria-selected="true"] { color: var(--sky); background: var(--lamp); border-color: var(--lamp); font-weight: 600; }
+  main { flex: 1; position: relative; min-height: 0; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #070b1d; }
+  .panel { position: absolute; inset: 0; overflow: auto; padding: 16px; }
+  [hidden] { display: none !important; }
+  .card { background: var(--pane); border: 1px solid var(--line); border-radius: 18px; padding: 14px 16px; margin-bottom: 12px; display: flex; gap: 14px; align-items: center; }
+  .card img { width: 96px; height: 72px; object-fit: cover; border-radius: 10px; background: #000; flex: none; }
+  .card h3 { margin: 0 0 4px; font-size: 18px; }
+  .card p { margin: 0; color: var(--soft); }
+  .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--soft); margin-left: 6px; }
+  .tag.live { color: var(--sky); background: var(--ok); border-color: var(--ok); }
+  .empty { color: var(--soft); }
+  .where { color: var(--soft); font-size: 14px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<header><b>Tuttu</b><span>for the family</span><span class="who" id="who"></span></header>
+<nav role="tablist">
+  <button role="tab" data-tab="live" aria-selected="true">Live 3D</button>
+  <button role="tab" data-tab="things">Where things are</button>
+  <button role="tab" data-tab="today">Today</button>
+  <button role="tab" data-tab="glasses">Glasses</button>
+</nav>
+<main>
+  <iframe id="live" title="The room in 3D with the wearer" allow="fullscreen"></iframe>
+  <div id="things" class="panel" hidden><div class="where" id="whereNow"></div><div id="list"><p class="empty">Loading…</p></div></div>
+  <iframe id="today" title="What the wearer did today" hidden></iframe>
+  <iframe id="glasses" title="The glasses display" hidden></iframe>
+</main>
+<script>
+const q = new URLSearchParams(location.search);
+const key = q.get('k') || '';
+const zone = (q.get('zone') || 'kitchen').toLowerCase();
+const base = location.pathname.replace(/\/family\/?$/, '');
+const api = (path) => base + path + (key ? `${path.includes('?') ? '&' : '?'}k=${encodeURIComponent(key)}` : '');
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+$('who').textContent = `room: ${zone}`;
+const pages = { live: `/care?zone=${encodeURIComponent(zone)}`, today: '/dayview', glasses: `/hud?zone=${encodeURIComponent(zone)}` };
+const loaded = {};
+function show(tab) {
+  document.querySelectorAll('nav button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  for (const id of ['live', 'things', 'today', 'glasses']) $(id).hidden = id !== tab;
+  if (pages[tab] && !loaded[tab]) { $(tab).src = api(pages[tab]); loaded[tab] = true; }
+  if (tab === 'things') refreshThings();
+  try { sessionStorage.setItem('tuttu-family-tab', tab); } catch {}
+}
+document.querySelectorAll('nav button').forEach((b) => (b.onclick = () => show(b.dataset.tab)));
+
+const ago = (t) => { const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
+async function getJson(path) { const r = await fetch(api(path), { cache: 'no-store' }); return r.json(); }
+async function refreshThings() {
+  if ($('things').hidden) return;
+  try {
+    const [found, here] = await Promise.all([getJson(`/find?zone=${encodeURIComponent(zone)}`), getJson(`/where?zone=${encodeURIComponent(zone)}`)]);
+    const fresh = here.age_s != null && here.age_s < 15 && here.state && here.state !== 'lost';
+    $('whereNow').textContent = fresh ? `The wearer is being found now (${here.state}, ${Math.round(here.age_s)} s ago).` : 'The wearer is not being found right now.';
+    const cards = [];
+    for (const t of found.things || []) {
+      const s = t.sighting || t.maybe;
+      cards.push(`<div class="card">${s && s.image ? `<img src="${esc(api(s.image))}" alt="">` : ''}<div><h3>${esc(t.name)}${t.watched ? '<span class="tag">watched</span>' : ''}${s && Date.now() / 1000 - s.at < 60 ? '<span class="tag live">just seen</span>' : ''}</h3>
+        <p>${s ? `${s.near ? `By the ${esc(s.near)}` : 'Seen'} · ${esc(t.time || '')} (${ago(s.at)})${t.moves && t.moves.length ? ` · moved ${t.moves.length}×` : ''}${!t.sighting ? ' · seen once' : ''}` : 'Not seen yet: watching for it.'}</p></div></div>`);
+    }
+    for (const s of (here.seen || []).filter((x) => !x.finder)) {
+      cards.push(`<div class="card">${s.image ? `<img src="${esc(api(s.image))}" alt="">` : ''}<div><h3>${esc(s.name)}</h3><p>${s.near ? `By the ${esc(s.near)}` : 'Seen'} · ${esc(s.time || '')} (${ago(s.at)})${s.doubt ? ' · may have moved' : ''}</p></div></div>`);
+    }
+    $('list').innerHTML = cards.join('') || '<p class="empty">Nothing seen yet.</p>';
+  } catch { $('list').innerHTML = '<p class="empty">Cannot reach the laptop right now.</p>'; }
+}
+setInterval(refreshThings, 3000);
+let first = 'live';
+try { first = sessionStorage.getItem('tuttu-family-tab') || 'live'; } catch {}
+if (!key) document.querySelector('main').innerHTML = '<div class="panel"><p class="empty">Open the link that includes the access key (?k=…).</p></div>';
+else show(first);
+</script>
+</body>
+</html>

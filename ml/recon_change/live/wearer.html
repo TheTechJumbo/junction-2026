@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Tuttu · wearer</title>
+<!--
+  The wearer's app in a browser (no APK): served by the relay at /wearer?k=KEY&zone=kitchen.
+  - The phone's camera (or a laptop webcam) is sampled to POST /locate, so the relay finds the wearer by itself.
+  - "Find me X" by voice or typing: GET /find?what=, spoken back; it asks again while the relay is still looking.
+  - "Take me there": GET /navigate&to=, the next turn spoken while it is followed.
+  - The room in 3D (/care?view=wearer) under it, with the wearer, the route and what was found.
+  The camera needs a secure page: open it as http://127.0.0.1:8090/wearer... on the phone through USB
+  (adb reverse tcp:8090 tcp:8090), or on the laptop itself. Over plain Wi-Fi http the browser blocks the camera
+  (the rest still works). The key stays in the page's address; it is sent only to this relay.
+-->
+<style>
+  :root { --sky: #0b1029; --pane: #18213f; --line: #3b4763; --snow: #eef2f6; --soft: #b3bfd4; --lamp: #f2b04a; --ok: #5dff9a; --bad: #ff8a7a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--sky); color: var(--snow); font: 17px/1.45 "Segoe UI", system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; min-height: 100vh; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header b { font-size: 20px; letter-spacing: .3px; }
+  header .zone { margin-left: auto; color: var(--soft); font-size: 14px; }
+  #status { padding: 8px 16px; font-size: 15px; color: var(--soft); background: #111a36; display: flex; gap: 8px; align-items: center; }
+  #status .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); flex: none; }
+  #status.ok .dot { background: var(--ok); } #status.warn .dot { background: var(--lamp); } #status.bad .dot { background: var(--bad); }
+  #room { flex: 1; min-height: 46vh; border: 0; width: 100%; background: #070b1d; display: block; }
+  .ask { padding: 12px 16px; display: grid; gap: 10px; border-top: 1px solid var(--line); background: var(--pane); }
+  .row { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; font: inherit; color: var(--snow); background: #0e1530; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+  button { font: inherit; font-weight: 600; color: var(--sky); background: var(--lamp); border: 0; border-radius: 14px; padding: 12px 16px; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--snow); border: 1px solid var(--line); }
+  button[aria-pressed="true"] { background: var(--ok); }
+  #answer { min-height: 1.4em; font-size: 18px; }
+  #answer.small { color: var(--soft); font-size: 15px; }
+  .cam { position: fixed; right: 12px; bottom: 210px; width: 96px; border-radius: 12px; border: 1px solid var(--line); background: #000; opacity: .9; }
+  .cam.off { display: none; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chips button { font-weight: 500; padding: 8px 12px; font-size: 15px; }
+  @media (min-width: 900px) { body { max-width: 980px; margin: 0 auto; border-left: 1px solid var(--line); border-right: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header><b>Tuttu</b><span>for the wearer</span><span class="zone" id="zoneName"></span></header>
+<div id="status"><span class="dot"></span><span id="statusText">Starting…</span></div>
+<iframe id="room" title="The room in 3D, with you in it" allow="fullscreen"></iframe>
+<video id="cam" class="cam off" playsinline muted autoplay aria-label="What the camera sees"></video>
+<div class="ask">
+  <div id="answer" class="small">Ask "find me the orange box", or "take me to the drinks fridge".</div>
+  <div class="row">
+    <input id="question" placeholder="Find me the orange box" autocomplete="off" enterkeyhint="go">
+    <button id="mic" class="ghost" aria-label="Speak">🎤</button>
+    <button id="go">Ask</button>
+  </div>
+  <div class="chips">
+    <button class="ghost" data-say="find me the orange box">Find the orange box</button>
+    <button class="ghost" id="there" hidden>Take me there</button>
+    <button class="ghost" id="stop" hidden>Stop guiding</button>
+    <button class="ghost" id="camToggle" aria-pressed="false">Camera off</button>
+  </div>
+</div>
+<script>
+const q = new URLSearchParams(location.search);
+const key = q.get('k') || '';
+const zone = (q.get('zone') || 'kitchen').toLowerCase();
+const base = location.pathname.replace(/\/wearer\/?$/, '');
+const api = (path) => base + path + (key ? `${path.includes('?') ? '&' : '?'}k=${encodeURIComponent(key)}` : '');
+const $ = (id) => document.getElementById(id);
+$('zoneName').textContent = `room: ${zone}`;
+$('room').src = api(`/care?zone=${encodeURIComponent(zone)}&view=wearer`);
+
+// ---- speaking ----
+function say(text) {
+  $('answer').textContent = text; $('answer').classList.remove('small');
+  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = 'en-GB'; u.rate = 0.95; speechSynthesis.speak(u); } catch {}
+}
+function status(text, kind) { $('statusText').textContent = text; $('status').className = kind || ''; }
+
+// ---- the camera: newest frame to /locate, one at a time (no backlog), about 3 a second ----
+let stream = null, sending = false, lastFix = 0, lastState = '', sent = 0, failures = 0;
+const canvas = document.createElement('canvas');
+async function startCamera() {
+  if (!window.isSecureContext || !navigator.mediaDevices) {
+    status('The camera needs the USB link (open http://127.0.0.1:8090/wearer…) or this laptop. Asking still works.', 'warn');
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 }, height: { ideal: 1280 } }, audio: false });
+    $('cam').srcObject = stream; $('cam').classList.remove('off');
+    $('camToggle').textContent = 'Camera on'; $('camToggle').setAttribute('aria-pressed', 'true');
+    loop();
+  } catch (e) {
+    status('Camera not allowed: allow it in the browser to be found. Asking still works.', 'warn');
+  }
+}
+function stopCamera() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null; $('cam').classList.add('off');
+  $('camToggle').textContent = 'Camera off'; $('camToggle').setAttribute('aria-pressed', 'false');
+  status('Camera off: not finding you.', 'warn');
+}
+$('camToggle').onclick = () => (stream ? stopCamera() : startCamera());
+
+async function loop() {
+  while (stream) {
+    if (!sending && !document.hidden) await sendFrame();
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+async function sendFrame() {
+  const v = $('cam');
+  if (!v.videoWidth) return;
+  sending = true;
+  try {
+    const scale = Math.min(1, 960 / Math.max(v.videoWidth, v.videoHeight));
+    canvas.width = Math.round(v.videoWidth * scale); canvas.height = Math.round(v.videoHeight * scale);
+    canvas.getContext('2d').drawImage(v, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.8));
+    const reply = await fetch(api(`/locate?zone=${encodeURIComponent(zone)}`), { method: 'POST', body: blob, headers: { 'Content-Type': 'image/jpeg' } });
+    sent++;
+    if (!reply.ok) throw new Error(`relay ${reply.status}`);
+    const fix = await reply.json();
+    failures = 0;
+    if (fix.state && fix.state !== 'lost') lastFix = Date.now();
+    lastState = fix.state || '';
+  } catch (e) {
+    failures++;
+  } finally { sending = false; }
+}
+setInterval(() => {
+  if (!stream) return;
+  if (failures >= 3) return status('Relay not reachable: check the USB cable (adb reverse) or the Wi-Fi.', 'bad');
+  const age = lastFix ? Math.round((Date.now() - lastFix) / 1000) : null;
+  if (age != null && age < 10) status(`Found you · camera · last fix ${age} s ago${lastState === 'unsure' ? ' (not sure)' : ''}`, 'ok');
+  else status(`Finding you… look around the room slowly (${sent} pictures sent)`, 'warn');
+}, 1000);
+
+// ---- asking: find me X, take me to Y ----
+const FIND = /^(?:can you |please |could you )?(?:find(?: me)?|where(?:'s| is| are)|where did i (?:put|leave)|have you seen|look for)\s+(?:my |the |a |an |our )?(.+?)[?.!]*$/i;
+const GO = /^(?:take me|guide me|walk me|go|lead me)(?: back)? (?:to|towards?) (?:my |the |a |an |our )?(.+?)[?.!]*$/i;
+const THERE = /^(?:take me there|take me to it|go there|guide me there|lead me there)[?.!]*$/i;
+let lastThing = null, findTimer = null, guideTimer = null;
+
+async function getJson(path) {
+  const r = await fetch(api(path), { cache: 'no-store' });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok && r.status !== 404) throw new Error(body.error || `relay ${r.status}`);
+  return body;
+}
+async function ask(text) {
+  text = (text || '').trim();
+  if (!text) return;
+  $('question').value = '';
+  clearTimeout(findTimer);
+  let m;
+  if (THERE.test(text)) return lastThing ? guide(lastThing) : say('Ask me to find something first.');
+  if ((m = text.match(GO))) return guide(m[1]);
+  if ((m = text.match(FIND))) return find(m[1]);
+  // anything else: the relay's /ask (the day, reminders, items)
+  try {
+    const r = await fetch(api(`/ask?zone=${encodeURIComponent(zone)}`), { method: 'POST', body: JSON.stringify({ question: text }), headers: { 'Content-Type': 'application/json' } });
+    const body = await r.json().catch(() => ({}));
+    say(body.answer || body.error || 'I could not answer that.');
+  } catch { say('I cannot reach the laptop right now.'); }
+}
+async function find(what, started = Date.now(), announced = false) {
+  what = what.trim();
+  try {
+    const r = await getJson(`/find?zone=${encodeURIComponent(zone)}&what=${encodeURIComponent(what)}`);
+    if (r.found || !r.looking || Date.now() - started > 60000) {
+      lastThing = r.found ? (r.what || what) : null;
+      $('there').hidden = !r.found;
+      return say(r.answer || (r.found ? `I found the ${what}.` : `I couldn't find the ${what} yet.`));
+    }
+    if (!announced) { say(`I'll look for the ${what}. Look around slowly.`); announced = true; }
+    findTimer = setTimeout(() => find(what, started, announced), 3000);
+  } catch { say(`I can't reach the laptop to look for the ${what}.`); }
+}
+let lastTurn = '';
+async function guide(to) {
+  clearTimeout(guideTimer);
+  $('stop').hidden = false; $('there').hidden = true;
+  try {
+    const r = await getJson(`/navigate?zone=${encodeURIComponent(zone)}&to=${encodeURIComponent(to)}`);
+    if (r.ok === false && r.error) { $('stop').hidden = true; return say(r.error); }
+    const words = r.instruction || r.say || r.next || r.text || '';
+    if (r.arrived) { $('stop').hidden = true; lastTurn = ''; return say(words || `You're there: the ${to}.`); }
+    if (words && words !== lastTurn) { say(words); lastTurn = words; }
+    else if (!words && !lastTurn) { say(`Going to the ${to}. Follow the green line.`); lastTurn = '-'; }
+  } catch { say('I cannot reach the laptop to guide you.'); }
+  guideTimer = setTimeout(() => guide(to), 2500);
+}
+$('stop').onclick = async () => {
+  clearTimeout(guideTimer); lastTurn = ''; $('stop').hidden = true;
+  try { await getJson(`/navigate?zone=${encodeURIComponent(zone)}&stop=1`); } catch {}
+  say('Stopped guiding.');
+};
+$('there').onclick = () => lastThing && guide(lastThing);
+$('go').onclick = () => ask($('question').value);
+$('question').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask($('question').value); });
+document.querySelectorAll('[data-say]').forEach((b) => (b.onclick = () => ask(b.dataset.say)));
+
+// ---- voice: the browser's speech recognition where it has one (Chrome, Edge) ----
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!Recognition) $('mic').hidden = true;
+$('mic').onclick = () => {
+  try {
+    const rec = new Recognition(); rec.lang = 'en-GB'; rec.interimResults = false; rec.maxAlternatives = 1;
+    $('mic').setAttribute('aria-pressed', 'true');
+    rec.onresult = (e) => { const said = e.results[0][0].transcript; $('question').value = said; ask(said); };
+    rec.onend = () => $('mic').setAttribute('aria-pressed', 'false');
+    rec.onerror = () => $('mic').setAttribute('aria-pressed', 'false');
+    rec.start();
+  } catch { $('mic').setAttribute('aria-pressed', 'false'); }
+};
+
+if (!key) status('Open the link that includes the access key (?k=…).', 'bad');
+else startCamera();
+</script>
+</body>
+</html>

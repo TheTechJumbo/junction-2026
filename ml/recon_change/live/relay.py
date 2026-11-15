@@ -1899,7 +1899,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if not self.allowed(parse_qs(url.query)):
                 return
             pages = {"/": "phone.html", "/dashboard": "dashboard.html", "/viewer": "viewer.html",
-                     "/hud": "hud.html", "/places": "places.html", "/care": "care.html"}
+                     "/hud": "hud.html", "/places": "places.html", "/care": "care.html",
+                     "/wearer": "wearer.html", "/family": "family.html"}  # the two apps in a browser, no APK
             if url.path in pages:
                 return self.send_bytes(200, (HERE / pages[url.path]).read_bytes(), "text/html; charset=utf-8")
             if url.path == "/history":
