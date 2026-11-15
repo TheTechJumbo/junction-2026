@@ -13,6 +13,8 @@
   header { padding: 12px 16px; display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
   header h1 { font-size: 18px; margin: 0; }
   header p { margin: 0; color: var(--soft); }
+  main.three { grid-template-columns: 1fr 1fr 1fr; }
+  .pane-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
   main { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 8px 8px; flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
   section { position: relative; background: var(--panel); border-radius: 10px; overflow: hidden; min-height: 300px; }
   section h2 { position: absolute; z-index: 2; top: 10px; left: 12px; margin: 0; font-size: 14px; font-weight: 600;
@@ -29,6 +31,7 @@
 
   /* The night controls: the family app's (dashboard/base.css), with a plain dark look for the buttons. */
   .night-panel { padding: 8px 12px 10px; border-top: 1px solid var(--line); }
+  .night-panel.night-wide { margin: 0 8px 8px; background: var(--panel); border: 0; border-radius: 10px; flex: none; }
   .night-panel[hidden] { display: none; }
   .night-summary { margin: 0 0 4px; font-weight: 600; }
   .night-note { margin: 0 0 6px; color: var(--soft); font-size: 13px; }
@@ -80,7 +83,8 @@
   <label>Quality: <select id="which"><option value="room_blocks_fine.ply">blocks, 7 cm (~10k)</option><option value="room_blocks_mid.ply">blocks, 12 cm (~3k)</option><option value="room_10k.ply">~10k triangles (simplified surface)</option><option value="room_20k.ply">~20k triangles (simplified)</option><option value="room_lowpoly.ply">blocks, under 1k (lowpoly.py)</option><option value="room_mesh.ply" data-raw>coarse voxel</option><option value="room_mesh_fine.ply" data-raw>fine voxel</option></select></label>
   <label><input type="checkbox" id="show-night" checked> Last night in 3D</label>
 </header>
-<main>
+<main id="panes">
+  <section id="actual-pane" hidden><h2>Actual room <span>(as built)</span></h2><canvas id="actual" class="pane-canvas" tabindex="0" aria-label="3D view of the room as it really is"></canvas><div class="status" id="actual-status">Loading…</div></section>
   <section><h2>Gaussian splat <span>(GaussianSplats3D)</span></h2><div id="splat"></div><div class="status" id="splat-status">Loading 51 MB…</div></section>
   <section class="mesh-pane"><h2>Our mesh <span>(space.js, as in the app)</span></h2>
     <div class="stage"><canvas id="mesh" tabindex="0" aria-label="3D view of the room. Drag or use the arrow keys to turn; scroll or plus and minus to zoom; double-click or 0 to reset."></canvas><div class="status" id="mesh-status">Loading…</div></div>
@@ -121,6 +125,9 @@
   const nightView = new NightView({$, space});
   // Which splat: Seb's venue splat from our Ray-Ban Meta glasses (default), or ?scene=room for the public example.
   const SCENES = {
+    home: {dir: 'home/', splat: 'home/home.splat', actual: 'actual.ply',
+      words: 'The example living room three ways: as built, as a Gaussian splat, and the block mesh our code makes from that splat (the family app\u2019s look).',
+      meshes: [['blocks_high.ply', 'high (7 cm blocks)'], ['blocks_medium.ply', 'medium (12 cm blocks)'], ['blocks_low.ply', 'low (30 cm blocks)']]},
     venue: {dir: 'venue/', splat: 'venue/venue-kitchen-glasses-anon.splat',
       words: 'Junction hacking hall, from our Ray-Ban Meta glasses (Seb’s splat, people anonymised; 1.02 M Gaussians).',
       meshes: [['room_blocks_fine.ply', 'high (7 cm blocks)'], ['room_blocks_mid.ply', 'medium (12 cm blocks)'], ['room_blocks_low.ply', 'low (30 cm blocks)']]},
@@ -128,7 +135,15 @@
       meshes: [['room_blocks_fine.ply', 'blocks, 7 cm (~10k)'], ['room_blocks_mid.ply', 'blocks, 12 cm (~3k)'], ['room_10k.ply', '~10k triangles (simplified surface)'],
         ['room_lowpoly.ply', 'blocks, under 1k'], ['room_mesh.ply', 'coarse voxel', true], ['room_mesh_fine.ply', 'fine voxel', true]]},
   };
-  const scene = SCENES[new URLSearchParams(location.search).get('scene')] || SCENES.venue;
+  const scene = SCENES[new URLSearchParams(location.search).get('scene')] || SCENES.home;
+  // With a known room (the example), a third panel shows it as it really is, turning with the mesh.
+  let actual = null;
+  if (scene.actual) {
+    $('actual-pane').hidden = false; $('panes').classList.add('three');
+    // The night controls go under all three panels, so the three views are the same size and frame alike.
+    $('panes').after($('night-panel')); $('night-panel').classList.add('night-wide');
+    actual = new Space($('actual'));
+  }
   document.getElementById('scene-words').firstChild.textContent = scene.words + ' ';
   document.getElementById('which').replaceChildren(...scene.meshes.map(([file, label, raw]) => {
     const o = document.createElement('option'); o.value = file; o.textContent = label; if (raw) o.dataset.raw = ''; return o;
@@ -149,12 +164,34 @@
     const buffer = await (await fetch(scene.dir + name)).arrayBuffer();
     const mesh = parsePly(buffer);
     space.show(mesh); space.start();
-    status.textContent = `${(mesh.indices.length / 3 / 1000).toFixed(0)} k triangles · drag to turn · scroll to zoom` + (fits() ? '' : ' · the night walk is drawn on the room-frame meshes only');
+    if (actual) { actual.view = space.view; actual.requestDraw ? actual.requestDraw() : actual.draw(); }
+    const tris = mesh.indices.length / 3;
+    status.textContent = `${tris < 1000 ? tris : (tris / 1000).toFixed(0) + ' k'} triangles · drag to turn · scroll to zoom` + (fits() ? '' : ' · the night walk is drawn on the room-frame meshes only');
     await overlay();
   }
   which.addEventListener('change', e => load(e.target.value));
   showNight.addEventListener('change', () => { if (!showNight.checked) space.reset(); overlay(); });
-  window.demo = {space, nightView, ready: load('room_blocks_fine.ply')};
+  // The actual room and the mesh share one camera: turning or zooming either turns both.
+  function linkViews() {
+    if (!actual || actual.linked) return;
+    actual.linked = true;
+    actual.view = space.view; actual.spinning = space.spinning = false;
+    for (const [a, b] of [[space, actual], [actual, space]]) {
+      for (const name of ['turn', 'zoom', 'reset', 'focus', 'overview', 'show']) {
+        const own = a[name].bind(a);
+        a[name] = (...args) => { const out = own(...args); b.requestDraw ? b.requestDraw() : b.draw(); return out; };
+      }
+    }
+  }
+  const actualReady = !actual ? Promise.resolve() : fetch(scene.dir + scene.actual).then(r => r.arrayBuffer()).then(buffer => {
+    const mesh = parsePly(buffer);
+    actual.show(mesh); actual.start();
+    $('actual-status').textContent = `${(mesh.indices.length / 3).toFixed(0)} triangles · turns with the mesh`;
+  });
+  // Link once both are in, so neither one's first framing undoes the other's: then both look through the mesh's camera.
+  window.demo = {space, actual, nightView, ready: Promise.all([load(scene.meshes[0][0]), actualReady]).then(() => {
+    if (actual) { linkViews(); space.requestDraw(); actual.requestDraw(); }
+  })};
 
   // Left: the splat, rendered as a splat.
   const cam = await (await fetch(scene.dir + 'camera.json')).json(); // the same "up" the mesh was levelled with
