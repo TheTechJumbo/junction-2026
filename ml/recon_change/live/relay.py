@@ -242,6 +242,7 @@ except ImportError:  # route.py is missing: fixes go out without a route, the di
 sys.path.insert(0, str(HERE))
 import finder as finds  # noqa: E402
 FIND_RECENT = 3  # a newly asked thing is also looked for in this many of the zone's latest photos (and its pictures)
+FIND_LIVE_S = 20.0  # after a /find?what= or a find question, every new photo also gets the item finder alone (op detect)
 
 # ---- caretaker's page (/care): the trained splat put into the room map's axes (care_space.py, needs NumPy) ----
 try:
@@ -736,6 +737,60 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
     found_things = finds.Finder(evidence_dir / "finds.json", HOME_TZ)
     shots = {}  # {zone: [(taken at, photo), ...]}: the latest photos the model placed, to look in again for a new name
     searched = {}  # {(zone, name, room job): when}: the zone's pictures are searched once per name and room map
+    live_finds, live_until, detecting = {}, {}, set()  # the newest live detection per zone; until when to run them
+
+    def find_live(zone, photo, taken):
+        """While someone asks (FIND_LIVE_S after a /find or a find question), the newest photo goes to the item finder
+        alone (worker op "detect", about a second, between full fixes), one at a time per zone: the live outline."""
+        if photo is None or time.time() > live_until.get(zone, 0) or zone in detecting:
+            return
+        detecting.add(zone)
+
+        def run():
+            try:
+                header, _ = (bg_link or link).call({"op": "detect", "zone": zone, "device": "gpu",
+                                                    "look_for": found_things.watched(zone)}, one_photo(photo))
+                if not header.get("ok"):
+                    return
+                boxes = [b for b in header["result"].get("items_live") or [] if found_things.check_live(b)]
+                image = None
+                if boxes:
+                    try:
+                        (evidence_dir / header["job"]).mkdir(parents=True, exist_ok=True)
+                        (evidence_dir / header["job"] / "seen.jpg").write_bytes(photo)
+                        image = f"/evidence/{header['job']}/seen.jpg"
+                    except OSError:
+                        pass
+                live_finds[zone] = {"at": taken, "done_at": time.time(), "boxes": boxes, "image": image, "job": header["job"],
+                                    "latency_s": round(time.time() - taken, 2), "seconds": header["result"].get("seconds")}
+                now_fix = where.get(zone) or {}  # where the photo was taken from: the fix made from it (instant or full)
+                if boxes and now_fix.get("state") != "lost" and now_fix.get("position") and -3 < now_fix.get("at", 0) - taken < finds.LIVE_WITHIN_S:  # (a fix ends seconds after its photo)
+                    pose = [float(now_fix["position"][0]), float(now_fix["position"][1]), float(now_fix.get("heading_deg") or 0)]
+                    for name in {b["name"] for b in boxes}:
+                        best = max((b for b in boxes if b["name"] == name), key=lambda b: b["score"])
+                        event = found_things.confirm_live(zone, name, taken, pose, header["job"], find_places(zone),
+                                                          image=image, box2d=best["box"])
+                        if event:
+                            find_events([event])
+            except Exception as err:  # noqa: BLE001  the live outline is an extra
+                sys.stderr.write(f"find live: {type(err).__name__}: {err}" + chr(10))
+            finally:
+                detecting.discard(zone)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def with_live(zone, name, reply):
+        """The newest live detection of `name` (op detect) on a /find reply: "live", and box2d, image and at when it is
+        newer than the sighting's photo (the caretaker's page outlines it on that photo)."""
+        got = live_finds.get(zone)
+        mine = max((b for b in (got or {}).get("boxes") or [] if b.get("name") == name), key=lambda b: b["score"], default=None)
+        if not mine:
+            return reply
+        reply["live"] = {"at": got["at"], "box2d": mine["box"], "score": mine["score"], "colour": mine.get("colour"),
+                         "image": got["image"], "age_s": round(time.time() - got["at"], 1), "latency_s": got["latency_s"]}
+        if got["at"] >= (reply.get("at") or 0) - 0.5:  # the same photo as the sighting's, or a newer one (times are rounded)
+            reply.update(box2d=mine["box"], image=got["image"], at=round(got["at"], 1), stale=False)
+        return reply
 
     def find_places(zone, fix=None):
         """The named places to describe a spot by: the room's and the fix's, not the watched things themselves."""
@@ -786,6 +841,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             for b in mine:
                 b["box2d"] = b.get("box")
                 b["dims"] = find_dims(zone, b, result.get("position"), shape)
+                if result.get("position") and result.get("heading_deg") is not None:
+                    b["fix_pose"] = [round(float(result["position"][0]), 2), round(float(result["position"][1]), 2), float(result["heading_deg"])]
         try:
             events = found_things.observe(zone, boxes, find_places(zone), job, at=at, image=image, source=source)
         except Exception as err:  # noqa: BLE001  the finder is an extra: the fix must still go out
@@ -849,7 +906,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         name, new = found_things.want(zone, thing)
         if new:
             find_search(zone, name)
-        reply = found_things.reply(zone, name, fix, find_places(zone, fix), looking=new)
+        live_until[zone] = time.time() + FIND_LIVE_S  # the next photos also get the item finder alone (op detect)
+        reply = with_live(zone, name, found_things.reply(zone, name, fix, find_places(zone, fix), looking=new))
         spot = seen.get(zone, {}).get(name)
         if not reply["found"] and spot and home_time(spot["at"]).date() == home_time(time.time()).date():
             said = item_answer(name, zone, f"where is {name}")  # one of the worker's own items, seen once (seen.json)
@@ -877,6 +935,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         name, new = found_things.want(zone, asked)
         if new:
             find_search(zone, name)
+        live_until[zone] = time.time() + FIND_LIVE_S
         try:
             log.question(question, topic=name)
         except Exception as err:  # noqa: BLE001
@@ -2225,6 +2284,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             shot = clip if op == "locate" and is_photo(clip) else None  # the photo as it came, for the cheap gate
             if shot is not None:
                 received[zone] = {"at": time.time(), "photo": shot}
+                find_live(zone, shot, t0)  # find me X: while asked, the item finder alone on this photo too
             # ---- --quick: an instant fix from cosine similarity, unless it is time for the model again ----
             if quick and shot is not None and not query.get("fresh", [""])[0] and not query.get("view", [""])[0] \
                     and query.get("quick", [""])[0] != "0" and time.time() - full_at.get(zone, 0) < FULL_EVERY_S:
