@@ -763,7 +763,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
 
     def find_seen(zone, result, job, at, images=None, source="fix"):
         """A fix's (or a search's) boxes of watched names -> the finder; returns its events, already logged."""
-        boxes = [b for b in (result.get("items") or []) + (result.get("items_candidates") or []) if b.get("position")]
+        boxes = [{**b, **({"image_url": (images or {})[b["image"]]} if (images or {}).get(b.get("image") or "") else {})}
+                 for b in (result.get("items") or []) + (result.get("items_candidates") or []) if b.get("position")]
         if not boxes:
             return []
         image = next(((images or {}).get(b.get("image") or "") for b in boxes if b.get("image")), None)
@@ -1745,6 +1746,16 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     guiding.pop(zone, None)
                     return self.send_json(200, {"ok": True, "zone": zone, "stopped": True})
                 return self.send_json(*navigate(zone, parse_qs(url.query).get("to", [""])[0]))
+            if url.path == "/find" and parse_qs(url.query).get("what", [""])[0].strip():  # the app's "find me X": X is watched
+                asked = " ".join(parse_qs(url.query)["what"][0].split())[:40]
+                if not re.fullmatch(ZONE_NAME, zone) or not re.fullmatch(r"[\w '-]{1,40}", asked):
+                    return self.send_json(400, {"ok": False, "error": "GET /find?zone=kitchen&what=orange+box"})
+                name, new = found_things.want(zone, asked)
+                if new:
+                    find_search(zone, name)
+                fix = where.get(zone)
+                return self.send_json(200, {"ok": True, "zone": zone,
+                                            **found_things.found_reply(zone, name, fix, find_places(zone, fix))})
             if url.path == "/find":  # find me X: the watch list, the sightings, the moves and the last box not taken
                 return self.send_json(200, {"ok": True, "zone": zone, "watching": found_things.watched(zone),
                                             "things": found_things.listing(zone)})

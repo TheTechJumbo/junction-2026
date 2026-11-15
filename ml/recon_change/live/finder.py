@@ -289,9 +289,13 @@ class Finder:
                     best[name] = box
             for name, box in best.items():
                 thing = self.things.setdefault(zone, {}).setdefault(name, {"views": [], "sighting": None, "moves": []})
+                picture = box.get("image_url") or image  # the box's own photo, so box2d is in it
+                outline = box.get("box")
+                outline = ([round(float(v), 4) for v in outline] if isinstance(outline, (list, tuple)) and len(outline) == 4
+                           and box.get("image_url") else None)
                 view = {"position": [round(float(c), 3) for c in box["position"][:3]], "score": round(float(box["score"]), 3),
                         "at": round(at, 1), "job": job, "size_m": box.get("size_m"), "colour": box.get("colour"),
-                        "source": source, **({"image": image} if image else {})}
+                        "source": source, **({"image": picture} if picture else {}), **({"box2d": outline} if outline else {})}
                 thing["views"] = [v for v in thing["views"] if v["job"] != job][-VIEWS_KEPT + 1:] + [view]
                 got = self.settle(zone, name, thing, view, places)
                 if got:
@@ -306,6 +310,11 @@ class Finder:
         old = thing.get("sighting")
         if old and math.dist(old["position"], view["position"]) <= AGREE_M and view["at"] >= old["at"]:
             old["at"], old["last_job"] = view["at"], view["job"]  # seen again where it was: the time moves on
+            for key in ("image", "box2d", "size_m"):  # and the photo is the newest one
+                if view.get(key) is not None:
+                    old[key] = view[key]
+                else:
+                    old.pop(key, None) if key == "box2d" else None
             return None
         group = [v for v in thing["views"] if abs(v["at"] - view["at"]) <= AGREE_S and
                  math.dist(v["position"], view["position"]) <= AGREE_M]
@@ -319,7 +328,7 @@ class Finder:
                     "confirmed_at": round(self.now(), 1), "views": len({v["job"] for v in group}),
                     "score": max(v["score"] for v in group), "near": near[0] if near else "",
                     "near_m": round(near[1], 2) if near else None, "source": view.get("source", "fix"),
-                    "last_job": view["job"], **({"image": view["image"]} if view.get("image") else {})}
+                    "last_job": view["job"], **{k: view[k] for k in ("image", "box2d", "size_m") if view.get(k) is not None}}
         thing["sighting"] = sighting
         when = clock(sighting["at"], self.tz)
         where = at_place(near[0], near[1]) if near else "in a new spot"
@@ -427,6 +436,31 @@ class Finder:
                                "Look around slowly, then ask me again.")
         else:
             reply["answer"] = f"I have not seen the {name} yet. I am watching for it: look around slowly, then ask me again."
+        return reply
+
+    def found_reply(self, zone, name, fix=None, places=None, looking=True):
+        """GET /find?zone=Z&what=X, as the phone app and the caretaker page read it: {"what", "found", "confirmed",
+        "place", "position", "at" (epoch s), "time", "moved_from", "distance_m", "bearing_deg" (0 ahead, + right),
+        "answer", "looking", "stale"}, and when seen "size_m", "image" and "box2d" ([u0, v0, u1, v1], 0..1 in "image").
+        Not seen yet is found false and looking true: the app asks again every few seconds while it is looking."""
+        said = self.answer(zone, name, fix, places, looking=looking)
+        now = self.now()
+        found = self.sighting(zone, name)
+        seen = found or self.single_view(zone, name)
+        reply = {"what": name, "found": bool(seen), "confirmed": bool(found), "place": said.get("near") or None,
+                 "position": None, "at": None, "time": None, "moved_from": None, "distance_m": None, "bearing_deg": None,
+                 "answer": said["answer"], "looking": not found, "stale": False}
+        if not seen:
+            return reply
+        reply.update(position=seen["position"], at=seen["at"], time=clock(seen["at"], self.tz), stale=now - seen["at"] > OLD_S,
+                     **{k: seen[k] for k in ("size_m", "image", "box2d") if seen.get(k) is not None})
+        moves = ((self.things.get(zone) or {}).get(name) or {}).get("moves") or []
+        if found and moves and moves[-1]["at"] == found["at"] and moves[-1].get("from_near"):
+            reply["moved_from"] = moves[-1]["from_near"]
+        if fix and fix.get("state") != "lost" and fix.get("position") and now - fix.get("at", 0) < FRESH_FIX_S:
+            east, north = seen["position"][0] - fix["position"][0], seen["position"][1] - fix["position"][1]
+            reply["distance_m"] = round(math.hypot(east, north), 1)
+            reply["bearing_deg"] = round((math.degrees(math.atan2(east, north)) - (fix.get("heading_deg") or 0) + 180) % 360 - 180)
         return reply
 
     def listing(self, zone):
