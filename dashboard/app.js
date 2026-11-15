@@ -1,4 +1,4 @@
-import {ApiClient, TIMEZONE, localDay, timeLabel, sortedEvents} from './client.js';
+import {ApiClient, TIMEZONE, localDay, timeLabel, sortedEvents, medicationOpenings} from './client.js';
 import {DAYPARTS, dayFraction, dayState, daypart, mood, shiftDay, sunPosition, sunTimes} from './day.js';
 
 const $ = id => document.getElementById(id);
@@ -238,10 +238,20 @@ function renderSensors(timeline) {
     row.append(icon('sensor'), words, node('span', {online: 'Online', offline: 'Offline', unknown: 'Unknown'}[state], 'state')); return row;
   }));
 }
+function renderMedication(timeline) {
+  const openings = medicationOpenings(timeline);
+  $('medication-count').textContent = plural(openings.length, 'recorded opening', 'recorded openings');
+  $('medication-openings').replaceChildren(...openings.map(event => {
+    const item = node('li');
+    item.append(timeEl(event.ts), node('span', ` · ${capital(event.zone)}${event.object ? ` · ${readable(event.object)}` : ''}`));
+    return item;
+  }));
+  $('medication-empty').hidden = openings.length > 0;
+}
 function render(data) {
   lastData = data;
   const {timeline, summary} = data;
-  renderHero(); renderRhythm(timeline); renderAlerts(timeline); renderEvents(timeline); renderQuestions(timeline); renderSensors(timeline);
+  renderHero(); renderRhythm(timeline); renderAlerts(timeline); renderEvents(timeline); renderQuestions(timeline); renderSensors(timeline); renderMedication(timeline);
   $('content').hidden = false;
   root.dataset.loaded = String(Date.now()); // themes may key entrance animations off this
 }
