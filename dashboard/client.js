@@ -22,7 +22,7 @@ export class ApiClient {
   }
   setToken(token) { this.token = token.trim(); }
   clearToken() { this.token = ''; }
-  async request(path, {signal, image = false} = {}) {
+  async request(path, {signal, image = false, binary = false} = {}) {
     if (!this.token) throw new ApiError('Connect with your access token to view this day.', 401);
     const url = new URL(path, this.origin);
     if (url.origin !== this.origin || url.username || url.password || url.search || url.hash) {
@@ -59,6 +59,12 @@ export class ApiClient {
       } finally { reader.releaseLock(); }
       return new Blob(chunks, {type: response.headers.get('content-type').split(';')[0]});
     }
+    if (binary) {
+      // The home's 3D mesh: a binary PLY, at most 30 MB.
+      if (!/^(application\/octet-stream|application\/ply|model\/ply)(;|$)/i.test(response.headers.get('content-type') || '')) throw new ApiError('The 3D map is unavailable.');
+      if (Number(response.headers.get('content-length')) > 30 * 1024 * 1024) { await response.body?.cancel(); throw new ApiError('The 3D map is too large.'); }
+      return response.arrayBuffer();
+    }
     return response.json();
   }
   async day(day, signal) {
@@ -68,6 +74,9 @@ export class ApiClient {
     return {timeline,summary};
   }
   evidence(path, signal) { return this.request(path,{image:true,signal}); }
+  mesh(signal) { return this.request('/mesh',{binary:true,signal}); }
+  hazards(signal) { return this.request('/hazards',{signal}); }
+  night(day, signal) { return this.request(`/night?day=${day}`,{signal}); }
 }
 
 // Count durable sensor records, never inferred medication use. Preserve distinct
