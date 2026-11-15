@@ -68,10 +68,25 @@ export class Home3D {
     this.tab = 'now'; this.timer = 0;
     $('tab-now').addEventListener('click', () => this.show('now'));
     $('tab-night').addEventListener('click', () => this.show('night'));
+    this.speed = 60; this.dir = 1; // night seconds per second, and which way
     $('night-time').addEventListener('input', () => { this.pause(); this.drawNight(); });
-    $('night-play').addEventListener('click', () => (this.timer ? this.pause() : this.play()));
-    $('night-back').addEventListener('click', () => this.step(-60));
-    $('night-forward').addEventListener('click', () => this.step(60));
+    $('night-time').addEventListener('keydown', e => this.key(e));
+    $('night-play').addEventListener('click', () => (this.timer && this.dir > 0 ? this.pause() : this.play(1)));
+    $('night-rewind').addEventListener('click', () => (this.timer && this.dir < 0 ? this.pause() : this.play(-1)));
+    $('night-prev').addEventListener('click', () => this.jump(-1));
+    $('night-next').addEventListener('click', () => this.jump(1));
+    for (const b of document.querySelectorAll('.night-speed [data-speed]')) {
+      b.addEventListener('click', () => {
+        this.speed = Number(b.dataset.speed);
+        document.querySelectorAll('.night-speed [data-speed]').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+      });
+    }
+    // The strip: click to jump there; scroll (here or on the slider) to move a minute, with Shift ten.
+    const strip = $('night-strip');
+    strip.addEventListener('click', e => { const r = strip.getBoundingClientRect(); this.pause(); this.setTime(this.t0 + (this.t1 - this.t0) * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))); });
+    for (const el of [strip, $('night-time')]) {
+      el.addEventListener('wheel', e => { e.preventDefault(); this.step(Math.sign(e.deltaY || e.deltaX) * (e.shiftKey ? 600 : 60)); }, {passive: false});
+    }
     $('space-dialog').addEventListener('close', () => { this.controller?.abort(); this.pause(); this.space?.stop(); });
   }
   say(text) { this.$('space-status').textContent = text; }
@@ -145,6 +160,11 @@ export class Home3D {
     }
     this.say(label);
     const floor = (this.data.hazards?.floor || 0) + LIFT;
+    $('night-from').textContent = clock(n.points[0].t); $('night-to').textContent = clock(n.points.at(-1).t);
+    // Moments worth jumping to: each trip's start and end, each stop, each door or sensor event.
+    this.trips = n.trips.map(x => [Date.parse(x.start), Date.parse(x.end)]);
+    this.moments = [...new Set([...n.trips.flatMap(x => [x.start, x.end]), ...(n.stops || []).filter(s => s.place !== 'bed').map(s => s.t), ...(n.events || []).map(e => e.t)]
+      .map(Date.parse))].sort((a, b) => a - b);
     this.track = n.points.map(p => ({t: Date.parse(p.t), p: (q => { q[1] = floor; return q; })(upright(p.p, n.up))}));
     this.t0 = this.track[0].t; this.t1 = this.track.at(-1).t; this.floor = floor;
     const span0 = (this.t1 - this.t0) || 1;
@@ -163,7 +183,7 @@ export class Home3D {
       const item = document.createElement('li'), button = document.createElement('button');
       button.type = 'button'; button.className = 'link-button';
       button.textContent = `${clock(trip.start)}–${clock(trip.end)} · ${trip.visits.length ? trip.visits.join(', ') : 'near the bed'}`;
-      button.addEventListener('click', () => { this.setTime(Date.parse(trip.start)); this.play(Date.parse(trip.end)); });
+      button.addEventListener('click', () => { this.setTime(Date.parse(trip.start)); this.play(1, Date.parse(trip.end)); });
       item.append(button); $('trip-list').append(item);
     }
     for (const e of n.events || []) {
@@ -182,21 +202,49 @@ export class Home3D {
   setTime(t) { this.$('night-time').value = String(Math.round(((t - this.t0) / ((this.t1 - this.t0) || 1)) * 1000)); this.drawNight(); }
   now() { return this.t0 + (Number(this.$('night-time').value) / 1000) * (this.t1 - this.t0); }
   step(seconds) { this.pause(); this.setTime(Math.min(this.t1, Math.max(this.t0, this.now() + seconds * 1000))); }
-  /** Play at one minute of night per second, until the end (or `until`). */
-  play(until = this.t1) {
+  /** To the previous or next moment worth seeing (a trip starting or ending, a stop, a door). */
+  jump(dir) {
     this.pause();
-    if (this.now() >= until - 1000) this.setTime(this.t0);
-    this.$('night-play').textContent = 'Pause';
+    const t = this.now(), list = this.moments || [];
+    const to = dir > 0 ? list.find(m => m > t + 1000) : [...list].reverse().find(m => m < t - 1000);
+    this.setTime(to ?? (dir > 0 ? this.t1 : this.t0));
+  }
+  key(e) {
+    const moves = {ArrowRight: 60, ArrowUp: 60, ArrowLeft: -60, ArrowDown: -60, PageUp: 600, PageDown: -600};
+    if (e.key in moves) { e.preventDefault(); this.step(moves[e.key] * (e.shiftKey ? 10 : 1)); }
+    else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); this.pause(); this.setTime(e.key === 'Home' ? this.t0 : this.t1); }
+    else if (e.key === ' ') { e.preventDefault(); this.timer ? this.pause() : this.play(1); }
+  }
+  /** Out of bed at time t? (Within a trip, give or take half a minute.) */
+  awake(t) { return (this.trips || []).some(([a, b]) => t >= a - 30000 && t <= b + 30000); }
+  /** Play forwards (dir 1) or backwards (-1) at the chosen speed, to the end (or `until`); with "skip
+   * time in bed" the quiet stretches between trips are jumped over. */
+  play(dir = 1, until = dir > 0 ? this.t1 : this.t0) {
+    this.pause(); this.dir = dir;
+    if ((dir > 0 && this.now() >= until - 1000) || (dir < 0 && this.now() <= until + 1000)) this.setTime(dir > 0 ? this.t0 : this.t1);
+    this.showPlaying(true);
     let last = performance.now();
     const frame = time => {
-      const t = Math.min(until, this.now() + (time - last) * 60); last = time;
+      let t = this.now() + dir * (time - last) * this.speed; last = time;
+      if (this.$('night-skip').checked && this.trips?.length && !this.awake(t)) {
+        const next = dir > 0 ? this.trips.find(([a]) => a > t) : [...this.trips].reverse().find(([, b]) => b < t);
+        t = next ? (dir > 0 ? next[0] - 30000 : next[1] + 30000) : until;
+      }
+      t = dir > 0 ? Math.min(until, t) : Math.max(until, t);
       this.setTime(t);
-      if (t >= until) { this.pause(); return; }
+      if (t === until) { this.pause(); return; }
       this.timer = requestAnimationFrame(frame);
     };
     this.timer = requestAnimationFrame(frame);
   }
-  pause() { cancelAnimationFrame(this.timer); this.timer = 0; this.$('night-play').textContent = 'Play'; }
+  pause() { cancelAnimationFrame(this.timer); this.timer = 0; this.showPlaying(false); }
+  showPlaying(on) {
+    const $ = this.$, forwards = on && this.dir > 0, backwards = on && this.dir < 0;
+    $('night-play').querySelector('[data-show="play"]').hidden = forwards;
+    $('night-play').querySelector('[data-show="pause"]').hidden = !forwards;
+    $('night-play').setAttribute('aria-label', forwards ? 'Pause' : 'Play'); $('night-play').title = forwards ? 'Pause' : 'Play';
+    $('night-rewind').setAttribute('aria-pressed', String(backwards));
+  }
 
   drawNight() {
     if (!this.track || this.tab !== 'night') return;

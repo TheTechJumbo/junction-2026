@@ -129,9 +129,20 @@
 <p id="space-status" role="status"></p><canvas id="space-canvas" class="space-canvas" tabindex="0" aria-label="3D view of the home. Drag or use the arrow keys to turn; scroll, pinch or plus and minus to zoom; double-tap or 0 to reset."></canvas><div id="now-panel" class="space-panel"><ul id="hazard-list" class="hazard-list"></ul></div>
 <div id="night-panel" class="space-panel" hidden>
 <p id="night-summary" class="night-summary"></p>
-<div class="night-controls"><button id="night-back" class="ghost icon-button" type="button" aria-label="One minute back"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><button id="night-play" class="primary" type="button">Play</button><button id="night-forward" class="ghost icon-button" type="button" aria-label="One minute on"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button><output id="night-clock" class="night-clock" for="night-time">--:--</output></div>
-<div class="night-strip" id="night-strip" aria-hidden="true"></div>
-<label for="night-time" class="visually-hidden">Time of night</label><input id="night-time" class="night-time" type="range" min="0" max="1000" value="0" step="1">
+<div class="night-controls">
+<button id="night-prev" class="ghost icon-button" type="button" aria-label="Previous moment" title="Previous moment"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.5v14H6zM19 5.5v13a1 1 0 0 1-1.5.86L9.6 12.86a1 1 0 0 1 0-1.72l7.9-6.5A1 1 0 0 1 19 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-rewind" class="ghost icon-button" type="button" aria-label="Play backwards" title="Play backwards"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5.5v13a1 1 0 0 1-1.5.86L4.1 12.86a1 1 0 0 1 0-1.72L14.5 4.64A1 1 0 0 1 16 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-play" class="primary icon-button" type="button" aria-label="Play" title="Play"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true" data-show="play"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor" stroke="none"></path></svg><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true" data-show="pause" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-next" class="ghost icon-button" type="button" aria-label="Next moment" title="Next moment"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM5 5.5v13a1 1 0 0 0 1.5.86l7.9-6.5a1 1 0 0 0 0-1.72l-7.9-6.5A1 1 0 0 0 5 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<output id="night-clock" class="night-clock" for="night-time">--:--</output>
+</div>
+<div class="night-options">
+<div class="night-speed" role="radiogroup" aria-label="Playing speed"><button type="button" class="ghost" role="radio" data-speed="60" aria-checked="true">1 min/s</button><button type="button" class="ghost" role="radio" data-speed="300" aria-checked="false">5 min/s</button><button type="button" class="ghost" role="radio" data-speed="900" aria-checked="false">15 min/s</button></div>
+<label class="night-skip"><input id="night-skip" type="checkbox" checked> Skip time in bed</label>
+</div>
+<div class="night-strip" id="night-strip" title="Click to jump; scroll to move a minute (Shift: ten)"></div>
+<div class="night-ends"><time id="night-from">--:--</time><time id="night-to">--:--</time></div>
+<label for="night-time" class="visually-hidden">Time of night. Arrow keys move a minute, with Shift ten; Home and End go to the ends.</label><input id="night-time" class="night-time" type="range" min="0" max="1000" value="0" step="1">
 <ul id="trip-list" class="trip-list"></ul>
 </div>
 <p class="muted space-hint">Drag to turn · pinch or scroll to zoom · double-tap to reset</p><div class="dialog-actions"><button id="close-space" class="primary" type="button">Close</button></div></dialog>
