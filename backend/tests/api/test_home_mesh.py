@@ -57,3 +57,21 @@ def test_hazards_switch_reads_the_environment(monkeypatch):
     monkeypatch.delenv("HAZARDS_ENABLED")
     assert Settings.from_env().hazards_enabled is True
 
+
+def test_mesh_files_are_gzipped_when_the_client_takes_it(client):
+    c, root = client
+    (root / "mesh").mkdir()
+    body = b"ply " + bytes(range(256)) * 400
+    (root / "mesh" / "home.ply").write_bytes(body)
+    (root / "mesh" / "hazards.json").write_text(json.dumps({"hazards": [{"words": "x" * 50}] * 100}))
+    auth = {"Authorization": "Bearer test-token"}
+    zipped = c.get("/mesh", headers={**auth, "Accept-Encoding": "gzip"})
+    assert zipped.headers["content-encoding"] == "gzip" and zipped.content == body  # the client unpacks it
+    assert int(zipped.headers["content-length"]) < len(body) / 3
+    plain = c.get("/mesh", headers={**auth, "Accept-Encoding": "identity"})
+    assert "content-encoding" not in plain.headers and plain.content == body
+    hz = c.get("/hazards", headers={**auth, "Accept-Encoding": "gzip"})
+    assert hz.headers["content-encoding"] == "gzip" and len(hz.json()["hazards"]) == 100
+    (root / "mesh" / "home.ply").write_bytes(b"ply changed")  # a new file is compressed again
+    assert c.get("/mesh", headers={**auth, "Accept-Encoding": "gzip"}).content == b"ply changed"
+
