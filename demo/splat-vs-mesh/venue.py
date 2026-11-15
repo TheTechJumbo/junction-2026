@@ -4,7 +4,7 @@ The splat is in VGGT's frame: the first glasses camera at the origin, x right, y
 VGGT's own units. Up is the hall's flattest direction (checked against the camera's "down"). The
 scale comes from the glasses themselves: the first camera is at head height, about 1.6 m above the
 floor. Writes venue/room_blocks_fine.ply (high quality), venue/room_blocks_mid.ply and
-venue/camera.json (the splat viewer starts where the glasses started, looking where they looked).
+venue/room_blocks_low.ply, venue/camera.json (the splat viewer starts where the glasses started, looking where they looked).
 
     python venue.py venue/venue-kitchen-glasses-anon.splat venue
 """
@@ -44,7 +44,7 @@ print(f"up {up.round(3)}; camera {camera_height:.3f} units above the floor -> 1 
 
 keep = ((rec["pos"] >= lo) & (rec["pos"] <= hi)).all(1)
 room = rec[keep]
-for name, quality in (("room_blocks_fine.ply", "high"), ("room_blocks_mid.ply", "medium")):
+for name, quality in (("room_blocks_fine.ply", "high"), ("room_blocks_mid.ply", "medium"), ("room_blocks_low.ply", "low")):
     (v, n, c, t), _ = lowpoly.from_splat(room.tobytes(), frame=frame, quality=quality, floor=floor * frame['metres'])
     lowpoly.write(v, n, c, t, out / name, "z", ["from venue-kitchen-glasses-anon.splat (Ray-Ban Meta glasses, anonymised)"])
     span = v.max(0) - v.min(0)
