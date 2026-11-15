@@ -25,6 +25,10 @@ import demo_room as dr  # noqa: E402
 import lowpoly  # noqa: E402
 import splat_mesh as smesh  # noqa: E402
 
+import props  # noqa: E402  (the little things: laptops, plant pots, books... and the rest of the house)
+
+THINGS_STEP = 0.012  # the little things are scanned finer than the walls: a Gaussian every 1.2 cm
+
 OUT = HERE / "home"
 OUT.mkdir(exist_ok=True)
 
@@ -41,15 +45,13 @@ def recording_rect(origin, u, v, colour):
 dr.rect = recording_rect
 m = dr.make_map()
 dr.rect = make_rect
-v, c, t = [], [], []
+room = props.Mesh()
 for o, u, w, colour in quads:
-    base = len(v)
-    v += [o, o + u, o + u + w, o + w]
-    c += [colour] * 4
-    t += [(base, base + 1, base + 2), (base, base + 2, base + 3)]
-v, c, t = np.array(v, np.float32), np.array(c, np.uint8), np.array(t, np.int64)
+    room.quad(o, u, w, colour)
+things = props.living_room(props.Mesh())
+v, c, t = props.Mesh().extend(room).extend(things).arrays()
 smesh.write_mesh(v, np.zeros_like(v), c, t, OUT / "actual.ply", comments=["up z", "the example room as built"], normals=False)
-print(f"actual.ply: {len(t)} triangles from {len(quads)} rectangles")
+print(f"actual.ply: {len(t)} triangles ({len(quads)} rectangles of room, {len(things.t)} of little things)")
 
 # 2. The Gaussian splat of it: the map's Gaussians, a little varied so it renders like a splat.
 rng = np.random.default_rng(7)
@@ -58,6 +60,13 @@ rec["rgba"][:, :3] = np.clip(rec["rgba"][:, :3].astype(int) + rng.integers(-7, 8
 rec["scale"] = (dr.STEP * 0.65 * rng.uniform(0.85, 1.15, (len(rec), 1))).astype(np.float32) * np.ones((1, 3), np.float32)
 rec["rot"] = (128, 128, 128, 255)  # no turn (w, x, y, z packed as value*128+128)
 rec["rot"][:, 0] = 255
+# ... and the little things, sampled off their surfaces as the glasses would see them.
+pts, cols = things.sample(THINGS_STEP)
+extra = np.zeros(len(pts), rec.dtype)
+extra["pos"], extra["rgba"][:, :3], extra["rgba"][:, 3] = pts, np.clip(cols.astype(int) + rng.integers(-6, 7, (len(pts), 3)), 0, 255), 235
+extra["scale"] = (THINGS_STEP * 0.7 * rng.uniform(0.85, 1.15, (len(pts), 1))).astype(np.float32) * np.ones((1, 3), np.float32)
+extra["rot"] = rec["rot"][0]
+rec = np.concatenate([rec, extra])
 (OUT / "home.splat").write_bytes(rec.tobytes())
 print(f"home.splat: {len(rec)} Gaussians, {len(rec) * 32 / 1e6:.1f} MB")
 
@@ -69,6 +78,14 @@ for quality in ("high", "medium", "low"):
     lowpoly.write(bv, bn, bc, bt, OUT / f"blocks_{quality}.ply", up, ["from home.splat"])
     print(f"blocks_{quality}.ply: {len(bt)} triangles")
 
-# 4. The example night and the splat viewer's start.
+# 4. The rest of the house (not scanned: drawn see-through around the living room), and its room names.
+parts, labels = props.house()
+for name, mesh in parts.items():
+    hv, hc, ht = mesh.arrays()
+    smesh.write_mesh(hv, np.zeros_like(hv), hc, ht, OUT / f"house_{name}.ply", comments=["up z", "the rest of the house"], normals=False)
+json.dump({"labels": labels, "parts": list(parts)}, open(OUT / "house.json", "w"))
+print("house: " + ", ".join(f"{k} {len(m.t)}" for k, m in parts.items()) + " triangles")
+
+# 5. The example night and the splat viewer's start.
 shutil.copy(HERE.parents[1] / "dashboard" / "fixtures" / "night.json", OUT / "night.json")
 json.dump({"up": [0, 0, 1], "eye": [6.2, -2.6, 3.6], "look": [2.4, 2.0, 0.4]}, open(OUT / "camera.json", "w"))

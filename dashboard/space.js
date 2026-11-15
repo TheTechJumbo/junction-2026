@@ -334,6 +334,13 @@ export class Space {
     Object.assign(l, {count: positions.length / 3, depth, blend, wave: this.still ? 0 : wave});
     this.requestDraw(); this.loop();
   }
+  /** Where a point (viewer axes) is on the canvas, in CSS pixels, as last drawn; null when behind the eye. */
+  project([x, y, z]) {
+    const m = this.viewProjection; if (!m) return null;
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15]; if (w <= 0.01) return null;
+    const cx = (m[0] * x + m[4] * y + m[8] * z + m[12]) / w, cy = (m[1] * x + m[5] * y + m[9] * z + m[13]) / w;
+    return [(cx * 0.5 + 0.5) * this.canvas.clientWidth, (0.5 - cy * 0.5) * this.canvas.clientHeight];
+  }
   dropLayer(name) {
     const l = this.layers.get(name); if (!l) return;
     l.buffers.forEach(b => this.gl.deleteBuffer(b)); this.gl.deleteVertexArray(l.vao); this.layers.delete(name);
@@ -366,11 +373,13 @@ export class Space {
     if (!this.vao) return;
     const {yaw, pitch, distance, target} = this.view;
     const eye = [target[0] + distance * Math.cos(pitch) * Math.sin(yaw), target[1] + distance * Math.sin(pitch), target[2] + distance * Math.cos(pitch) * Math.cos(yaw)];
-    const near = Math.max(0.01, distance - this.home.size), far = distance + this.home.size * 2;
+    const reach = this.reach || 1; // how far past the mesh there is something to draw (a house around the room)
+    const near = Math.max(0.01, distance - this.home.size * reach), far = distance + this.home.size * 2 * reach;
     const aspect = width / height;
     const fovy = aspect < 1 ? 2 * Math.atan(Math.tan(0.4) / aspect) : 0.8; // a tall phone screen keeps the room's width in view
     const viewProjection = multiply(perspective(fovy, aspect, near, far), lookAt(eye, target, [0, 1, 0]));
     const toEye = normalise(eye.map((v, k) => v - target[k]));
+    this.viewProjection = viewProjection;
     gl.useProgram(this.program); gl.enable(gl.DEPTH_TEST);
     gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'viewProjection'), false, viewProjection);
     gl.uniform3fv(gl.getUniformLocation(this.program, 'light'), normalise([toEye[0] + 0.4, 1.2, toEye[2] + 0.2]));
