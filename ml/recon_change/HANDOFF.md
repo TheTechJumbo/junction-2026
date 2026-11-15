@@ -409,9 +409,10 @@ Ed's: changes stay on a branch for his review; Iridis is treated as untrusted (s
 - `always-on-test`: where the app now records by default, so stray taps can't touch kitchen.
 
 **Open items, in priority order**
-1. One bundled relay restart (when no upload is running): link kitchen's chosen splat, fetch validate-room's
-   training (set its recordings.json state to "running" first), load the most-recent-map fallback for
-   /navigate and the caretaker's same-frames pairing (already in relay.py). Restarts cut uploads in flight.
+1. DONE at 03:32 local: the bundled relay restart (pid 34948) loaded everything on disk, fetched
+   validate-room's training (22.14 dB) and linked kitchen to the newest recording, Seb's 02:59 glasses video
+   (train-kitchen-20261115_025911_0a9dfa62-1, 21.97 dB). Switching kitchen to another recording is described in
+   handoff/relay-and-recording.md. Restarts cut uploads in flight: check /recording first.
 2. Name kitchen's places again (the glasses session has the procedure); then test "take me to" end to end.
 3. Install the app build with the debug panel + venue_zone (one Meta AI approval).
 4. Privacy: Seb wants Iridis treated as untrusted (blur + keyed garble + encryption at rest, outputs encrypted).
