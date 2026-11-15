@@ -101,13 +101,24 @@ export function vertexNormals(positions, indices) {
 }
 
 const VERTEX = `#version 300 es
-in vec3 position; in vec3 normal; in vec3 colour;
-uniform mat4 viewProjection;
-out vec3 vNormal; out vec3 vColour; out float vHeight;
-void main() { vNormal = normal; vColour = colour; vHeight = position.y; gl_Position = viewProjection * vec4(position, 1.0); }`;
+in vec3 position; in vec3 normal; in vec3 colour; in float alpha;
+uniform mat4 viewProjection; uniform float time; uniform float wave;
+out vec3 vNormal; out vec3 vColour; out float vHeight; out float vAlpha;
+void main() {
+  vec3 p = position; float a = alpha;
+  if (wave > 0.0) {                       // a slow sway and drift, and a soft brightening that travels along
+    float phase = p.x * 2.1 + p.z * 1.7;
+    p.y += wave * sin(time * 1.3 + phase);
+    p.x += wave * 0.6 * sin(time * 0.9 + p.z * 2.3);
+    p.z += wave * 0.6 * cos(time * 1.1 + p.x * 2.0);
+    a *= 0.8 + 0.2 * sin(time * 2.0 - phase * 1.5);
+  }
+  vNormal = normal; vColour = colour; vHeight = p.y; vAlpha = a;
+  gl_Position = viewProjection * vec4(p, 1.0);
+}`;
 const FRAGMENT = `#version 300 es
 precision mediump float;
-in vec3 vNormal; in vec3 vColour; in float vHeight;
+in vec3 vNormal; in vec3 vColour; in float vHeight; in float vAlpha;
 uniform vec3 light; uniform vec3 eye; uniform float glow;
 out vec4 colour;
 void main() {
@@ -116,15 +127,63 @@ void main() {
   float key = max(dot(n, light), 0.0);
   float sky = 0.5 + 0.5 * n.y;                  // hemisphere: lit from above, darker below
   vec3 c = vColour * (0.38 + 0.22 * sky + 0.55 * key);
-  colour = vec4(mix(pow(c, vec3(0.95)), vColour, glow), 1.0); // overlays (glow 1) keep their own colour
+  colour = vec4(mix(pow(c, vec3(0.95)), vColour, glow), vAlpha); // overlays (glow 1) keep their own colour
 }`;
 
 /** A point from the file's axes into the viewer's (y up), like the mesh itself. */
 export function upright(p, up = '-y') { return Array.from(toYUp(Float32Array.from(p), up)); }
 
 // Overlay shapes, in the viewer's axes (y up), as {positions, colours} triangle lists.
-const shape = () => ({positions: [], colours: []});
-function tri(s, a, b, c, colour) { s.positions.push(...a, ...b, ...c); for (let i = 0; i < 3; i++) s.colours.push(...colour); }
+const shape = () => ({positions: [], colours: [], alphas: []});
+function tri(s, a, b, c, colour, alphas = [1, 1, 1]) {
+  s.positions.push(...a, ...b, ...c); for (let i = 0; i < 3; i++) s.colours.push(...colour); s.alphas.push(...alphas);
+}
+function quad(s, a, b, c, d, colour, [aa, ab, ac, ad]) { tri(s, a, b, c, colour, [aa, ab, ac]); tri(s, a, c, d, colour, [aa, ac, ad]); }
+// Across a soft band: the edges fade to nothing, the middle holds `core` (no hard line anywhere).
+const ACROSS = [[-1, 0], [-0.35, 1], [0.35, 1], [1, 0]];
+/** A wide, see-through flat band along points, fading out at both edges. */
+export function softRibbon(s, points, width, colourAt, core = 0.4) {
+  for (let i = 0; i + 1 < points.length; i++) {
+    const [ax, ay, az] = points[i], [bx, by, bz] = points[i + 1];
+    const dx = bx - ax, dz = bz - az, l = Math.hypot(dx, dz); if (l < 1e-4) continue;
+    const ox = (-dz / l) * width / 2, oz = (dx / l) * width / 2, c = colourAt(i);
+    for (let k = 0; k + 1 < ACROSS.length; k++) {
+      const [f0, a0] = ACROSS[k], [f1, a1] = ACROSS[k + 1];
+      quad(s, [ax + ox * f0, ay, az + oz * f0], [bx + ox * f0, by, bz + oz * f0], [bx + ox * f1, by, bz + oz * f1], [ax + ox * f1, ay, az + oz * f1],
+        c, [a0 * core, a0 * core, a1 * core, a1 * core]);
+    }
+  }
+  return s;
+}
+/** A sphere (see-through when alpha < 1): the neon orb's core and its glow shells. */
+export function sphere(s, [x, y, z], radius, colour, alpha = 1, rings = 10, sides = 16) {
+  const p = (i, j) => {
+    const th = (i / rings) * Math.PI, ph = (j / sides) * Math.PI * 2;
+    return [x + radius * Math.sin(th) * Math.cos(ph), y + radius * Math.cos(th), z + radius * Math.sin(th) * Math.sin(ph)];
+  };
+  for (let i = 0; i < rings; i++) for (let j = 0; j < sides; j++) quad(s, p(i, j), p(i + 1, j), p(i + 1, j + 1), p(i, j + 1), colour, [alpha, alpha, alpha, alpha]);
+  return s;
+}
+/** A round glow on the floor: strongest in the middle, nothing at the edge. */
+export function softDisc(s, [x, y, z], radius, colour, core = 0.5, segments = 32) {
+  for (let i = 0; i < segments; i++) {
+    const a0 = (i / segments) * Math.PI * 2, a1 = ((i + 1) / segments) * Math.PI * 2;
+    tri(s, [x, y, z], [x + radius * Math.cos(a0), y, z + radius * Math.sin(a0)], [x + radius * Math.cos(a1), y, z + radius * Math.sin(a1)], colour, [core, 0, 0]);
+  }
+  return s;
+}
+/** The same band standing upright; crossed with softRibbon it reads as a soft glowing volume. */
+export function softWall(s, points, height, colourAt, core = 0.4) {
+  for (let i = 0; i + 1 < points.length; i++) {
+    const a = points[i], b = points[i + 1], c = colourAt(i);
+    if (Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) < 1e-4) continue;
+    for (let k = 0; k + 1 < ACROSS.length; k++) {
+      const [f0, a0] = ACROSS[k], [f1, a1] = ACROSS[k + 1], h0 = f0 * height / 2, h1 = f1 * height / 2;
+      quad(s, [a[0], a[1] + h0, a[2]], [b[0], b[1] + h0, b[2]], [b[0], b[1] + h1, b[2]], [a[0], a[1] + h1, a[2]], c, [a0 * core, a0 * core, a1 * core, a1 * core]);
+    }
+  }
+  return s;
+}
 /** A flat ring on the floor around a point. */
 export function ring(s, [x, y, z], radius, width, colour, segments = 40) {
   for (let i = 0; i < segments; i++) {
@@ -194,7 +253,8 @@ export class Space {
     this.gl = gl;
     this.program = link(gl, VERTEX, FRAGMENT);
     this.view = {yaw: 0.6, pitch: 0.55, distance: 1, target: [0, 0, 0]};
-    this.home = null; this.frame = 0; this.spinning = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.still = matchMedia('(prefers-reduced-motion: reduce)').matches; // no turning, no wobble
+    this.home = null; this.frame = 0; this.spinning = !this.still;
     this.pointers = new Map(); this.pinch = 0; this.layers = new Map();
     this.listen();
     this.resize = new ResizeObserver(() => this.draw());
@@ -236,11 +296,12 @@ export class Space {
   }
   /** Overlays on the mesh: a named layer of {positions, colours} triangles (viewer axes, colours 0-1).
    * depth false draws it over everything (markers that must not hide behind furniture). */
-  layer(name, s, {depth = true} = {}) {
+  layer(name, s, {depth = true, blend = false, wave = 0} = {}) {
     const gl = this.gl;
     this.dropLayer(name);
     if (!s || !s.positions.length) { this.draw(); return; }
     const positions = Float32Array.from(s.positions), colours = Float32Array.from(s.colours);
+    const alphas = s.alphas?.length === positions.length / 3 ? Float32Array.from(s.alphas) : new Float32Array(positions.length / 3).fill(1);
     const normals = new Float32Array(positions.length); for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
     const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
     const buffers = [['position', positions], ['normal', normals], ['colour', colours]].map(([attr, data]) => {
@@ -248,9 +309,12 @@ export class Space {
       const at = gl.getAttribLocation(this.program, attr); gl.enableVertexAttribArray(at); gl.vertexAttribPointer(at, 3, gl.FLOAT, false, 0, 0);
       return buffer;
     });
+    const alphaBuffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, alphaBuffer); gl.bufferData(gl.ARRAY_BUFFER, alphas, gl.DYNAMIC_DRAW);
+    const at = gl.getAttribLocation(this.program, 'alpha'); gl.enableVertexAttribArray(at); gl.vertexAttribPointer(at, 1, gl.FLOAT, false, 0, 0);
+    buffers.push(alphaBuffer);
     gl.bindVertexArray(null);
-    this.layers.set(name, {vao, buffers, count: positions.length / 3, depth});
-    this.draw();
+    this.layers.set(name, {vao, buffers, count: positions.length / 3, depth, blend, wave: this.still ? 0 : wave});
+    this.draw(); this.loop();
   }
   dropLayer(name) {
     const l = this.layers.get(name); if (!l) return;
@@ -263,8 +327,9 @@ export class Space {
   stop() { this.running = false; cancelAnimationFrame(this.frame); }
   loop() {
     cancelAnimationFrame(this.frame);
-    if (!this.running || !this.spinning) return;
-    this.frame = requestAnimationFrame(() => { this.view.yaw += 0.0025; this.draw(); this.loop(); });
+    const waving = [...this.layers.values()].some(l => l.wave > 0);
+    if (!this.running || (!this.spinning && !waving)) return;
+    this.frame = requestAnimationFrame(() => { if (this.spinning) this.view.yaw += 0.0025; this.draw(); this.loop(); });
   }
   draw() {
     const gl = this.gl, canvas = this.canvas;
@@ -284,13 +349,20 @@ export class Space {
     gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'viewProjection'), false, viewProjection);
     gl.uniform3fv(gl.getUniformLocation(this.program, 'light'), normalise([toEye[0] + 0.4, 1.2, toEye[2] + 0.2]));
     gl.uniform3fv(gl.getUniformLocation(this.program, 'eye'), toEye);
-    const glow = gl.getUniformLocation(this.program, 'glow');
-    gl.uniform1f(glow, 0);
+    const glow = gl.getUniformLocation(this.program, 'glow'), wave = gl.getUniformLocation(this.program, 'wave');
+    gl.uniform1f(gl.getUniformLocation(this.program, 'time'), performance.now() / 1000);
+    gl.uniform1f(glow, 0); gl.uniform1f(wave, 0);
+    gl.vertexAttrib1f(gl.getAttribLocation(this.program, 'alpha'), 1); // the mesh has no alpha buffer: solid
     gl.bindVertexArray(this.vao); gl.drawElements(gl.TRIANGLES, this.count, gl.UNSIGNED_INT, 0);
     gl.uniform1f(glow, 1);
-    for (const l of [...this.layers.values()].sort((a, b) => b.depth - a.depth)) { // floor layers first, then the ones drawn over everything
+    // Solid layers, then see-through ones (blended, depth-tested but not hiding each other), then markers drawn over everything.
+    const order = l => (!l.depth ? 2 : l.blend ? 1 : 0);
+    for (const l of [...this.layers.values()].sort((a, b) => order(a) - order(b))) {
       if (l.depth) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
+      if (l.blend) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
+      gl.uniform1f(wave, l.wave);
       gl.bindVertexArray(l.vao); gl.drawArrays(gl.TRIANGLES, 0, l.count);
+      if (l.blend) { gl.disable(gl.BLEND); gl.depthMask(true); }
     }
     gl.enable(gl.DEPTH_TEST); gl.bindVertexArray(null);
   }

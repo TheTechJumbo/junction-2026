@@ -8,7 +8,7 @@
 //              moves with the time slider (play, step back and forward, or tap a trip).
 // Connected, everything comes from the home (GET /mesh, /hazards, /night). Otherwise, or while the
 // home has no 3D map yet, all three are the example home, labelled as such; never a mix of both.
-import {Space, parsePly, upright, shape, ring, disc, ribbon, wall, dashes, pillar} from './space.js';
+import {Space, parsePly, upright, shape, ring, disc, ribbon, wall, softRibbon, softWall, sphere, softDisc, dashes, pillar} from './space.js';
 
 const RED = [0.86, 0.27, 0.25], ORANGE = [0.95, 0.6, 0.25], AMBER = [0.95, 0.69, 0.29], TEAL = [0.3, 0.75, 0.7];
 const EARLY = [0.33, 0.36, 0.85], LATE = [0.97, 0.7, 0.3], DIM = [0.42, 0.45, 0.58];
@@ -174,9 +174,9 @@ export class Home3D {
     // The whole night faintly, for context: its shadow on the floor and a thin ghost in the air. The
     // walked-so-far part is drawn over it as time moves.
     const whole = shape();
-    ribbon(whole, this.track.map(x => x.p), 0.05, () => DIM);
-    ribbon(whole, this.track.map(x => x.air), 0.025, () => DIM);
-    this.space.layer('night-all', whole);
+    softRibbon(whole, this.track.map(x => x.p), 0.12, () => DIM, 0.35);
+    softRibbon(whole, this.track.map(x => x.air), 0.18, () => DIM, 0.18);
+    this.space.layer('night-all', whole, {blend: true});
     this.setTime(n.trips.length ? Date.parse(n.trips[0].start) : this.t0);
   }
   setTime(t) { this.$('night-time').value = String(Math.round(((t - this.t0) / ((this.t1 - this.t0) || 1)) * 1000)); this.drawNight(); }
@@ -212,9 +212,14 @@ export class Home3D {
     const hereAir = [here[0], this.lift(t), here[2]];
     const colourAt = i => mix(EARLY, LATE, (done[Math.min(i, done.length - 1)].t - this.t0) / span);
     const air = [...done.map(x => x.air), hereAir];
+    // The trail: a wide, see-through band lying flat and one standing up, soft at the edges, so it
+    // reads as a glowing haze from any angle; a thin brighter core keeps the line easy to follow.
+    const haze = shape();
+    softRibbon(haze, air, 0.42, colourAt, 0.42); softWall(haze, air, 0.42, colourAt, 0.42);
+    softRibbon(haze, [...done.map(x => x.p), here], 0.3, i => mix(colourAt(i), DIM, 0.5), 0.35); // its shadow on the floor
+    this.space.layer('night-haze', haze, {blend: true, wave: 0.025});
     const trail = shape();
-    ribbon(trail, air, 0.09, colourAt); wall(trail, air, 0.09, colourAt);              // the trail: a flat band and an upright one, a tube from any angle
-    ribbon(trail, [...done.map(x => x.p), here], 0.07, i => mix(colourAt(i), DIM, 0.55)); // its shadow on the floor
+    ribbon(trail, air, 0.025, colourAt); wall(trail, air, 0.025, colourAt);
     for (let i = 0; i < done.length; i += 6) {                                         // thin threads from the floor up to the trail
       const x = done[i]; pillar(trail, x.p, 0.006, x.air[1] - x.p[1], mix(colourAt(i), DIM, 0.4));
     }
@@ -226,10 +231,16 @@ export class Home3D {
       pillar(trail, p, 0.025, top - p[1], TEAL);                                       // pinned up to when, on the trail
       disc(trail, [p[0], top, p[2]], r * 0.6, TEAL);
     }
-    this.space.layer('night-done', trail);
+    this.space.layer('night-done', trail, {wave: 0.025});
+    // The wearer: a neon orb at the end of the trail, in the trail's colour at this moment: a bright
+    // core, glow shells fading outwards, and its glow on the floor below so it is clear where she is.
+    const now = mix(EARLY, LATE, (t - this.t0) / span), hot = mix(now, [1, 1, 1], 0.55);
+    const orb = shape();
+    softDisc(orb, here, 0.45, now, 0.55);
+    for (const [r, a] of [[0.34, 0.07], [0.24, 0.13], [0.16, 0.24]]) sphere(orb, hereAir, r, now, a);
+    sphere(orb, hereAir, 0.085, hot, 1);
+    this.space.layer('night-orb', orb, {depth: false, blend: true, wave: 0.025});
     const marks = shape();
-    pillar(marks, here, 0.05, hereAir[1] - here[1], AMBER, [1, 0.92, 0.75]);          // the wearer: a beam from the floor
-    pillar(marks, [hereAir[0], hereAir[1] - 0.09, hereAir[2]], 0.13, 0.18, [1, 0.92, 0.75]); // ... to now, on the trail
     for (const e of n.events || []) {
       const at = Date.parse(e.t), place = n.places?.[e.place];
       if (!place || at > t || t - at > 5 * 60 * 1000) continue; // a door event glows for five minutes
