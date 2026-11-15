@@ -53,9 +53,8 @@ here. Seb's ask: no plain images leave the trusted side; garble them with a key,
 ## Seb's open decisions
 1. Trusted side: the phone app (PHONE_SPEC.md; needs a face/person detector download Seb must approve) or the thin
    laptop step (built; the laptop then sees plain frames).
-2. Publishing the anonymised venue splat (1,022,521 Gaussians, 32.7 MB, 619 person and 321 head boxes blurred, no
-   faces left by OWLv2). It is staged outside the repo in the session notes folder `venue-publish/` (splat, README,
-   LFS `.gitattributes`). Do not commit it without Seb's explicit OK.
+2. Done: the anonymised venue splat is published with Seb's OK in `ml/recon_change/venue/` (Git LFS, 74d70bd):
+   1,022,521 Gaussians, 32.7 MB, 619 person and 321 head boxes blurred, no faces left by OWLv2.
 
 ## Iridis
 - Code is deployed in `junction-recon` (`live/garble.py`, `vault.py`, `private_job.py`, `eval/*`, `iridis/*.slurm`).

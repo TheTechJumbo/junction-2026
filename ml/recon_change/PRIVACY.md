@@ -209,7 +209,7 @@ connection while polling.
   shared, and `flythrough.mp4` is fine. Labels were skipped, because this job's environment had no `transformers`;
   `private_train.slurm` now adds the item-finder environment.
 
-## 8. The venue splat for the public repo (waiting for Seb's OK)
+## 8. The venue splat in the public repo (published with Seb's OK, 74d70bd)
 
 The hacking hall from the glasses session `glasses-20261115-001625` (50 frames), retrained from anonymised frames
 with `eval/venue_anon.py` + `video_map.py` (`iridis/venue_anon.slurm`). This ran on Iridis, where those frames
@@ -225,6 +225,6 @@ already were.
   by eye they are flat or pixelated areas.
 * Splat: 1,022,521 Gaussians, 32.7 MB, 25.6 dB on its (anonymised) keyframes, trained in 105 s. The renders show
   people as coarse blocks.
-* Staged outside the repo, so nothing commits it by accident: the shared notes folder `venue-publish/` (the splat, a
-  short README with these numbers, `.gitattributes` for Git LFS). No photos, video, depths or keyframes.
+* Published in `ml/recon_change/venue/`: the splat through Git LFS (sha256 `13f637d4…5ff1d`), a short README with
+  these numbers, and `.gitattributes` for LFS. No photos, video, depths or keyframes.
 
