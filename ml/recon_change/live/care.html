@@ -53,6 +53,8 @@
   #see { margin-top: 10px; display: none; }
   #see img { width: 100%; border-radius: 10px; display: block; background: #0b1118; aspect-ratio: 4 / 3; object-fit: cover; }
   #see figcaption { margin-top: 4px; }
+  #matched { margin-top: 8px; display: none; }
+  #matched img { width: 100%; border-radius: 10px; display: block; background: #0b1118; aspect-ratio: 1 / 1; object-fit: cover; }
   ul, ol { list-style: none; margin: 0; padding: 0; }
   .tag.found { color: #1a0d00; background: #ff9a1f; border-color: #ffd29a; font-weight: 700; }
   .seen { padding: 8px 0; }
@@ -174,6 +176,7 @@
     <div id="doing" class="muted"></div>
     <div id="check" hidden></div>
     <figure id="see" style="margin:10px 0 0"><img id="seeImg" alt="What the glasses saw last"><figcaption class="muted small" id="seeWhen"></figcaption></figure>
+    <figure id="matched" style="margin:8px 0 0"><img id="matchedImg" alt="The room's own photo the glasses' view was matched with"><figcaption class="muted small" id="matchedWhen"></figcaption></figure>
   </section>
   <section>
     <h2>Where they went today</h2>
@@ -254,6 +257,7 @@ function ago(s) {
   return `${Math.round(s / 3600)} h ago`;
 }
 const metres = (d) => `${Math.round(d * 10) / 10} m`;
+const within = (r) => r < 1 ? `${Math.max(10, Math.round(r * 100))} cm` : metres(r);  // a 95% radius in words
 $('title').textContent = `${nice(zone).replace(/^./, (c) => c.toUpperCase())}`;
 $('namePlaces').href = api('/places');
 if (base) $('namePlaces').parentElement.hidden = true;  // in the family app: naming places is done on the laptop
@@ -328,7 +332,7 @@ wearerTagAt.position.z = 0.16;
 wearer.add(cone, head, stem, puck, rim, arrow, ring, pulse, wearerTagAt);
 pulse.position.z = FLOOR;
 wearer.visible = false;
-const marker = { radius: 0.4, radiusWant: 0.4, stale: false };
+const marker = { radius: 0.4, radiusWant: 0.4, stale: false, pitch: 0, serverTrail: null };
 // the last 30 s of the marker's own (smoothed) way, fading out, on the floor
 const trailLine = onTop(new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ vertexColors: true, transparent: true })), 18);
 const trail = [];  // [{t (s), x, y}]
@@ -675,9 +679,13 @@ async function tickSpace() {
 
 const fresh = (f) => f && f.age_s != null && f.age_s < 45;
 function wearerPose(f) {  // the steady position when there is one (smoother), else the newest fix
+  // Also, when the relay gives them: pitch_deg (head up +), uncertainty_m (95% radius; null when unknown: no ring),
+  // stable.trail ([[t, e, n, u], ...] of the last fused poses) and source ("fused" = matched to the 3D room).
   const s = f && f.stable;
-  if (s && s.position && s.state !== 'lost') return { position: s.position, heading: s.heading_deg || 0, state: f.state === 'unsure' ? 'unsure' : 'found' };
-  if (f && f.position && f.state !== 'lost' && !f.unusable) return { position: f.position, heading: f.heading_deg || 0, state: f.state };
+  const extra = (o) => ({ pitch: Number(o.pitch_deg) || 0, hasRadius: 'uncertainty_m' in o, radius: o.uncertainty_m, source: o.source || f.source });
+  if (s && s.position && s.state !== 'lost') return { position: s.position, heading: s.heading_deg || 0, state: f.state === 'unsure' ? 'unsure' : 'found',
+    ...extra(s), trail: Array.isArray(s.trail) ? s.trail : null };
+  if (f && f.position && f.state !== 'lost' && !f.unusable) return { position: f.position, heading: f.heading_deg || 0, state: f.state, ...extra(f), trail: null };
   return null;
 }
 let lastSeen = null;  // {position, heading, at}: the last live position this page saw
@@ -691,11 +699,10 @@ function knownPose() {  // the live position, else the last known one (stale: tr
   const p = track[track.length - 1];
   return p ? { position: [p[1], p[2], 0], heading: 0, state: 'lost', at: p[0], stale: true } : null;
 }
-const target = { pos: new THREE.Vector3(), heading: 0, has: false };
-function uncertainty(f, pose) {  // metres: the fix's (or the steady pose's) own uncertainty when given, else a guess
-  const given = Number((f && f.uncertainty_m) ?? (f && f.stable && f.stable.uncertainty_m));
-  if (Number.isFinite(given) && given > 0) return Math.min(5, Math.max(0.1, given));
+const target = { pos: new THREE.Vector3(), heading: 0, pitch: 0, has: false };
+function uncertainty(f, pose) {  // metres for the ring: the relay's own 95% radius when it gives one, else a guess; null: no ring
   if (!pose || pose.stale) return 1.5;
+  if (pose.hasRadius) return Number.isFinite(Number(pose.radius)) && pose.radius > 0 ? Math.min(6, Math.max(0.1, Number(pose.radius))) : null;
   const pct = f && f.stable && f.stable.confidence_pct;
   if (Number.isFinite(pct) && pct > 0) return 0.25 + (1 - Math.min(100, pct) / 100) * 1.2;
   return pose.state === 'unsure' ? 0.8 : 0.35;
@@ -722,11 +729,15 @@ function updateWearer() {
   for (const m of [coneMat, puckMat, ringFill.material, ringLine.material, pulse.material]) m.color.setHex(colour);
   marker.stale = stale;
   marker.radiusWant = uncertainty(fix, pose);
-  ringLine.visible = ringFill.visible = pulse.visible = !stale;
+  const ringOn = !stale && marker.radiusWant != null;  // no ring when the relay says it does not know (full or instant fix)
+  ringLine.visible = ringFill.visible = pulse.visible = ringOn;
+  if (ringOn) for (const m of [ringFill.material, ringLine.material]) m.color.setHex(marker.radiusWant > 1 ? colours.unsure : colour);
+  target.pitch = Math.max(-60, Math.min(60, pose.pitch || 0));
+  marker.serverTrail = !stale && Array.isArray(pose.trail) && pose.trail.length > 1 ? pose.trail : null;
   ringDash.visible = stale;
   if (WEARER) finding(stale);
   const words = WEARER ? (stale ? 'Finding you… look around slowly' : 'You are here')
-    : stale ? `Last seen ${clock(pose.at)}` : `Here now · ±${metres(marker.radiusWant)}`;
+    : stale ? `Last seen ${clock(pose.at)}` : `Here now${marker.radiusWant != null ? ` · within ${within(marker.radiusWant)}` : ''}`;
   const t = tag('wearer', words, 'wearer', wearerTagAt, () => toWearer('follow'));
   if (WEARER && autoFollow && mode === 'free' && !flight) setMode(wearerView);
   t.el.classList.toggle('stale', stale);
@@ -1204,7 +1215,9 @@ function renderNow() {
       : here ? `At the ${here.name}, ${stay(fix.at - here.start)} so far.`
       : `In the ${nice(fix.zone || zone)}` + (near ? (near.d <= VISIT_IN_M ? `, at the ${near.name}.` : `, ${metres(near.d)} from the ${near.name}.`) : '.');
     $('nowLine').textContent = where;
-    $('seen').textContent = fresh(fix) ? `Live · position from ${ago(fix.age_s)}` : `Last seen at ${clock(fix.at)}, ${ago(fix.age_s)}`;
+    const sure = pose && pose.hasRadius && Number.isFinite(Number(pose.radius)) ? ` · within ${within(Number(pose.radius))}` : '';
+    const how = pose && pose.source === 'fused' ? ' (matched to the 3D room)' : '';
+    $('seen').textContent = fresh(fix) ? `Live · position from ${ago(fix.age_s)}${sure}${how}` : `Last seen at ${clock(fix.at)}, ${ago(fix.age_s)}`;
   }
   $('doing').innerHTML = doingWords().map((w) => `<div>${esc(w)}</div>`).join('');
   renderGoal();
@@ -1324,7 +1337,13 @@ async function tickSee() {
     seeUrl = url;
     $('seeWhen').textContent = `What the glasses saw at ${clock(fix.at)}`;
     $('see').style.display = 'block';
-  } catch { $('see').style.display = 'none'; } finally { seeBusy = false; }
+    const sp = fix.splat_pose;  // the room's photo the fused pose was matched with (exact-position: splat keyframe PnP)
+    if (sp && sp.placed && sp.keyframe_photo) {
+      if ($('matchedImg').dataset.src !== sp.keyframe_photo) { $('matchedImg').dataset.src = sp.keyframe_photo; $('matchedImg').src = api(sp.keyframe_photo); }
+      $('matchedWhen').textContent = `Matched with the room's photo ${sp.keyframe}${sp.inliers ? ` (${sp.inliers} points agree)` : ''}: they stand near where it was taken.`;
+      $('matched').style.display = 'block';
+    } else $('matched').style.display = 'none';
+  } catch { $('see').style.display = $('matched').style.display = 'none'; } finally { seeBusy = false; }
 }
 
 // Panel folding on a phone.
@@ -1347,7 +1366,9 @@ renderer.setAnimationLoop((now) => {
     const want = -target.heading * Math.PI / 180;
     const diff = Math.atan2(Math.sin(want - wearer.rotation.z), Math.cos(want - wearer.rotation.z));
     wearer.rotation.z += diff * (1 - Math.exp(-dt * 4));
-    marker.radius += (marker.radiusWant - marker.radius) * (1 - Math.exp(-dt * 3));
+    if (marker.radiusWant != null) marker.radius += (marker.radiusWant - marker.radius) * (1 - Math.exp(-dt * 3));
+    marker.pitch += (target.pitch * Math.PI / 180 - marker.pitch) * (1 - Math.exp(-dt * 4));
+    cone.rotation.x = marker.pitch;  // the view cone tilts with their head (local +y is ahead, +z up)
     ring.scale.setScalar(marker.radius);
     const beat = (now / 1600) % 1;  // live: a ring spreading out from the puck every 1.6 s
     pulse.scale.setScalar(0.25 + beat * Math.max(0.4, marker.radius));
@@ -1358,7 +1379,18 @@ renderer.setAnimationLoop((now) => {
       trail.push({ t: secs, x: wearer.position.x, y: wearer.position.y });
     }
     while (trail.length && secs - trail[0].t > TRAIL_S) trail.shift();
-    if (trail.length > 1) {
+    if (marker.serverTrail) {  // the relay's own trail of fused poses (stable.trail), fading with age
+      const pts = marker.serverTrail, newest = pts[pts.length - 1][0];
+      const pos = new Float32Array(pts.length * 3), col = new Float32Array(pts.length * 4);
+      pts.forEach((q, i) => {
+        pos.set([q[1], q[2], FLOOR], i * 3);
+        col.set([0.29, 0.64, 1, Math.max(0.1, 1 - (newest - q[0]) / TRAIL_S) * 0.9], i * 4);
+      });
+      trailLine.geometry.dispose();
+      trailLine.geometry = new THREE.BufferGeometry();
+      trailLine.geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      trailLine.geometry.setAttribute('color', new THREE.BufferAttribute(col, 4));
+    } else if (trail.length > 1) {
       const pos = new Float32Array(trail.length * 3), col = new Float32Array(trail.length * 4);
       trail.forEach((p, i) => {
         pos.set([p.x, p.y, FLOOR], i * 3);
@@ -1369,7 +1401,7 @@ renderer.setAnimationLoop((now) => {
       trailLine.geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       trailLine.geometry.setAttribute('color', new THREE.BufferAttribute(col, 4));
     }
-    trailLine.visible = trail.length > 1;
+    trailLine.visible = !!marker.serverTrail || trail.length > 1;
   }
   if (flight) {
     flight.t = Math.min(1, flight.t + dt / flight.seconds);
@@ -1386,7 +1418,7 @@ renderer.setAnimationLoop((now) => {
     const want = mode === 'eyes' ? w.clone() : w.clone().addScaledVector(ahead, -back).add(new THREE.Vector3(0, back * 0.47, 0));
     const k = 1 - Math.exp(-dt * 4);
     camera.position.lerp(want, k);
-    let aimYaw = yaw, aimPitch = WEARER ? -0.2 : 0;  // the wearer's own view looks a little down: the route on the floor
+    let aimYaw = yaw, aimPitch = marker.pitch + (WEARER ? -0.15 : 0);  // their head's pitch; the wearer's page a bit lower, for the route
     if (mode === 'follow') {  // look at the middle of the marker (between head and puck) from where the camera is now
       const at = w.clone().add(new THREE.Vector3(0, FLOOR / 2, 0)).sub(camera.position);
       aimYaw = Math.atan2(-at.x, -at.z);
@@ -1433,7 +1465,7 @@ function every(ms, fn) {  // the first run happens even in a background tab, so 
 }
 await tickWhere();
 every(8000, tickSpace);  // a place named at any time shows within seconds
-every(1000, tickWhere);
+every(400, tickWhere);  // fused poses come about 3 a second
 if (!WEARER) {
   every(15000, tickDay);
   every(10000, tickReminders);
