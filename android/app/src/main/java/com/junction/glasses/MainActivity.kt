@@ -76,6 +76,17 @@ class MainActivity : ComponentActivity() {
     private var sensed: List<Sensed> = emptyList()
     private var asked: Asked? = null
     private var nightAnsweredAt: Instant? = null
+    /** Where the wearer is being walked to, and since when (guidance stops itself after a while). */
+    private var guideTo: String? = null
+    private var guideSince: Instant? = null
+    private var arrivedAt: Instant? = null
+    private val guideTicker = object : Runnable {
+        override fun run() {
+            if (guideTo == null) return
+            relay?.where { result -> main.post { if (demoScene < 0 && guideTo != null) { result.getOrNull()?.let { fix = it }; showWearer() } } }
+            main.postDelayed(this, GUIDE_REFRESH_MS)
+        }
+    }
     private var demoScene = -1
     private var demoNow: ZonedDateTime? = null
     private var shownCard: Card? = null
@@ -214,6 +225,8 @@ class MainActivity : ComponentActivity() {
             }
             onDone = ::finishReminder
             onDismiss = { nightAnsweredAt = Instant.now(); showWearer() }
+            onGo = ::startGuide
+            onStopGuide = ::stopGuide
             onSetup = { setup.visibility = if (setup.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE }
         }
         setContentView(ScrollView(this).apply {
@@ -333,6 +346,8 @@ class MainActivity : ComponentActivity() {
         cancelDiagnostic()
         stopRecognition(); glasses.stopListening()
         asked = Asked(WearerBrain.classify(text), wearerNow().toInstant(), null)
+        // "Take me to the bathroom": start walking straight away when the relay knows the place.
+        (asked?.topic as? Topic.Go)?.let { go -> fix?.let { WearerBrain.resolve(go.words, it) }?.let { startGuide(it); asked = null } }
         if (demoScene >= 0) { showWearer(); return }
         if (controller == null) { status.text = "Connect the backend first."; if (::wearer.isInitialized) wearer.setStatus("Not connected"); return }
         lastQuestion = text
@@ -481,15 +496,34 @@ class MainActivity : ComponentActivity() {
         if (!::wearer.isInitialized) return
         val now = wearerNow()
         val quietNight = nightAnsweredAt?.let { java.time.Duration.between(it, Instant.now()).toMinutes() < 10 } == true
-        var card = WearerBrain.decide(WearerInputs(now, reminders, fix, sensed, asked, null))
-        if (quietNight && card is Card.Night) card = WearerBrain.decide(WearerInputs(now, reminders, null, emptyList(), asked, null))
+        if (guideTo != null && guideSince?.let { java.time.Duration.between(it, Instant.now()) > GUIDE_LONGEST } == true) stopGuide()
+        var card = WearerBrain.decide(WearerInputs(now, reminders, fix, sensed, asked, guideTo))
+        if (quietNight && card is Card.Night) card = WearerBrain.decide(WearerInputs(now, reminders, null, emptyList(), asked, guideTo))
+        // There: keep the tick on screen a moment, then go back to the usual card.
+        if (card is Card.Guide && card.arrived) {
+            val first = arrivedAt ?: Instant.now().also { arrivedAt = it }
+            if (java.time.Duration.between(first, Instant.now()) > ARRIVED_SHOWN) { stopGuide(); return }
+        } else arrivedAt = null
         wearer.setClock(now.toLocalTime())
         wearer.show(card)
         if (card != shownCard) {
             shownCard = card
             cardJob?.cancel()
-            cardJob = lifecycleScope.launch { glasses.showCard(card, ::finishReminder) }
+            cardJob = lifecycleScope.launch { glasses.showCard(card, ::finishReminder, { main.post { startGuide(it) } }, { main.post { stopGuide() } }) }
         }
+    }
+
+    /** Walk the wearer to a place or item: the card follows each new position fix (every 2 s). */
+    private fun startGuide(target: String) {
+        guideTo = target; guideSince = Instant.now(); arrivedAt = null; asked = null
+        if (target == "bed") nightAnsweredAt = Instant.now()
+        main.removeCallbacks(guideTicker); if (demoScene < 0) main.post(guideTicker)
+        showWearer()
+    }
+    private fun stopGuide() {
+        guideTo = null; guideSince = null; arrivedAt = null
+        main.removeCallbacks(guideTicker)
+        showWearer()
     }
 
     private fun finishReminder(id: String) {
@@ -508,16 +542,20 @@ class MainActivity : ComponentActivity() {
             Fix(true, listOfNotNull(box?.let { Place(WearerBrain.PILL_BOX, it) }, door?.let { Place(WearerBrain.FRONT_DOOR, it) }), seen)
         }
         reminders = emptyList(); fix = null; sensed = emptyList(); asked = null; nightAnsweredAt = null
+        guideTo = null; guideSince = null; arrivedAt = null; main.removeCallbacks(guideTicker)
         demoNow = at(8, 5)
         when (demoScene) {
             0 -> { reminders = listOf(pills); fix = room(Way(3.4, 40), Way(6.0, -150), emptyList()) }
-            1 -> { reminders = listOf(pills); fix = room(Way(0.8, -8), Way(5.0, 170), emptyList()) }
+            // Walking to the pill box after Go: the route goes round the table (next corner, then one turn).
+            1 -> { reminders = listOf(pills); fix = room(Way(2.6, -35, 1), Way(5.0, 170), emptyList()); guideTo = WearerBrain.PILL_BOX; guideSince = Instant.now() }
             2 -> { demoNow = at(8, 41); sensed = listOf(Sensed("pillbox_open", at(8, 0))); asked = Asked(Topic.Pills, demoNow!!.toInstant(), null) }
             3 -> { demoNow = at(8, 41); fix = room(Way(4.2, 120), null, emptyList()); asked = Asked(Topic.Pills, demoNow!!.toInstant(), null) }
             4 -> { demoNow = at(10, 30); fix = room(null, Way(1.2, 0), listOf(Sighting("keys", "Hall table", "09:12", Way(1.5, 35)), Sighting("wallet", "Kitchen", "08:50", null))) }
             5 -> { demoNow = at(3, 11); sensed = listOf(Sensed("door_open", at(3, 10))) }
             6 -> { demoNow = at(9, 45); fix = room(null, null, listOf(Sighting("keys", "Pill box", "09:40", Way(2.5, -70)))); asked = Asked(Topic.Item("keys"), demoNow!!.toInstant(), null) }
             7 -> { demoNow = at(8, 20); sensed = listOf(Sensed("door_open", at(8, 14)), Sensed("door_closed", at(8, 15))); asked = Asked(Topic.Door, demoNow!!.toInstant(), null) }
+            8 -> { demoNow = at(3, 12); sensed = listOf(Sensed("door_open", at(3, 10))); fix = Fix(true, listOf(Place(WearerBrain.FRONT_DOOR, Way(0.6, 0)), Place("bed", Way(6.5, 150, 2))), emptyList()); guideTo = "bed"; guideSince = Instant.now() }
+            9 -> { demoNow = at(14, 0); fix = Fix(true, listOf(Place("bathroom", Way(0.5, 10))), emptyList()); guideTo = "bathroom"; guideSince = Instant.now() }
             else -> { demoNow = at(12, 30); reminders = listOf(Reminder("demo-evening", "Evening pills", "20:00", WearerBrain.PILL_BOX, Reminder.State.LATER)) }
         }
         status.text = "Wearer demo scene ${demoScene + 1} of $DEMO_SCENES"
@@ -529,17 +567,23 @@ class MainActivity : ComponentActivity() {
         // Meta registration and consent intentionally leave this Activity briefly.
         cancelConnectionCheck(); cancelDiagnostic()
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
-        main.removeCallbacks(refresher)
+        main.removeCallbacks(refresher); main.removeCallbacks(guideTicker)
         if (!glasses.isExternalFlowPending) { glasses.stopListening(); glasses.suspendLifecycle() }
         super.onStop()
     }
     override fun onResume() {
         super.onResume()
         main.removeCallbacks(refresher); main.post(refresher)
+        if (guideTo != null && demoScene < 0) { main.removeCallbacks(guideTicker); main.post(guideTicker) }
         if (::glasses.isInitialized) glasses.onResume()
         updatePermissionStatus()
     }
-    private companion object { const val DEMO_SCENES = 9 }
+    private companion object {
+        const val DEMO_SCENES = 11
+        const val GUIDE_REFRESH_MS = 2_000L
+        val GUIDE_LONGEST: java.time.Duration = java.time.Duration.ofMinutes(5)
+        val ARRIVED_SHOWN: java.time.Duration = java.time.Duration.ofSeconds(8)
+    }
     override fun onDestroy() {
         recognizer?.destroy(); glasses.close(); audio.close()
         super.onDestroy()

@@ -27,6 +27,9 @@ class WearerPanel(context: Context) : LinearLayout(context) {
     var onMic: () -> Unit = {}
     var onDone: (String) -> Unit = {}
     var onDismiss: () -> Unit = {}
+    /** Start walking the wearer to a place or item (its relay name). */
+    var onGo: (String) -> Unit = {}
+    var onStopGuide: () -> Unit = {}
     var onSetup: () -> Unit = {}
 
     private val clock = text("--:--", 22f, AMBER, bold = true).apply { gravity = Gravity.START or Gravity.CENTER_VERTICAL }
@@ -98,7 +101,18 @@ class WearerPanel(context: Context) : LinearLayout(context) {
             layoutParams = LayoutParams((size * k).toDp(), (size * k).toDp()).apply { marginEnd = (10 * k).toDp() }
         }
         fun words(value: String, sp: Float, color: Int = fg, bold: Boolean = false) = text(value, sp * k, color, bold)
-        fun way(w: Way?) { if (w != null) row(small(Glyphs.arrowData, 56, AMBER, w.bearingDeg.toFloat()), words(w.metres, 30f, AMBER, true)) }
+        fun turns(w: Way) = if (w.turns > 0) words("  ${w.turns} ${if (w.turns == 1) "turn" else "turns"}", 22f, SOFT) else null
+        fun way(w: Way?) { if (w != null) row(*listOfNotNull(small(Glyphs.arrowData, 56, AMBER, w.bearingDeg.toFloat()), words(w.metres, 30f, AMBER, true), turns(w)).toTypedArray()) }
+        // Phone only: the buttons under a card (Done, Go, Stop, Yes).
+        fun buttons(vararg views: View?) {
+            if (glasses) return
+            val shown = views.filterNotNull(); if (shown.isEmpty()) return
+            col.addView(LinearLayout(context).apply {
+                gravity = Gravity.CENTER
+                shown.forEach { addView(it, LayoutParams(dp(150), dp(64)).apply { marginStart = dp(6); marginEnd = dp(6) }) }
+            }, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(14) })
+        }
+        fun go(target: String?, w: Way?) = if (target != null && w != null) pill(Glyphs.arrowData, "Go") { onGo(target) } else null
         fun time(t: LocalTime?) = if (t == null) "–" else "%02d:%02d".format(t.hour, t.minute)
 
         when (card) {
@@ -111,7 +125,7 @@ class WearerPanel(context: Context) : LinearLayout(context) {
                 glyph(Glyphs.dataFor(card.glyph), 132)
                 col.addView(words(label(card.glyph, card.reminder.text), 40f, fg, true))
                 way(card.way)
-                if (!glasses) col.addView(pill(Glyphs.dataFor(Glyph.CHECK), "Done") { onDone(card.reminder.id) }, LayoutParams(dp(180), dp(64)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(14) })
+                buttons(go(card.target, card.way), pill(Glyphs.dataFor(Glyph.CHECK), "Done") { onDone(card.reminder.id) })
             }
             is Card.Checked -> {
                 val mark = when (card.ok) { true -> Glyph.CHECK; false -> Glyph.CROSS; null -> Glyph.QUESTION }
@@ -119,6 +133,7 @@ class WearerPanel(context: Context) : LinearLayout(context) {
                 row(small(Glyphs.dataFor(card.glyph), 120), small(Glyphs.dataFor(mark), 96, markColor))
                 card.at?.let { col.addView(words(time(it), 64f, fg, true)) }
                 way(card.way)
+                buttons(go(card.target, card.way))
             }
             is Card.GoingOut -> {
                 row(small(Glyphs.dataFor(Glyph.HOUSE), 60, AMBER), words("Going out?", 34f, fg, true))
@@ -129,17 +144,28 @@ class WearerPanel(context: Context) : LinearLayout(context) {
                 glyph(Glyphs.dataFor(Glyph.MOON), 110, AMBER)
                 col.addView(words(time(card.at), 56f, fg, true))
                 row(small(Glyphs.dataFor(Glyph.BED), 60), words("Bed?", 36f, fg, true))
-                if (!glasses) col.addView(pill(Glyphs.dataFor(Glyph.BED), "Yes") { onDismiss() }, LayoutParams(dp(180), dp(64)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(14) })
+                way(card.way)
+                // Yes walks her to bed when the relay knows the way; otherwise it just quietens the card.
+                buttons(pill(Glyphs.dataFor(Glyph.BED), "Yes") { if (card.way != null) onGo("bed") else onDismiss() })
             }
             is Card.Guide -> {
-                glyph(Glyphs.arrowData, 170, AMBER, card.way.bearingDeg.toFloat())
-                row(small(Glyphs.dataFor(card.glyph), 64), words(card.way.metres, 44f, fg, true))
+                val w = card.way
+                when {
+                    card.arrived -> { glyph(Glyphs.dataFor(Glyph.CHECK), 150, GREEN); row(small(Glyphs.dataFor(card.glyph), 64), words("Here", 44f, fg, true)) }
+                    w == null -> { glyph(Glyphs.dataFor(Glyph.EYE), 130, SOFT); row(small(Glyphs.dataFor(card.glyph), 64), words("…", 44f, SOFT, true)) }
+                    else -> {
+                        glyph(Glyphs.arrowData, 170, AMBER, w.bearingDeg.toFloat())
+                        row(*listOfNotNull(small(Glyphs.dataFor(card.glyph), 64), words(w.metres, 44f, fg, true), turns(w)).toTypedArray())
+                    }
+                }
+                buttons(pill(Glyphs.dataFor(Glyph.CROSS), "Stop") { onStopGuide() })
             }
             is Card.Found -> {
                 glyph(Glyphs.dataFor(card.glyph), 110)
                 col.addView(words(card.near ?: "Seen", 40f, fg, true))
                 card.time?.let { row(small(Glyphs.dataFor(Glyph.CLOCK), 32, SOFT), words(it, 26f, SOFT)) }
                 way(card.way)
+                buttons(go(card.target, card.way))
             }
             is Card.Said -> col.addView(words(card.text, 30f, fg).apply { gravity = Gravity.CENTER })
         }
