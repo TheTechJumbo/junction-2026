@@ -71,6 +71,8 @@ import com.junction.glasses.live.FailoverRelay
 import com.junction.glasses.live.ChunkDrain
 import com.junction.glasses.live.ChunkQueue
 import com.junction.glasses.live.RelayFailure
+import com.junction.glasses.live.RelayPageProxy
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import com.junction.glasses.core.RelayClient as WearerRelayClient
@@ -215,6 +217,8 @@ class MainActivity : ComponentActivity() {
     private var navJob: Job? = null
     /** The zone's place names, for matching what the wearer says; refreshed with the map. */
     private var knownPlaces: List<String> = emptyList()
+    /** Things the relay has seen ("orange box"): "where is" asks /find about them, "take me to" walks there. */
+    private var knownThings: List<String> = emptyList()
     /** The live camera was started for guidance (to keep fixes coming) and stops with it. */
     private var navStartedLive = false
     private var navRelayFor: String? = null
@@ -227,6 +231,17 @@ class MainActivity : ComponentActivity() {
     /** The newest map reply, so a found thing can be drawn without asking the relay again. */
     private var lastMapReply: NavReply? = null
     private lateinit var takeMeThere: Button
+    /** The whole screen (wearer panel, map, then the setup section), for scrolling to setup. */
+    private lateinit var page: ScrollView
+    // The wearer's 3D view: the relay's page with the room as a Gaussian splat, in a WebView next to the
+    // flat map ("Map / 3D"). The key is added by RelayPageProxy, never put in a page address.
+    private lateinit var roomSlot: android.widget.FrameLayout
+    private lateinit var mapToggle: Button
+    private lateinit var roomToggle: Button
+    private var room3d: android.webkit.WebView? = null
+    private var room3dUrl: String? = null
+    private var show3d = false
+    private val pageProxy = RelayPageProxy({ pageTarget() })
     /**
      * The venue the map and guidance use (debug extra venue_zone, remembered), apart from the zone field
      * that recordings go to, so recordings can go to a test zone while the wearer is guided in the venue.
@@ -488,7 +503,7 @@ class MainActivity : ComponentActivity() {
             onDismiss = { screen.dismissNight() }
             onGo = { screen.startGuide(it) }
             onStopGuide = { screen.stopGuide() }
-            onSetup = { setup.visibility = if (setup.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE }
+            onSetup = { if (setup.visibility == android.view.View.VISIBLE) setup.visibility = android.view.View.GONE else openSetup() }
         }
         screen = WearerController(wearer, main, home, speak = { line -> audio.speakFallback(line) {} }, toGlasses = { card ->
             cardJob?.cancel()
@@ -500,17 +515,29 @@ class MainActivity : ComponentActivity() {
             onPlaceTap = { name -> startNavigation(name) }
             onStop = { stopNavigation("Stopped.") }
         }
+        mapToggle = Button(this).apply { text = "Map"; isAllCaps = false; textSize = 20f; setOnClickListener { setRoomView(false) } }
+        roomToggle = Button(this).apply { text = "3D"; isAllCaps = false; textSize = 20f; setOnClickListener { setRoomView(true) } }
+        stylePill(mapToggle, true); stylePill(roomToggle, false)
+        roomSlot = android.widget.FrameLayout(this).apply {
+            addView(navMap, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
+        }
         takeMeThere = Button(this).apply {
             isAllCaps = false; textSize = 20f; visibility = android.view.View.GONE
             stylePill(this, true)
             setOnClickListener { findWhat?.let { startNavigation(it) } }
         }
-        setContentView(ScrollView(this).apply {
+        page = ScrollView(this)
+        setContentView(page.apply {
             setBackgroundColor(WearerPanel.NIGHT); isFillViewport = true
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
                 addView(wearer)
-                addView(navMap, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(320)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(mapToggle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(0, 0, dp(6), 0) })
+                    addView(roomToggle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(6), 0, 0, 0) })
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), 0, dp(20), dp(8)) })
+                addView(roomSlot, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(380)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
                 addView(takeMeThere, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), dp(4), dp(20), dp(4)) })
                 // Small and dim, and it opens only on a long press, so the wearer does not open it by accident.
                 addView(TextView(this@MainActivity).apply {
@@ -581,6 +608,7 @@ class MainActivity : ComponentActivity() {
             getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).edit().putString(VENUE_ZONE, zone).apply()
             navRelayFor = null
             refreshMap()
+            if (show3d) setRoomView(true)
         }
         extras.alwaysOn?.let { on ->
             RecordingService.setWanted(this, on)
@@ -1433,6 +1461,8 @@ class MainActivity : ComponentActivity() {
         // "Find me / where is / where did I put / have you seen <thing>" that is not a named place: the relay looks.
         // Without a relay the question goes on to the backend as before.
         if (find is FindCommand.Find && navRelay() != null) { startFind(find.what); return }
+        // "Take me to the orange box": a thing the relay has seen is walked to like a place.
+        (NavPhrases.parse(text, knownThings) as? NavCommand.GoTo)?.let { startNavigation(it.place); return }
         if (screen.ask(text)) return // the wearer demo answers by itself
         if (controller == null) { status.text = "Connect the backend first."; if (::wearer.isInitialized) wearer.setStatus("Not connected"); return }
         lastQuestion = text
@@ -1626,6 +1656,11 @@ class MainActivity : ComponentActivity() {
                     note.text = "Copied (addresses, key prints and states only: no keys or tokens)."
                 })
             })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL; setPadding(dp(8), 0, dp(8), 0)
+                addView(small("Change settings") { showSettingsDialog { message -> note.text = message; render() } })
+                addView(small("Full setup") { debugDialog?.dismiss(); openSetup() })
+            })
             addView(note)
             addView(ScrollView(this@MainActivity).apply { addView(report) },
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
@@ -1641,6 +1676,171 @@ class MainActivity : ComponentActivity() {
             .setOnDismissListener { main.removeCallbacks(ticker); debugDialog = null }
             .show()
         main.postDelayed(ticker, 2_000)
+    }
+
+    // ---- The wearer's 3D view ----
+
+    /** Where the 3D page's requests go: the relay's USB address, then its Wi-Fi one, with the key. */
+    private fun pageTarget(): RelayPageProxy.Target? {
+        val key = relayKey?.takeIf { it.isNotBlank() } ?: return null
+        val addresses = listOfNotNull(relayUrl, relayLanUrl).distinct().mapNotNull { raw ->
+            raw.trim().toHttpUrlOrNull()?.takeIf { it.isHttps || LocalHosts.cleartextAllowed(it.host, BuildConfig.DEBUG) }
+        }
+        return if (addresses.isEmpty()) null else RelayPageProxy.Target(addresses, key)
+    }
+
+    /** Map (the flat map, the default) or 3D (the relay's page: the wearer in the venue's splat). */
+    private fun setRoomView(threeD: Boolean) {
+        if (threeD && pageTarget() == null) {
+            if (::wearer.isInitialized) wearer.setStatus("Set up the relay first")
+            return
+        }
+        show3d = threeD
+        stylePill(mapToggle, !threeD); stylePill(roomToggle, threeD)
+        if (!threeD) {
+            room3d?.let { it.onPause(); it.visibility = android.view.View.GONE }
+            navMap.visibility = android.view.View.VISIBLE
+            return
+        }
+        val zone = venueZone?.takeIf { RelayClient.isZone(it) } ?: cardZone().takeIf { RelayClient.isZone(it) } ?: relayZone
+        val web = room3d ?: createRoomView().also {
+            room3d = it
+            roomSlot.addView(it, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+        val url = RelayPageProxy.startUrl(zone)
+        if (url != room3dUrl) { room3dUrl = url; web.loadUrl(url) }
+        web.onResume()
+        web.visibility = android.view.View.VISIBLE
+        navMap.visibility = android.view.View.INVISIBLE
+    }
+
+    @android.annotation.SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+    private fun createRoomView() = android.webkit.WebView(this).apply {
+        setBackgroundColor(WearerMap.MAP_BACK)
+        contentDescription = "The room in 3D"
+        settings.apply {
+            javaScriptEnabled = true // the 3D room is a JavaScript page (three.js and Spark)
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+            javaScriptCanOpenWindowsAutomatically = false
+            setSupportMultipleWindows(false)
+            setSupportZoom(false)
+            builtInZoomControls = false
+            mediaPlaybackRequiresUserGesture = true
+        }
+        // Dragging turns the 3D view; the page's scrolling would otherwise take the gesture.
+        setOnTouchListener { v, _ -> v.parent?.requestDisallowInterceptTouchEvent(true); false }
+        webViewClient = object : android.webkit.WebViewClient() {
+            override fun shouldInterceptRequest(view: android.webkit.WebView, request: android.webkit.WebResourceRequest): android.webkit.WebResourceResponse? {
+                val url = request.url
+                // Only the app's own origin is answered here (/relay/... goes to the laptop with the key);
+                // the page's libraries (three.js, Spark) load from their CDN as in a browser.
+                if (url.scheme != "https" || url.host != android.net.Uri.parse(RelayPageProxy.ORIGIN).host) return null
+                val result = pageProxy.handle(request.method, url.encodedPath.orEmpty(), url.encodedQuery)
+                return android.webkit.WebResourceResponse(result.mimeType, result.encoding, result.status, result.reason, result.headers, result.body)
+            }
+
+            override fun shouldOverrideUrlLoading(view: android.webkit.WebView, request: android.webkit.WebResourceRequest): Boolean =
+                request.url.host != android.net.Uri.parse(RelayPageProxy.ORIGIN).host // stay on the page
+
+            override fun onRenderProcessGone(view: android.webkit.WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                // The 3D page is heavy: on a renderer crash, drop it and go back to the flat map.
+                roomSlot.removeView(view); view.destroy()
+                room3d = null; room3dUrl = null
+                setRoomView(false)
+                if (::wearer.isInitialized) wearer.setStatus("3D view closed; the map is shown")
+                return true
+            }
+        }
+    }
+
+    /** Shows the setup section (every setup card) and scrolls to it. */
+    private fun openSetup() {
+        setup.visibility = android.view.View.VISIBLE
+        if (::page.isInitialized) page.post { page.smoothScrollTo(0, setup.top) }
+    }
+
+    /**
+     * The settings the debug panel shows, editable: relay addresses, relay key, recording zone, map and
+     * guidance zone, backend address and token. Keys and tokens are never filled in or shown: left empty
+     * they stay as they are. Saved the same way as the adb extras (remembered in debug builds).
+     */
+    private fun showSettingsDialog(done: (String) -> Unit) {
+        fun field(hint: String, value: String?, secret: Boolean = false) = EditText(this).apply {
+            this.hint = hint; isSingleLine = true; isSaveEnabled = false
+            inputType = if (secret) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_VARIATION_URI
+            importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+            setText(value.orEmpty())
+        }
+        fun caption(text: String) = TextView(this).apply { this.text = text; textSize = 12f; setPadding(0, dp(10), 0, 0) }
+        val relayAddress = field("http://127.0.0.1:8090", relayUrl)
+        val relayWifi = field("http://<laptop LAN address>:8090 (optional)", relayLanUrl)
+        val relayKeyField = field("unchanged (print ${KeyPrint.of(relayKey)})", null, secret = true)
+        val recordingZone = field("always-on-test", cardZone())
+        val mapZone = field("kitchen (empty: the recording zone)", venueZone)
+        val backendAddress = field("http://127.0.0.1:8000", configuredOrigin ?: endpoint.text.toString().trim())
+        val backendToken = field("unchanged (print ${configuredClient?.tokenPrint ?: "not connected"})", null, secret = true)
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8))
+            addView(caption("Relay (USB, with adb reverse)")); addView(relayAddress)
+            addView(caption("Relay over Wi-Fi (when the cable is out)")); addView(relayWifi)
+            addView(caption("Relay key")); addView(relayKeyField)
+            addView(caption("Recording zone (where recordings go)")); addView(recordingZone)
+            addView(caption("Map and guidance zone (the venue)")); addView(mapZone)
+            addView(caption("Backend")); addView(backendAddress)
+            addView(caption("Backend token")); addView(backendToken)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Change settings")
+            .setView(ScrollView(this).apply { addView(form) })
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                done(applySettings(relayAddress.text.toString().trim(), relayWifi.text.toString().trim(), relayKeyField.text.toString().trim(),
+                    recordingZone.text.toString().trim(), mapZone.text.toString().trim(), backendAddress.text.toString().trim(),
+                    backendToken.text.toString().trim()))
+                relayKeyField.text.clear(); backendToken.text.clear()
+            }
+            .show()
+    }
+
+    /** Applies the settings dialog; returns what changed or what was not accepted (never a key or token). */
+    private fun applySettings(url: String, lanUrl: String, key: String, zone: String, mapZone: String, backendUrl: String, backendToken: String): String {
+        val problems = mutableListOf<String>()
+        val changed = mutableListOf<String>()
+        // Relay addresses and zone are checked with the client's own rules before anything is saved.
+        val keyForCheck = key.ifEmpty { relayKey.orEmpty() }.ifEmpty { "check" }
+        val urlOk = try { RelayClient(url, keyForCheck, RelayClient.DEFAULT_ZONE, allowLocalHttp = BuildConfig.DEBUG); true } catch (_: Exception) { false }
+        val lanOk = lanUrl.isEmpty() || try { RelayClient(lanUrl, keyForCheck, RelayClient.DEFAULT_ZONE, allowLocalHttp = BuildConfig.DEBUG); true } catch (_: Exception) { false }
+        if (!urlOk) problems += "relay address not accepted"
+        if (!lanOk) problems += "Wi-Fi address not accepted"
+        if (!RelayClient.isZone(zone)) problems += "recording zone uses a-z, 0-9, _ and -"
+        if (mapZone.isNotEmpty() && !RelayClient.isZone(mapZone)) problems += "map zone uses a-z, 0-9, _ and -"
+        if (urlOk && lanOk && RelayClient.isZone(zone)) {
+            if (url != relayUrl || lanUrl != relayLanUrl.orEmpty() || key.isNotEmpty() || zone != relayZone || zone != cardZone()) changed += "relay"
+            if (lanUrl.isEmpty() && relayLanUrl != null) { relayLanUrl = null; backendMemory?.saveRelayLanUrl(null) }
+            applyRelaySettings(url, key.ifEmpty { null }, zone, lanUrl.ifEmpty { null })
+        }
+        if (mapZone.isEmpty() || RelayClient.isZone(mapZone)) {
+            if (mapZone != venueZone.orEmpty()) changed += "map zone"
+            getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).edit().apply { if (mapZone.isEmpty()) remove(VENUE_ZONE) else putString(VENUE_ZONE, mapZone) }.apply()
+            navRelayFor = null
+            refreshMap()
+            if (show3d) setRoomView(true)
+        }
+        // The backend: a new token, or a new address with the remembered token, reconnects it.
+        val origin = configuredOrigin
+        if (backendToken.isNotEmpty() || (backendUrl.isNotEmpty() && backendUrl != origin)) {
+            val secret = backendToken.ifEmpty { backendMemory?.load()?.second.orEmpty() }
+            if (secret.isEmpty()) problems += "enter the backend token for a new backend address"
+            else { endpoint.setText(backendUrl); connectAutomatically(secret); changed += "backend (checking)" }
+        }
+        return when {
+            problems.isNotEmpty() -> "Not saved: " + problems.joinToString("; ") + "." + if (changed.isNotEmpty()) " Saved: " + changed.joinToString() + "." else ""
+            changed.isEmpty() -> "Nothing changed."
+            else -> "Saved: " + changed.joinToString() + ". Refresh to check."
+        }
     }
 
     /** Asks each relay address (USB and Wi-Fi) for the zone's places and the backend for one event, then [done]. */
@@ -1702,7 +1902,12 @@ class MainActivity : ComponentActivity() {
         if (!::navMap.isInitialized || navGuide != null) return
         val relay = navRelay() ?: return
         lifecycleScope.launch {
-            try { relay.call { it.placeNames() }.takeIf { it.isNotEmpty() }?.let { knownPlaces = it } } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+            try {
+                relay.call { it.spots() }.takeIf { it.isNotEmpty() }?.let { spots ->
+                    knownPlaces = spots.filter { it.second != "object" }.map { it.first }
+                    knownThings = spots.filter { it.second == "object" }.map { it.first }
+                }
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { }
             try {
                 val reply = relay.call { it.navigate(null) }
                 if (navGuide == null) renderMap(reply, null)
@@ -1712,7 +1917,10 @@ class MainActivity : ComponentActivity() {
 
     private fun renderMap(reply: NavReply, target: String?) {
         lastMapReply = reply
-        if (reply.places.isNotEmpty()) knownPlaces = (knownPlaces + reply.places.map { it.name }).distinct()
+        if (reply.places.isNotEmpty()) {
+            knownPlaces = (knownPlaces + reply.places.filterNot { it.isThing }.map { it.name }).distinct()
+            knownThings = (knownThings + reply.places.filter { it.isThing }.map { it.name }).distinct()
+        }
         val found = foundItem?.takeIf { f -> reply.places.none { it.name.equals(f.name, ignoreCase = true) } }
         navMap.show(reply.plan, reply.places + listOfNotNull(found), reply.position, reply.headingDeg, if (target != null) reply.route else emptyList(),
             target, if (!reply.ok) reply.error else null, foundItem?.name)
@@ -1825,6 +2033,7 @@ class MainActivity : ComponentActivity() {
         cancelConnectionCheck(); cancelDiagnostic()
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
         screen.pause(); main.removeCallbacks(mapRefresher)
+        room3d?.onPause()
         cancelAutomaticRetry()
         stopLiveCamera("Live camera stopped because the app left the screen.")
         stopRecording("Recording stopped because the app left the screen. Nothing was uploaded; record again when ready.")
@@ -1838,6 +2047,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         screen.resume(); main.removeCallbacks(mapRefresher); main.post(mapRefresher)
+        if (show3d) room3d?.onResume()
         if (::glasses.isInitialized) glasses.onResume()
         updatePermissionStatus()
         // Leaving the foreground disconnects the glasses (onStop); automatic setup reconnects once per return.
@@ -1860,6 +2070,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         debugDialog?.dismiss(); debugDialog = null
+        room3d?.destroy(); room3d = null
         navJob?.cancel(); navGuide = null
         findJob?.cancel(); findJob = null
         stopLiveCamera("Live camera is off.")
