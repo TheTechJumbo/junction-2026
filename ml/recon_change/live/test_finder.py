@@ -168,10 +168,12 @@ class Gateway:
     """The next fix it answers is whatever the test puts in self.next; it keeps every job it was sent."""
 
     def __init__(self):
-        self.next, self.jobs = None, []
+        self.next, self.jobs, self.live = None, [], []
 
     def call(self, header, blob=b""):
         self.jobs.append(header)
+        if header["op"] == "detect":  # the item finder alone on the newest photo (find me X, live)
+            return {"ok": True, "job": f"live{len(self.jobs)}", "result": {"items_live": list(self.live), "seconds": {"items": 0.4}}}, b""
         if header["op"] == "locate" and header.get("grow") is False:  # a search of an older photo: nothing in it
             return {"ok": True, "job": f"old{len(self.jobs)}", "result": {**json.loads(json.dumps(self.next)), "items_candidates": []}}, b""
         if header["op"] == "locate":
@@ -290,6 +292,20 @@ def test_relay():
     assert status == 200 and got["ok"] and not got["found"] and got["looking"] and got["position"] is None, got
     status, got = call(f"/waypoints?zone={ZONE}")
     assert any(w["name"] == "orange box" and w.get("kind") == "object" for w in got["waypoints"]), got
+    # live: after a /find, each new photo also gets the item finder alone; its box outlines the newest photo
+    gateway.live = [{"name": "orange box", "score": 0.41, "box": [0.2, 0.3, 0.35, 0.5], "accepted": False, "colour": 0.7},
+                    {"name": "orange box", "score": 0.5, "box": [0.6, 0.6, 0.7, 0.7], "accepted": False, "colour": 0.05}]
+    detects = sum(1 for j in gateway.jobs if j["op"] == "detect")
+    send(fix([box(TABLE)]))
+    for _ in range(50):
+        status, got = call(f"/find?zone={ZONE}&what=orange+box")
+        if got.get("live"):
+            break
+        time.sleep(0.1)
+    assert sum(1 for j in gateway.jobs if j["op"] == "detect") == detects + 1, "one detect per new photo while asked"
+    assert got["live"]["box2d"] == [0.2, 0.3, 0.35, 0.5] and got["box2d"] == [0.2, 0.3, 0.35, 0.5], got  # not the grey one
+    assert got["live"]["image"].endswith("/seen.jpg") and got["live"]["latency_s"] < 5 and got["image"] == got["live"]["image"], got
+    gateway.live = []
     # moved to the snack table
     send(fix([box(SNACKS)]))
     reply = send(fix([box([-2.0, 1.2, 0.8])]))

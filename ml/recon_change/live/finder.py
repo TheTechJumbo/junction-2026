@@ -270,6 +270,15 @@ class Finder:
             return False, f"colour share {colour} < {COLOUR_LEAST}"
         return True, ""
 
+    def check_live(self, box):
+        """The checks a live box (worker op "detect": no depth, so no position or size) must pass: score and colour."""
+        name = box.get("name")
+        if name in WORKER_ITEMS and not box.get("accepted"):
+            return False
+        if (box.get("score") or 0) < LIMITS.get(name, DEFAULT_LIMIT):
+            return False
+        return box.get("colour") is None or box["colour"] >= COLOUR_LEAST
+
     def observe(self, zone, boxes, places, job, at=None, image=None, source="fix"):
         """One fix's boxes (its "items" and "items_candidates"; or the zone's pictures, source "pictures") -> events: a
         new sighting ("seen") or a move ("moved"), each {"kind", "zone", "name", "position", "at", "near", "near_m",

@@ -354,6 +354,28 @@ def room_map(model, job, req):
             "kept_share": round(float(shown.mean()), 3), "seconds": seconds, **INFO}
 
 
+def detect(job, req):
+    """Op "detect" (the relay's live outline for "find me X"): the item finder alone on the newest photo, no position
+    fix and no VGGT. Every box of the names asked from the candidates' floor up, with its colour share, in 0..1 of the
+    photo as sent (big.jpg, the same shape). About a second on the L4, so it fits between full fixes."""
+    names = [n for n in req.get("look_for") or [] if isinstance(n, str)][:8]
+    if "model" not in ITEM_DETECTOR:
+        raise RuntimeError(ITEM_DETECTOR.get("error", "the item finder is not loaded"))
+    picture = items.big_frame(job / req["file"])
+    if picture is None:
+        frames = clip_frames(job, req, 1)
+        picture = frames[-1] if frames else None
+    if picture is None:
+        raise RuntimeError("No picture to look at.")
+    t0 = time.time()
+    floor = items.CANDIDATES if items.CANDIDATES > 0 else 0.25
+    found = ITEM_DETECTOR["model"].candidates(picture, names, floor=floor) if names else []
+    live = [{"name": d["name"], "score": d["score"], "box": d["box"], "accepted": bool(d["accepted"]),
+             "colour": items.colour_share(picture, d["box"], d["name"])} for d in found]
+    return {"items_live": live, "items_looked_for": names, "frame": {"width": picture.shape[1], "height": picture.shape[0]},
+            "seconds": {"items": round(time.time() - t0, 3)}, **INFO}
+
+
 def find_in_pictures(req, recon, frames, pick, room, valid, seconds):
     """Op "spots" with look_for (the relay's "find me X"): those names looked for in the pass's pictures, each box placed
     on the map (items.in_pictures). None when nothing was asked; a list with a note when the finder is not loaded."""
@@ -670,6 +692,7 @@ def main():
             ITEM_DETECTOR["error"] = f"{type(error).__name__}: {error}"[:300]
             INFO["settings"]["items"] = {"model": items.MODEL_ID, "names": ITEMS, "error": ITEM_DETECTOR["error"]}
             print(f"Item detector NOT loaded: {traceback.format_exc()}", flush=True)
+    INFO["ops"] = ["baseline", "check", "locate", "map", "spots", "recording_map", "detect"]  # the gateway asks before "detect"
     (DATA / f"worker{LANE}.json").write_text(json.dumps(INFO))
     print("worker ready", flush=True)
 
@@ -691,7 +714,7 @@ def main():
             try:
                 req = json.loads((job / "request.json").read_text())
                 run = {"baseline": lambda: set_baseline(job, req), "locate": lambda: where(model, job, req),
-                       "map": lambda: room_map(model, job, req), "spots": lambda: room_map(model, job, req),
+                       "map": lambda: room_map(model, job, req), "spots": lambda: room_map(model, job, req), "detect": lambda: detect(job, req),
                        "recording_map": lambda: recording_map(model, job, req)}
                 result = run.get(req["op"], lambda: check(model, job, req))()
                 memory = ""

@@ -531,8 +531,15 @@ def handle(req, blob):
         return handle_recording(op, req, blob)
     if op == "recording_map" and not re.fullmatch(SESSION_NAME, str(req.get("session", ""))):
         return {"ok": False, "error": "bad request: session"}, b""
-    if op not in ("baseline", "check", "locate", "map", "spots", "recording_map"):
+    if op not in ("baseline", "check", "locate", "map", "spots", "recording_map", "detect"):  # detect: find me X, live
         return {"ok": False, "error": "bad request: unknown op"}, b""
+    if op == "detect":  # an older worker runs an op it does not know as a change check: only one that says it can
+        try:
+            ops = json.loads((ROOT / f"worker{lane(device)}.json").read_text()).get("ops") or []
+        except (OSError, ValueError, AttributeError):
+            ops = []
+        if "detect" not in ops:
+            return {"ok": False, "error": "the worker cannot detect yet: deploy live/worker.py and restart it"}, b""
     if not blob and op not in ("map", "spots", "recording_map"):  # made from the zone's own pictures or recording: nothing is sent
         return {"ok": False, "error": "empty clip"}, b""
     if age is None or age > STALE_S:
