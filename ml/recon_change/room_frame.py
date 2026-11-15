@@ -13,7 +13,19 @@ import numpy as np
 
 def load(path):
     f = json.load(open(path))
+    if "matrix" in f and "origin" not in f:  # the relay's GET /care/space reply, saved as it came
+        return from_matrix(f["matrix"])
     return {k: np.asarray(f[k], float) for k in ("origin", "east", "north", "up")} | {"metres": float(f.get("metres", 1.0))}
+
+
+def from_matrix(matrix):
+    """The relay's 4x4 matrix from a trained splat into the room map (GET /care/space: scale times a
+    turn, then a shift) as a frame: map = metres * turn @ (p - origin)."""
+    m = np.asarray(matrix, float)
+    metres = float(np.cbrt(abs(np.linalg.det(m[:3, :3]))))
+    u, _, vt = np.linalg.svd(m[:3, :3] / metres)  # the nearest true turn (the matrix is rounded)
+    turn = u @ vt
+    return {"origin": -turn.T @ m[:3, 3] / metres, "east": turn[0], "north": turn[1], "up": turn[2], "metres": metres}
 
 
 def to_room(points, frame):

@@ -130,11 +130,16 @@ def find(m, places, walks=NIGHT_WALKS, up="-y"):
             "hazards": hazards}
 
 
+def the(name):
+    """"the bed", but "our table" (a place named with our, my or the keeps its own word)."""
+    return name if name.split(" ", 1)[0] in ("our", "my", "the") else f"the {name}"
+
+
 def words(across, walk, near):
     size = f"about {int(round(across * 100, -1))} cm across" if across < 1 else f"about {across:.1f} m across"
     if walk:
-        return f"Something on the floor between the {walk[0]} and the {walk[1]}, {size}."
-    return f"Something moved on the floor near the {near}, {size}. Not in a walking route." if near else f"Something moved on the floor, {size}."
+        return f"Something on the floor between {the(walk[0])} and {the(walk[1])}, {size}."
+    return f"Something moved on the floor near {the(near)}, {size}. Not in a walking route." if near else f"Something moved on the floor, {size}."
 
 
 def main(argv):

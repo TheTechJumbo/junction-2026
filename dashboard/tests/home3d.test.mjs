@@ -34,3 +34,10 @@ test('the example files agree with what the pipeline writes', () => {
   assert.equal(n.summary.trips, n.trips.length); assert.ok(n.points.length > 100);
   assert.ok(n.points.every((p, i, all) => i === 0 || all[i - 1].t <= p.t));
 });
+
+test('the venue example (venue_home.py) is a real recording, its night simulated and said so', () => {
+  const h = fixture('venue/hazards.json'), n = fixture('venue/night.json');
+  assert.equal(h.up, 'z'); assert.match(h.label, /simulated/); assert.ok(h.hazards.every(z => z.words && z.centre.length === 3));
+  assert.ok(n.simulated); assert.ok(n.base && n.base !== 'bed'); assert.equal(n.summary.trips, n.trips.length);
+  assert.ok(n.stops.some(s => s.place === n.base)); assert.ok(n.points.every((p, i, all) => i === 0 || all[i - 1].t <= p.t));
+});

@@ -1,0 +1,319 @@
+{
+ "floor": -0.788,
+ "up": "z",
+ "method": "shape (one splat, no change information)",
+ "walks": [
+  [
+   "our table",
+   "snack table",
+   [
+    [
+     0.036,
+     0.441,
+     -0.189
+    ],
+    [
+     -0.227,
+     -3.432,
+     -0.214
+    ]
+   ]
+  ],
+  [
+   "our table",
+   "IronShard booth",
+   [
+    [
+     0.036,
+     0.441,
+     -0.189
+    ],
+    [
+     -7.652,
+     3.544,
+     0.132
+    ]
+   ]
+  ],
+  [
+   "our table",
+   "drinks fridge",
+   [
+    [
+     0.036,
+     0.441,
+     -0.189
+    ],
+    [
+     -8.91,
+     3.76,
+     0.02
+    ]
+   ]
+  ],
+  [
+   "our table",
+   "exit door",
+   [
+    [
+     0.036,
+     0.441,
+     -0.189
+    ],
+    [
+     -8.36,
+     4.26,
+     0.52
+    ]
+   ]
+  ]
+ ],
+ "hazards": [
+  {
+   "centre": [
+    -0.391,
+    -3.335,
+    -0.525
+   ],
+   "across_m": 0.68,
+   "height_m": 0.6,
+   "in_the_way": true,
+   "walk": [
+    "our table",
+    "snack table"
+   ],
+   "walks": [
+    [
+     "our table",
+     "snack table"
+    ]
+   ],
+   "near": "snack table",
+   "method": "shape",
+   "words": "Possible trip hazard: something on the floor between our table and the snack table, about 70 cm across.",
+   "id": "h1"
+  },
+  {
+   "centre": [
+    -5.641,
+    2.959,
+    -0.39
+   ],
+   "across_m": 0.3,
+   "height_m": 0.54,
+   "in_the_way": true,
+   "walk": [
+    "our table",
+    "IronShard booth"
+   ],
+   "walks": [
+    [
+     "our table",
+     "IronShard booth"
+    ],
+    [
+     "our table",
+     "drinks fridge"
+    ],
+    [
+     "our table",
+     "exit door"
+    ]
+   ],
+   "near": "IronShard booth",
+   "method": "shape",
+   "words": "Possible trip hazard: something on the floor between our table and the IronShard booth, about 30 cm across.",
+   "id": "h2"
+  },
+  {
+   "centre": [
+    -6.98,
+    3.701,
+    -0.304
+   ],
+   "across_m": 0.3,
+   "height_m": 0.6,
+   "in_the_way": true,
+   "walk": [
+    "our table",
+    "IronShard booth"
+   ],
+   "walks": [
+    [
+     "our table",
+     "IronShard booth"
+    ],
+    [
+     "our table",
+     "exit door"
+    ]
+   ],
+   "near": "IronShard booth",
+   "method": "shape",
+   "words": "Possible trip hazard: something on the floor between our table and the IronShard booth, about 30 cm across.",
+   "id": "h3"
+  },
+  {
+   "centre": [
+    -8.415,
+    3.331,
+    -0.253
+   ],
+   "across_m": 0.29,
+   "height_m": 0.6,
+   "in_the_way": true,
+   "walk": [
+    "our table",
+    "drinks fridge"
+   ],
+   "walks": [
+    [
+     "our table",
+     "drinks fridge"
+    ]
+   ],
+   "near": "drinks fridge",
+   "method": "shape",
+   "words": "Possible trip hazard: something on the floor between our table and the drinks fridge, about 30 cm across.",
+   "id": "h4"
+  },
+  {
+   "centre": [
+    -1.434,
+    -3.171,
+    -0.397
+   ],
+   "across_m": 0.83,
+   "height_m": 0.6,
+   "in_the_way": false,
+   "walk": null,
+   "walks": [],
+   "near": "snack table",
+   "method": "shape",
+   "words": "Possible trip hazard: something moved on the floor near the snack table, about 80 cm across. Not in a walking route.",
+   "id": "h5"
+  },
+  {
+   "centre": [
+    -4.408,
+    -4.452,
+    -0.408
+   ],
+   "across_m": 0.42,
+   "height_m": 0.56,
+   "in_the_way": false,
+   "walk": null,
+   "walks": [],
+   "near": "snack table",
+   "method": "shape",
+   "words": "Possible trip hazard: something moved on the floor near the snack table, about 40 cm across. Not in a walking route.",
+   "id": "h6"
+  },
+  {
+   "centre": [
+    2.13,
+    -0.242,
+    -0.277
+   ],
+   "across_m": 0.3,
+   "height_m": 0.6,
+   "in_the_way": false,
+   "walk": null,
+   "walks": [],
+   "near": "our table",
+   "method": "shape",
+   "words": "Possible trip hazard: something moved on the floor near our table, about 30 cm across. Not in a walking route.",
+   "id": "h7"
+  },
+  {
+   "centre": [
+    -0.193,
+    1.252,
+    -0.218
+   ],
+   "across_m": 0.25,
+   "height_m": 0.6,
+   "in_the_way": false,
+   "walk": null,
+   "walks": [],
+   "near": "our table",
+   "method": "shape",
+   "words": "Possible trip hazard: something moved on the floor near our table, about 20 cm across. Not in a walking route.",
+   "id": "h8"
+  },
+  {
+   "centre": [
+    0.753,
+    1.248,
+    -0.303
+   ],
+   "across_m": 0.1,
+   "height_m": 0.6,
+   "in_the_way": false,
+   "walk": null,
+   "walks": [],
+   "near": "our table",
+   "method": "shape",
+   "words": "Possible trip hazard: something moved on the floor near our table, about 10 cm across. Not in a walking route.",
+   "id": "h9"
+  },
+  {
+   "centre": [
+    0.545,
+    1.359,
+    -0.577
+   ],
+   "across_m": 0.1,
+   "height_m": 0.28,
+   "in_the_way": false,
+   "walk": null,
+   "walks": [],
+   "near": "our table",
+   "method": "shape",
+   "words": "Possible trip hazard: something moved on the floor near our table, about 10 cm across. Not in a walking route.",
+   "id": "h10"
+  }
+ ],
+ "generated_at": "2026-11-15T06:38:33+02:00",
+ "places": {
+  "our table": [
+   0.036,
+   0.441,
+   -0.189
+  ],
+  "snack table": [
+   -0.227,
+   -3.432,
+   -0.214
+  ],
+  "IronShard booth": [
+   -7.652,
+   3.544,
+   0.132
+  ],
+  "drinks fridge": [
+   -8.91,
+   3.76,
+   0.02
+  ],
+  "exit door": [
+   -8.36,
+   4.26,
+   0.52
+  ]
+ },
+ "label": "Junction venue, recorded with the glasses (20261115_025911_0a9dfa62). The night walk is simulated.",
+ "source": {
+  "zone": "kitchen",
+  "splat": "train-kitchen-20261115_025911_0a9dfa62-1",
+  "session": "20261115_025911_0a9dfa62",
+  "psnr": 21.97,
+  "fit_rms_m": 0.38,
+  "axis_deg": 34.0,
+  "vision": {
+   "from": "labels.json",
+   "on_tables": 14,
+   "seats": 28
+  }
+ }
+}

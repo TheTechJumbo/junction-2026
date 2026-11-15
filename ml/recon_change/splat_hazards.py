@@ -59,10 +59,11 @@ def load(data, frame=None, up="-y"):
     return pos, up
 
 
-def find(positions, places, walks=hz.NIGHT_WALKS, up="-y"):
-    """Possible hazards from positions alone. Same answer shape as hazards.find, method "shape"."""
+def find(positions, places, walks=hz.NIGHT_WALKS, up="-y", floor=None):
+    """Possible hazards from positions alone. Same answer shape as hazards.find, method "shape".
+    floor: the floor's height, when known better than the points tell (see lowpoly.build)."""
     flat, height = hz.split_up(positions, up)
-    floor = hz.floor_height(height, np.ones(len(height), bool))
+    floor = hz.floor_height(height, np.ones(len(height), bool)) if floor is None else float(floor)
     cell = np.floor(flat / hz.GRID_M).astype(int)
     tall = {tuple(c) for c in cell[height > floor + TALL_M]}
     low = (height > floor + LOW_M) & (height < floor + KNEE_M)

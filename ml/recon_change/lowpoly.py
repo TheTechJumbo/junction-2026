@@ -80,19 +80,21 @@ def _boxes(grid, merge_dc):
     return boxes
 
 
-def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hide=True):
+def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hide=True, floor=None, outline=None):
     """Gaussians (positions, 0-255 colours) -> (vertices, normals, colours, triangles) on the given up
-    axis. `cell` overrides the quality's square size; hide=False keeps hidden faces (for comparison)."""
+    axis. `cell` overrides the quality's square size; hide=False keeps hidden faces (for comparison).
+    floor (a height) and outline ((x0, y0), (x1, y1) on the floor) override the ones worked out from
+    the points: glasses mostly look at table tops, so a recording can see more table than floor."""
     q = dict(QUALITY[quality])
     if cell is not None:
         q["cell"] = cell
     cell = q["cell"]
     flat, height = hz.split_up(np.asarray(positions, float), up)
     rgb = np.asarray(colours, float)
-    floor = hz.floor_height(height, np.ones(len(height), bool))
+    floor = hz.floor_height(height, np.ones(len(height), bool)) if floor is None else float(floor)
     h = height - floor
     top_of_room = float(np.percentile(h, 99))
-    (x0, y0), (x1, y1) = np.percentile(flat, OUTLINE_PCT, axis=0), np.percentile(flat, 100 - OUTLINE_PCT, axis=0)
+    (x0, y0), (x1, y1) = outline if outline is not None else (np.percentile(flat, OUTLINE_PCT, axis=0), np.percentile(flat, 100 - OUTLINE_PCT, axis=0))
     v, c, t = [], [], []
     on_floor = np.abs(h) < 0.04
     floor_rgb = tuple(np.median(rgb[on_floor], 0).astype(int)) if on_floor.any() else (180, 160, 130)

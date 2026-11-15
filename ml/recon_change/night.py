@@ -37,17 +37,19 @@ def when(t):
     return datetime.fromisoformat(t)
 
 
-def analyse(track, places, events=(), up="-y", day=None):
-    """The night from a time-ordered track. Returns the dict the dashboard reads (see module doc)."""
+def analyse(track, places, events=(), up="-y", day=None, base="bed"):
+    """The night from a time-ordered track. Returns the dict the dashboard reads (see module doc).
+    base: the place trips start from and end at ("bed" at home; a desk where there is no bed)."""
+    base = base.lower()
     track = sorted(track, key=lambda f: when(f["t"]))
     if not track:
-        return {"day": day, "up": up, "points": [], "trips": [], "stops": [], "events": list(events),
+        return {"day": day, "up": up, "base": base, "points": [], "trips": [], "stops": [], "events": list(events),
                 "summary": {"trips": 0, "minutes_up": 0, "metres": 0, "places": []}}
     p = np.array([f["p"] for f in track], float)
     t = np.array([when(f["t"]).timestamp() for f in track])
     flat, _ = split_up(p, up)
     names = {k.lower(): split_up(np.asarray(v, float)[None], up)[0][0] for k, v in places.items()}
-    bed = names.get("bed")
+    bed = names.get(base)
 
     def place_at(xy):
         if not names:
@@ -79,7 +81,7 @@ def analyse(track, places, events=(), up="-y", day=None):
         while e + 1 < len(t) and up_now[e + 1]:
             e += 1
         start, end = track[max(k - 1, 0)]["t"], track[min(e + 1, len(t) - 1)]["t"]
-        visited = [s["place"] for s in stops if s["place"] and s["place"] != "bed" and when(start) <= when(s["t"]) <= when(end)]
+        visited = [s["place"] for s in stops if s["place"] and s["place"] != base and when(start) <= when(s["t"]) <= when(end)]
         trips.append({"start": start, "end": end, "minutes": round((when(end) - when(start)).total_seconds() / 60, 1),
                       "visits": list(dict.fromkeys(visited))})
         k = e + 1
@@ -88,7 +90,7 @@ def analyse(track, places, events=(), up="-y", day=None):
     keep = np.unique(np.linspace(0, len(track) - 1, min(len(track), MAX_POINTS)).round().astype(int))
     summary = {"trips": len(trips), "minutes_up": round(sum(x["minutes"] for x in trips)),
                "metres": round(metres), "places": list(dict.fromkeys(v for x in trips for v in x["visits"]))}
-    return {"day": day, "up": up, "from": track[0]["t"], "to": track[-1]["t"],
+    return {"day": day, "up": up, "base": base, "from": track[0]["t"], "to": track[-1]["t"],
             "points": [{"t": track[n]["t"], "p": [round(float(v), 3) for v in p[n]]} for n in keep],
             "trips": trips, "stops": stops, "events": list(events), "summary": summary}
 

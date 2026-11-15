@@ -205,7 +205,8 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_CHANGE_ADDRESS = "com.junction.family.CHANGE_ADDRESS"
-        private const val START_URL = "https://${WebViewAssetLoader.DEFAULT_DOMAIN}/dashboard/index.html?nosw"
+        // home=venue: the example home is the venue the glasses recorded (dashboard/fixtures/venue).
+        private const val START_URL = "https://${WebViewAssetLoader.DEFAULT_DOMAIN}/dashboard/index.html?nosw&home=venue"
         private const val NIGHT = 0xFF0F1830.toInt()
         private const val CLOSE_DIALOG =
             "(() => { const open = [...document.querySelectorAll('dialog[open]')].pop(); if (open) { open.close(); return true; } return false; })()"

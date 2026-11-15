@@ -24,6 +24,9 @@ const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // Hazards from one splat's shape alone (splat_hazards.py) are a guess and say so.
 const guessed = h => String(h?.method || '').startsWith('shape');
 const times = n => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
+// The example home: Anna's (made up), or with ?home=venue a place the glasses recorded
+// (ml/recon_change/venue_home.py: its blocks, possible trip hazards and a simulated night).
+const EXAMPLE = new URLSearchParams(globalThis.location?.search || '').get('home') === 'venue' ? './fixtures/venue/' : './fixtures/';
 
 /** Home-level data the hero shows: how many things to clear up, and last night in a few words. */
 export async function homeSummary({api, live, day, signal}) {
@@ -58,8 +61,8 @@ async function loadData({api, live, day, signal, mesh = true}) {
     }
   }
   const [buffer, hazards, night] = await Promise.all([
-    mesh ? fetch('./fixtures/home.ply', {signal}).then(r => { if (!r.ok) throw Object.assign(new Error('The example room is unavailable.'), {userFacing: true}); return r.arrayBuffer(); }) : null,
-    json('./fixtures/hazards.json', signal), json('./fixtures/night.json', signal),
+    mesh ? fetch(`${EXAMPLE}home.ply`, {signal}).then(r => { if (!r.ok) throw Object.assign(new Error('The example room is unavailable.'), {userFacing: true}); return r.arrayBuffer(); }) : null,
+    json(`${EXAMPLE}hazards.json`, signal), json(`${EXAMPLE}night.json`, signal),
   ]);
   return {buffer, hazards, night, example: true, liveAsked: live};
 }
@@ -117,7 +120,8 @@ export class Home3D {
     $('tab-night').setAttribute('aria-selected', String(tab === 'night'));
     $('now-panel').hidden = tab !== 'now'; $('night-panel').hidden = tab !== 'night';
     this.space.clearLayers();
-    const label = this.data.example ? (this.data.liveAsked ? 'No 3D map from home yet. This is the example home.' : 'Example home, not a real one.') : '';
+    const note = this.data.hazards?.label || this.data.night?.label; // a recorded place says what it is, and that its night is simulated
+    const label = note || (this.data.example ? (this.data.liveAsked ? 'No 3D map from home yet. This is the example home.' : 'Example home, not a real one.') : '');
     if (tab === 'now') { if (!focusFirst) this.space.reset(); this.drawNow(label, focusFirst); } else { this.space.overview(0.62, 0.74); this.setUpNight(label); }
   }
 
@@ -152,7 +156,7 @@ export class Home3D {
 
   // ---- Last night: the walk ----
   setUpNight(label) {
-    const $ = this.$, n = this.data.night;
+    const $ = this.$, n = this.data.night, base = n?.base || 'bed', bed = base === 'bed'; // where the night starts: the bed at home
     $('trip-list').replaceChildren(); $('night-strip').replaceChildren();
     if (!n || !n.points?.length) {
       this.say([label, 'No night walk recorded for last night.'].filter(Boolean).join(' '));
@@ -163,7 +167,7 @@ export class Home3D {
     $('night-from').textContent = clock(n.points[0].t); $('night-to').textContent = clock(n.points.at(-1).t);
     // Moments worth jumping to: each trip's start and end, each stop, each door or sensor event.
     this.trips = n.trips.map(x => [Date.parse(x.start), Date.parse(x.end)]);
-    this.moments = [...new Set([...n.trips.flatMap(x => [x.start, x.end]), ...(n.stops || []).filter(s => s.place !== 'bed').map(s => s.t), ...(n.events || []).map(e => e.t)]
+    this.moments = [...new Set([...n.trips.flatMap(x => [x.start, x.end]), ...(n.stops || []).filter(s => s.place !== base).map(s => s.t), ...(n.events || []).map(e => e.t)]
       .map(Date.parse))].sort((a, b) => a - b);
     this.track = n.points.map(p => ({t: Date.parse(p.t), p: (q => { q[1] = floor; return q; })(upright(p.p, n.up))}));
     this.t0 = this.track[0].t; this.t1 = this.track.at(-1).t; this.floor = floor;
@@ -172,8 +176,8 @@ export class Home3D {
     for (const x of this.track) x.air = [x.p[0], this.lift(x.t), x.p[2]];
     const s = n.summary;
     $('night-summary').textContent = s.trips
-      ? `Up ${times(s.trips)} · ${s.minutes_up} min out of bed · ${s.metres} m walked${s.places.length ? ` · ${s.places.join(', ')}` : ''}`
-      : 'Stayed in bed.';
+      ? `Up ${times(s.trips)} · ${s.minutes_up} min ${bed ? 'out of bed' : `away from ${base}`} · ${s.metres} m walked${s.places.length ? ` · ${s.places.join(', ')}` : ''}`
+      : bed ? 'Stayed in bed.' : `Stayed at ${base}.`;
     const span = this.t1 - this.t0 || 1, strip = $('night-strip');
     for (const trip of n.trips) {
       const el = document.createElement('span'); el.dataset.kind = 'trip';
@@ -182,7 +186,7 @@ export class Home3D {
       strip.append(el);
       const item = document.createElement('li'), button = document.createElement('button');
       button.type = 'button'; button.className = 'link-button';
-      button.textContent = `${clock(trip.start)}–${clock(trip.end)} · ${trip.visits.length ? trip.visits.join(', ') : 'near the bed'}`;
+      button.textContent = `${clock(trip.start)}–${clock(trip.end)} · ${trip.visits.length ? trip.visits.join(', ') : bed ? 'near the bed' : `near ${base}`}`;
       button.addEventListener('click', () => { this.setTime(Date.parse(trip.start)); this.play(1, Date.parse(trip.end)); });
       item.append(button); $('trip-list').append(item);
     }
@@ -325,7 +329,7 @@ export class Home3D {
       const x = done[i]; pillar(trail, x.p, 0.006, x.air[1] - x.p[1], mix(colourAt(i), DIM, 0.4));
     }
     for (const stop of n.stops || []) {
-      if (Date.parse(stop.t) > t || stop.place === 'bed') continue;
+      if (Date.parse(stop.t) > t || stop.place === (n.base || 'bed')) continue;
       const p = upright(stop.p, n.up); p[1] = this.floor + 0.005;
       const r = Math.min(0.35, 0.1 + 0.02 * stop.minutes), top = this.lift(Date.parse(stop.t));
       disc(trail, p, r, TEAL);                                                         // where she stopped, on the floor
