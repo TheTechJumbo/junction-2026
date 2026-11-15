@@ -82,4 +82,12 @@ class NavigationTest {
         assertEquals("light tree: turn right at the table", worded.next(NavReply(ok = true, distanceM = 5.0, bearingDeg = 0.0,
             instruction = "light tree: turn right at the table"), 0))
     }
+
+    @Test fun seenThingsAreMarkedApartFromNamedPlaces() {
+        val reply = NavReply.parse("""{"ok":true,"places":[{"name":"our table","position":[0,0.4]},
+            {"name":"orange box","position":[0.1,0.5,0.2],"kind":"object"}]}""")
+        assertEquals(listOf(false, true), reply.places.map { it.isThing })
+        assertEquals("object", reply.places[1].kind)
+        assertEquals(FloorPoint(0.1, 0.5), reply.places[1].at)
+    }
 }

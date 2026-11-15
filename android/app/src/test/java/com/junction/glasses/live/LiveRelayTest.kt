@@ -332,4 +332,18 @@ class LiveRelayTest {
             }
         }
     }
+
+    @Test fun waypointsTellNamedPlacesFromSeenThings() {
+        runBlocking {
+            MockWebServer().use { server ->
+                val body = """{"ok":true,"waypoints":[{"name":"our table","frame":3},{"name":"orange box","kind":"object"},{"bad":1}]}"""
+                server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(body))
+                server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(body))
+                server.start()
+                val client = RelayClient(server.url("/").toString(), "synthetic-relay-key", "kitchen", allowLocalHttp = true)
+                assertEquals(listOf("our table" to null, "orange box" to "object"), client.spots())
+                assertEquals("seen things are not places", listOf("our table"), client.placeNames())
+            }
+        }
+    }
 }

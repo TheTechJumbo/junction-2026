@@ -217,6 +217,8 @@ class MainActivity : ComponentActivity() {
     private var navJob: Job? = null
     /** The zone's place names, for matching what the wearer says; refreshed with the map. */
     private var knownPlaces: List<String> = emptyList()
+    /** Things the relay has seen ("orange box"): "where is" asks /find about them, "take me to" walks there. */
+    private var knownThings: List<String> = emptyList()
     /** The live camera was started for guidance (to keep fixes coming) and stops with it. */
     private var navStartedLive = false
     private var navRelayFor: String? = null
@@ -1459,6 +1461,8 @@ class MainActivity : ComponentActivity() {
         // "Find me / where is / where did I put / have you seen <thing>" that is not a named place: the relay looks.
         // Without a relay the question goes on to the backend as before.
         if (find is FindCommand.Find && navRelay() != null) { startFind(find.what); return }
+        // "Take me to the orange box": a thing the relay has seen is walked to like a place.
+        (NavPhrases.parse(text, knownThings) as? NavCommand.GoTo)?.let { startNavigation(it.place); return }
         if (screen.ask(text)) return // the wearer demo answers by itself
         if (controller == null) { status.text = "Connect the backend first."; if (::wearer.isInitialized) wearer.setStatus("Not connected"); return }
         lastQuestion = text
@@ -1898,7 +1902,12 @@ class MainActivity : ComponentActivity() {
         if (!::navMap.isInitialized || navGuide != null) return
         val relay = navRelay() ?: return
         lifecycleScope.launch {
-            try { relay.call { it.placeNames() }.takeIf { it.isNotEmpty() }?.let { knownPlaces = it } } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+            try {
+                relay.call { it.spots() }.takeIf { it.isNotEmpty() }?.let { spots ->
+                    knownPlaces = spots.filter { it.second != "object" }.map { it.first }
+                    knownThings = spots.filter { it.second == "object" }.map { it.first }
+                }
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { }
             try {
                 val reply = relay.call { it.navigate(null) }
                 if (navGuide == null) renderMap(reply, null)
@@ -1908,7 +1917,10 @@ class MainActivity : ComponentActivity() {
 
     private fun renderMap(reply: NavReply, target: String?) {
         lastMapReply = reply
-        if (reply.places.isNotEmpty()) knownPlaces = (knownPlaces + reply.places.map { it.name }).distinct()
+        if (reply.places.isNotEmpty()) {
+            knownPlaces = (knownPlaces + reply.places.filterNot { it.isThing }.map { it.name }).distinct()
+            knownThings = (knownThings + reply.places.filter { it.isThing }.map { it.name }).distinct()
+        }
         val found = foundItem?.takeIf { f -> reply.places.none { it.name.equals(f.name, ignoreCase = true) } }
         navMap.show(reply.plan, reply.places + listOfNotNull(found), reply.position, reply.headingDeg, if (target != null) reply.route else emptyList(),
             target, if (!reply.ok) reply.error else null, foundItem?.name)
