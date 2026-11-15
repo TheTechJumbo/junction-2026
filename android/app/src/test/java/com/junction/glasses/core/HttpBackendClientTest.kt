@@ -50,10 +50,13 @@ class HttpBackendClientTest {
         assertEquals("content_type", (await<ByteArray> { c.speak("q", it) }.exceptionOrNull() as BackendFailure).kind)
     }
     @Test fun dangerousOriginsRejected() {
-        listOf("http://example.com", "http://192.168.1.2", "https://user:password@example.com", "https://example.com?token=secret", "https://example.com/api").forEach {
+        listOf("http://example.com", "http://8.8.8.8", "http://100.64.0.1", "https://user:password@example.com", "https://example.com?token=secret", "https://example.com/api").forEach {
             try { HttpBackendClient(it, "token", true); fail("accepted unsafe origin") } catch (_: IllegalArgumentException) { }
         }
         try { HttpBackendClient("http://localhost:8000", "token"); fail("accepted implicit HTTP") } catch (_: IllegalArgumentException) { }
+        // Debug builds may reach the laptop on the same Wi-Fi (private LAN); release builds never use plain HTTP.
+        HttpBackendClient("http://192.168.1.2:8000", "token", true)
+        try { HttpBackendClient("http://192.168.1.2:8000", "token"); fail("accepted implicit HTTP") } catch (_: IllegalArgumentException) { }
     }
     @Test fun cancellationCompletesWithoutLeakingTransportDetails() = server { s, c ->
         s.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE))

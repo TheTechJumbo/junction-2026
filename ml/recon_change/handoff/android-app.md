@@ -76,7 +76,14 @@ Uninstalling wipes the remembered backend and the Meta registration. On the next
 - onStop: leaving the Activity used to drop the glasses, which killed background recording. It now keeps the session while always-on records (GlassesHub keeps the adapter). Meta AI's registration and consent screens leave the Activity on purpose.
 
 ## Open items
-1. Install 459ed3a (debug panel + venue_zone) together with the relay's `/navigate` (it was 404 at the last check). Then launch with `--es venue_zone kitchen`.
-2. Labels for kitchen's new splat (02:45, session aon-20261115-024529, 48 pictures): once it is linked, re-place the visible landmarks on the new frames, checking each spot. Do not reuse the old frame/u/v values.
+1. Install 459ed3a (debug panel + venue_zone), then launch with `--es venue_zone kitchen`. The relay's `/navigate` is live now: the map answers 200; a route answers 409 until the glasses give a position fix.
+2. Done 04:00 EET: kitchen (02:59 recording, session 20261115_025911_0a9dfa62, 48 pictures) has 5 named places, each named on a visible spot via `POST /waypoint?frame&u&v` and placed in 3D:
+   - our table (frame 3)
+   - snack table (frame 28)
+   - IronShard booth (frame 45)
+   - drinks fridge (frame 46)
+   - exit door: the door to Hype Sport Arena under the exit sign (frame 46)
+
+   No pill box or front door is visible in those pictures.
 3. Ed's review: `android/` is his. Nothing is merged to main; merging uses merge commits.
 4. Recording and video uploads default to zone `always-on-test`, so nothing overwrites kitchen by accident.

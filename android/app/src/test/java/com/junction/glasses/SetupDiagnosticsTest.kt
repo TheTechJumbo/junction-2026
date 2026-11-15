@@ -39,6 +39,8 @@ class SetupDiagnosticsTest {
     // Backend probes are answered in queue order; the wearer screen's own /timeline refresh is answered apart.
     private val probes = LinkedBlockingQueue<MockResponse>()
     @Before fun setup() {
+        MainActivity.automaticSetup = false // manual setup controls only; see AutomaticSetupActivityTest
+        MainActivity.alwaysOnAutoStart = false
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse =
@@ -54,6 +56,8 @@ class SetupDiagnosticsTest {
     @After fun cleanup() {
         if (!backgrounded) owner.pause().stop()
         owner.destroy(); server.shutdown(); drain()
+        MainActivity.automaticSetup = true
+        MainActivity.alwaysOnAutoStart = true
     }
     @Test fun connectionRequiresAuthenticatedResponseAndCanRecheckWithoutRetypingToken() {
         probes.add(page())
@@ -164,5 +168,24 @@ class SetupDiagnosticsTest {
     private fun descendants(view: View): Sequence<View> = sequence {
         yield(view)
         if (view is ViewGroup) for (i in 0 until view.childCount) yieldAll(descendants(view.getChildAt(i)))
+    }
+
+    @Test fun holdingDebugOpensAPanelWithKeyPrintsAndNoSecrets() {
+        field("relayKey").set(activity, "synthetic-relay-key")
+        val debug = descendants(activity.window.decorView).filterIsInstance<TextView>()
+            .first { it.contentDescription?.toString()?.startsWith("Debug panel") == true }
+        assertTrue(debug.performLongClick())
+        drain()
+        val dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        assertNotNull(dialog)
+        assertTrue(dialog.isShowing)
+        val report = descendants(dialog.window!!.decorView).filterIsInstance<TextView>()
+            .first { it.text.toString().contains("Relay key print") }.text.toString()
+        assertTrue(report.contains("Relay key print: ${KeyPrint.of("synthetic-relay-key")}"))
+        assertTrue(report.contains("Glasses:"))
+        assertTrue(report.contains("Chunks waiting on the phone"))
+        assertFalse(report.contains("synthetic-relay-key"))
+        assertFalse(report.contains("synthetic-setup-token"))
+        dialog.dismiss(); drain()
     }
 }
