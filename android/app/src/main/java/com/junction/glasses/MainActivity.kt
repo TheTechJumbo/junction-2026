@@ -91,6 +91,12 @@ class MainActivity : ComponentActivity() {
     private var demoNow: ZonedDateTime? = null
     private var shownCard: Card? = null
     private var cardJob: Job? = null
+    // Spoken cues for audio-only glasses: the last thing said (by key), when, and whether a question's
+    // answer is being spoken right now (cues never talk over it).
+    private var speakCues = true
+    private var lastCueKey: String? = null
+    private var lastCueAt = 0L
+    private var turnBusy = false
     private val refresher = object : Runnable {
         override fun run() { refreshWearer(); main.postDelayed(this, 10_000) }
     }
@@ -203,6 +209,11 @@ class MainActivity : ComponentActivity() {
         button("Stop glasses motion") { glasses.stopMotion() }
         button("Disconnect glasses") { stopTurn(); glasses.disconnect() }
         label("Wearer screen", 22f)
+        column.addView(CheckBox(this).apply {
+            text = "Speak directions and reminders (for glasses without a display)"
+            isChecked = true
+            setOnCheckedChangeListener { _, on -> speakCues = on; if (!on) lastCueKey = null }
+        })
         val relayUrl = field("Vision relay URL (optional)").apply { if (BuildConfig.DEBUG) setText("http://127.0.0.1:8090") }
         val relayKey = field("Vision relay key", true)
         button("Connect vision relay") {
@@ -355,6 +366,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun renderTurn(turn: TurnState) {
         renderStatus(turn)
+        turnBusy = turn.phase in setOf(TurnPhase.ASKING, TurnPhase.FETCHING_SPEECH, TurnPhase.PLAYING, TurnPhase.FALLBACK)
         if (::wearer.isInitialized) wearer.setStatus(when (turn.phase) {
             TurnPhase.ASKING -> "…"; TurnPhase.ERROR -> "No answer. Try again."; else -> ""
         })
@@ -506,11 +518,22 @@ class MainActivity : ComponentActivity() {
         } else arrivedAt = null
         wearer.setClock(now.toLocalTime())
         wearer.show(card)
+        sayCue(card)
         if (card != shownCard) {
             shownCard = card
             cardJob?.cancel()
             cardJob = lifecycleScope.launch { glasses.showCard(card, ::finishReminder, { main.post { startGuide(it) } }, { main.post { stopGuide() } }) }
         }
+    }
+
+    /** Say the card's cue once; again only when it changes, at most every few seconds, never over an answer. */
+    private fun sayCue(card: Card) {
+        val cue = WearerVoice.cue(card)
+        if (cue == null) { lastCueKey = null; return }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!speakCues || turnBusy || cue.key == lastCueKey || now - lastCueAt < CUE_GAP_MS) return
+        lastCueKey = cue.key; lastCueAt = now
+        audio.speakFallback(cue.line) {}
     }
 
     /** Walk the wearer to a place or item: the card follows each new position fix (every 2 s). */
@@ -581,6 +604,7 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val DEMO_SCENES = 11
         const val GUIDE_REFRESH_MS = 2_000L
+        const val CUE_GAP_MS = 4_000L
         val GUIDE_LONGEST: java.time.Duration = java.time.Duration.ofMinutes(5)
         val ARRIVED_SHOWN: java.time.Duration = java.time.Duration.ofSeconds(8)
     }
