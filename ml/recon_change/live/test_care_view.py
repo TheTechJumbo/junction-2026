@@ -74,15 +74,27 @@ def check_space():
     assert same >= len(fit["paired"]) - 1, f"only {same} of {len(fit['paired'])} pairs are the same photo"
     assert fit["paired_by"] == "headings"
 
-    # One recording behind both, each with its own frames (every 3rd and every 2nd): paired by frame number, so
-    # every pair is the same photo even where no heading sequence could tell.
+    # One recording behind both, each with its own frames (every 3rd and every 2nd): every picture is paired with
+    # the trained camera at its very frame (between two keyframes when it is not one).
     map_take, trained_take = list(range(0, len(positions), 3)), list(range(0, len(positions), 2))
     cams = [{"frame": k, "position": positions[i].round(3).tolist(), "heading_deg": round(float(headings[i]), 1)}
             for k, i in enumerate(map_take)]
     fit = care_space.space(E[trained_take], cams, numbers=(map_take, trained_take))
     assert fit["ok"] and fit["paired_by"] == "frame numbers", fit
-    assert all(map_take[f] == trained_take[j] for f, j in fit["paired"]) and fit["pairs"] == len(range(0, len(positions), 6)), fit["paired"]
+    inside = [n for n in map_take if n <= trained_take[-1]]
+    assert fit["pairs"] == len(inside) and fit["rms_m"] < 0.03, fit
+    assert all(abs(map_take[f] - trained_take[j]) <= 1 for f, j in fit["paired"]), fit["paired"]
     assert care_space.space(E[trained_take], cams, numbers=([999] * len(map_take), trained_take))["paired_by"] == "headings"
+    # A place named in a picture between two keyframes: its own ray, cast into the nearest keyframe's depth
+    # (a wall 1 unit, 2.4 m, ahead of every keyframe), lands about 2.4 m ahead of where that picture was taken.
+    K = np.array([[400.0, 0, 259], [0, 400.0, 259], [0, 0, 1]])
+    views = (np.ones((len(trained_take), 130, 130), np.float32), np.stack([K] * len(trained_take)), E[trained_take], (518, 518))
+    f = 5  # recording frame 15: between keyframes 14 and 16
+    got = care_space.place_points([{"name": "kettle", "frame": f, "u": 0.5, "v": 0.5}], fit["paired"], views, fit["matrix"],
+                                  numbers=(map_take, trained_take))
+    h = np.radians(headings[map_take[f]])
+    want = positions[map_take[f]] + 2.4 * np.array([np.sin(h), np.cos(h), 0])
+    assert got and np.linalg.norm(np.array(got[0]["position"]) - want) < 0.15, (got, want.round(2))
     print(f"  one recording: {fit['pairs']} pairs by frame number, rms {fit['rms_m']} m")
 
     # Other pictures: headings that do not follow the same walk are refused, not forced into place.

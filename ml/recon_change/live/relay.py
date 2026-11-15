@@ -944,6 +944,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
     auto_seen = {}  # {zone: {name: [sightings]}}: the AUTO_PLACES things the item finder saw, newest last
     # ---- caretaker's page (/care) ----
     space_made, space_lock = {}, threading.Lock()  # {zone: ((room map job, trained splat), the reply)}: worked out once
+    space_numbers = {}  # {zone: (room map keyframe_numbers, trained keyframe numbers)} when one recording made both
 
     def care_view(zone):
         """The splat the caretaker's page shows for a zone, and the matrix that takes it into the room map's axes,
@@ -959,7 +960,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             trained["labels"] = f"/evidence/{match[1]}/labels.json"
         plain = {"ok": True, "zone": zone, "kind": "map", "splat": got["splat"], "matrix": None, "fit": None,
                  "room_splat": got["splat"], "trained": trained or None, "median_depth_m": got.get("median_depth_m"),
-                 "fov_deg": got.get("fov_deg"), "cameras": got.get("cameras") or [], "places": got.get("places") or []}
+                 "fov_deg": got.get("fov_deg"), "cameras": got.get("cameras") or [], "places": got.get("places") or [],
+                 "map_at": got.get("at")}  # when this room map was made: positions from before are in another map's axes
         if not match:
             return 200, {**plain, "why": "No trained splat for this room yet: the room map is shown."}
         made_for = (got.get("job"), trained["splat"], trained.get("labels"))
@@ -976,8 +978,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     # One recording behind both (Record room, then its training): pair the very same frames.
                     same = got.get("session") and got.get("session") == trained.get("session") and got.get("keyframe_numbers")
                     numbers = (got["keyframe_numbers"], care_space.load_keyframes(cameras_file)) if same else None
-                    fit = care_space.space(care_space.load_cameras(cameras_file), got.get("cameras") or [], hint,
-                                           numbers if numbers and numbers[1] else None)
+                    numbers = numbers if numbers and numbers[1] else None
+                    fit = care_space.space(care_space.load_cameras(cameras_file), got.get("cameras") or [], hint, numbers)
+                    space_numbers[zone] = numbers
                     why = fit.get("why")
                 except (OSError, KeyError, ValueError) as err:
                     why = f"The trained splat's cameras could not be read ({type(err).__name__}): the room map is shown."
@@ -1003,7 +1006,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     views_kept[folder] = (stamp, care_space.load_views(folder))
                 views = views_kept[folder][1]
             header, _ = link.call({"op": "waypoints", "zone": zone})
-            return care_space.place_points(header.get("waypoints") or [], paired, views, reply["matrix"]) if header.get("ok") else []
+            return care_space.place_points(header.get("waypoints") or [], paired, views, reply["matrix"],
+                                           space_numbers.get(zone) if reply["fit"].get("paired_by") == "frame numbers" else None)                 if header.get("ok") else []
         except Exception as err:  # noqa: BLE001  the page still shows the places the fixes carry
             sys.stderr.write(f"care places: {type(err).__name__}: {err}\n")
             return []

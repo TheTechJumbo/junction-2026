@@ -23,7 +23,8 @@ GAP_DEG = 12.0  # leaving a view unpaired costs as much as a pair this far apart
 PAIR_DEG = 25.0  # pairs further apart than this are not used
 MIN_PAIRS = 4
 TRY_EVERY_DEG = 10  # the turn between the two first cameras is searched in steps this size, then refined
-GOOD_RMS_M = 0.5  # camera positions further off than this on average: the two do not show the same pictures
+GOOD_RMS_M = 0.5
+MOST_GAP_FRAMES = 90  # a pose is worked out between two keyframes at most this many recording frames apart  # camera positions further off than this on average: the two do not show the same pictures
 
 
 def load_cameras(path):
@@ -88,56 +89,81 @@ def pair_in_order(a, b, gap=GAP_DEG):
     return pairs[::-1], float(cost[n, m])
 
 
-def by_number(cameras, numbers):
-    """Pairs that are the same frame of the same recording: numbers = (the room map's keyframe_numbers, by baseline
-    picture; the trained splat's keyframes, by keyframe), both frame numbers in the recording. [(i, j), ...]"""
-    map_numbers, trained_numbers = numbers
-    where = {int(n): j for j, n in enumerate(trained_numbers)}
-    pairs = []
-    for i, c in enumerate(cameras):
-        f = int(c.get("frame", i))
-        if 0 <= f < len(map_numbers) and int(map_numbers[f]) in where:
-            pairs.append((i, where[int(map_numbers[f])]))
-    return pairs
+def turn_part(D, w):
+    """The rotation D (3x3) taken only part of the way, w in [0, 1], about its own axis."""
+    angle = math.acos(max(-1.0, min(1.0, (np.trace(D) - 1) / 2)))
+    if angle < 1e-9:
+        return np.eye(3)
+    axis = np.array([D[2, 1] - D[1, 2], D[0, 2] - D[2, 0], D[1, 0] - D[0, 1]]) / (2 * math.sin(angle))
+    k = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+    a = w * angle
+    return np.eye(3) + math.sin(a) * k + (1 - math.cos(a)) * k @ k
+
+
+def pose_at(E, numbers, n, most_gap=MOST_GAP_FRAMES):
+    """The trained splat's camera (world-to-camera, 3x4) at recording frame n, and its nearest keyframe: a
+    keyframe's own pose when n is one, else between the two keyframes around it (the centre along the line, the
+    turn along the shortest arc). None before the first or after the last keyframe, or across a wider gap."""
+    numbers = np.asarray(numbers)
+    k = int(np.searchsorted(numbers, n))
+    if k < len(numbers) and numbers[k] == n:
+        return E[k], k
+    if k == 0 or k >= len(numbers) or numbers[k] - numbers[k - 1] > most_gap:
+        return None
+    a, b = k - 1, k
+    w = (n - numbers[a]) / (numbers[b] - numbers[a])
+    Ra, Rb = E[a][:, :3], E[b][:, :3]
+    R = turn_part(Rb @ Ra.T, w) @ Ra
+    Ca, Cb = -Ra.T @ E[a][:, 3], -Rb.T @ E[b][:, 3]
+    C = Ca + w * (Cb - Ca)
+    return np.hstack([R, (-R @ C)[:, None]]), (a if w < 0.5 else b)
 
 
 def space(E, cameras, scale_hint=None, numbers=None):
     """E: the trained splat's keyframe cameras, world-to-camera (N, 3, 4) in its own axes (video_map.py
     cameras.npz). cameras: the room map's cameras, [{"position": [east, north, up], "heading_deg"}, ...]
     (GET /room). scale_hint: metres per trained unit to use when the cameras hardly move (the room map's median
-    viewing distance over the trained splat's). numbers: when both come from the same recording, the frame numbers
-    of the room map's pictures and of the trained keyframes (see by_number): the pairs are then the very same
-    photos, which pairing by heading cannot promise when each picked its own frames. Returns the 4x4 matrix (rows)
+    viewing distance over the trained splat's). numbers: when both come from the same recording, (the room map's
+    keyframe_numbers by picture, the trained keyframes' frame numbers): each picture is then paired with the trained
+    camera at its very frame (pose_at), which pairing by heading cannot promise when each picked its own frames. Returns the 4x4 matrix (rows)
     that takes a point of the trained splat to map axes, and how well the cameras agree; "ok" is False when they
     do not show the same views."""
     E = np.asarray(E, float)
     if E.ndim != 3 or E.shape[1:] != (3, 4) or len(E) < MIN_PAIRS or len(cameras) < MIN_PAIRS:
         return {"ok": False, "why": "Too few cameras to line the trained splat up with the room map."}
     axes = level_axes(E)
-    ahead = E[:, 2, :3] @ axes.T
-    trained_heading = np.degrees(np.arctan2(ahead[:, 0], ahead[:, 1]))
+
+    def heading_of(e):
+        ahead = e[2, :3] @ axes.T
+        return math.degrees(math.atan2(ahead[0], ahead[1]))
+
     map_heading = np.array([float(c.get("heading_deg") or 0.0) for c in cameras])
-    pairs = by_number(cameras, numbers) if numbers else []
-    paired_by = "frame numbers"
-    if len(pairs) < MIN_PAIRS:
+    matched, paired_by = [], "frame numbers"  # [(room map camera, trained pose there, nearest keyframe)]
+    if numbers and numbers[1]:
+        for i, c in enumerate(cameras):
+            f = int(c.get("frame", i))
+            got = pose_at(E, numbers[1], int(numbers[0][f])) if 0 <= f < len(numbers[0]) else None
+            if got is not None:
+                matched.append((i, got[0], got[1]))
+    if len(matched) < MIN_PAIRS:
         # The two first cameras usually are the same view (turn 0), but need not be: try every turn, keep the best.
+        trained_heading = np.array([heading_of(e) for e in E])
         best = None
         for turn in range(-180, 180, TRY_EVERY_DEG):
             pairs, total = pair_in_order(map_heading, trained_heading + turn)
             if best is None or total < best[0]:
                 best = (total, turn, pairs)
-        pairs, paired_by = best[2], "headings"
-    diffs = wrap([map_heading[i] - trained_heading[j] for i, j in pairs])
+        matched, paired_by = [(i, E[j], j) for i, j in best[2]], "headings"
+    diffs = wrap([map_heading[i] - heading_of(pose) for i, pose, _ in matched])
     turn = math.degrees(math.atan2(np.sin(np.radians(diffs)).mean(), np.cos(np.radians(diffs)).mean()))
-    kept = [(i, j) for (i, j), d in zip(pairs, diffs) if abs(wrap(d - turn)) <= PAIR_DEG]
+    kept = [m for m, d in zip(matched, diffs) if abs(wrap(d - turn)) <= PAIR_DEG]
     if len(kept) < MIN_PAIRS:
         return {"ok": False, "why": f"Only {len(kept)} of the room map's views match the trained splat's.", "pairs": len(kept)}
-    diffs = wrap([map_heading[i] - trained_heading[j] for i, j in kept])
+    diffs = wrap([map_heading[i] - heading_of(pose) for i, pose, _ in kept])
     turn = math.degrees(math.atan2(np.sin(np.radians(diffs)).mean(), np.cos(np.radians(diffs)).mean()))
     rotation = turn_about_up(turn) @ axes
-    centres = np.array([-e[:, :3].T @ e[:, 3] for e in E])
-    p = centres[[j for _, j in kept]] @ rotation.T
-    m = np.array([[float(v) for v in (list(cameras[i]["position"]) + [0.0, 0.0, 0.0])[:3]] for i, _ in kept])
+    p = np.array([-pose[:, :3].T @ pose[:, 3] for _, pose, _ in kept]) @ rotation.T
+    m = np.array([[float(v) for v in (list(cameras[i]["position"]) + [0.0, 0.0, 0.0])[:3]] for i, _, _ in kept])
     spread = ((p - p.mean(0)) ** 2).sum()
     scale = float(((m - m.mean(0)) * (p - p.mean(0))).sum() / spread) if spread > 1e-9 else 0.0
     scale_from = "camera positions"
@@ -153,8 +179,8 @@ def space(E, cameras, scale_hint=None, numbers=None):
             "scale": round(scale, 4), "scale_from": scale_from, "turn_deg": round(turn, 1),
             "pairs": len(kept), "paired_by": paired_by, "of": [len(cameras), len(E)], "rms_m": round(rms, 3),
             "heading_rms_deg": round(float(np.sqrt((wrap(diffs - turn) ** 2).mean())), 1),
-            # [baseline picture number, trained keyframe]: the same photo (see place_points)
-            "paired": [[int(cameras[i].get("frame", i)), int(j)] for i, j in kept]}
+            # [baseline picture number, nearest trained keyframe] (the same photo when paired by heading)
+            "paired": [[int(cameras[i].get("frame", i)), int(j)] for i, _, j in kept]}
 
 
 def load_views(folder):
@@ -166,11 +192,43 @@ def load_views(folder):
     return depth, np.asarray(v["K"], float).reshape(-1, 3, 3), np.asarray(v["E"], float).reshape(-1, 3, 4), tuple(v["size"])
 
 
-def place_points(waypoints, paired, views, matrix, reach=(2, 5)):
+def cast(Ef, Kf, j, views, u, v, steps=600):
+    """Where the ray through (u, v) of a camera Ef (world-to-camera, intrinsics Kf, in the trained splat's axes)
+    first goes behind the surface keyframe j sees (its trusted depth): the spot, from a camera a few frames away
+    from that keyframe. None when the ray never meets it."""
+    depth, K, E, size = views
+    R, t = Ef[:, :3], Ef[:, 3]
+    centre = -R.T @ t
+    ray = R.T @ (np.linalg.inv(Kf) @ np.array([u * size[0], v * size[1], 1.0]))
+    surface = depth[j]
+    trusted = surface[surface > 0]
+    if not trusted.size:
+        return None
+    along = np.linspace(0.02, 4.0, steps) * float(np.median(trusted))
+    points = centre + along[:, None] * ray
+    seen = points @ E[j][:, :3].T + E[j][:, 3]
+    z = seen[:, 2]
+    rows, cols = surface.shape
+    front = z > 1e-6
+    pix = seen @ K[j].T
+    cx = np.full(len(z), -1)
+    cy = np.full(len(z), -1)
+    cx[front] = np.round(pix[front, 0] / z[front] / size[0] * (cols - 1))
+    cy[front] = np.round(pix[front, 1] / z[front] / size[1] * (rows - 1))
+    inside = front & (cx >= 0) & (cx < cols) & (cy >= 0) & (cy < rows)
+    there = np.zeros(len(z))
+    there[inside] = surface[cy[inside], cx[inside]]
+    hit = inside & (there > 0) & (z >= there)
+    return points[int(np.argmax(hit))] if hit.any() else None
+
+
+def place_points(waypoints, paired, views, matrix, numbers=None, reach=(2, 5)):
     """Named places in map axes without a position fix or a new room map. A place is a spot clicked in a baseline
     picture (GET /waypoints: frame, u, v). When the baseline was recorded (Record room), that picture is a keyframe of
     the trained splat (paired, from space(); the same 518 px photo), so its depth there is known: the median trusted
     depth around the spot (a few depth pixels, more if none), along the camera's ray, through `matrix` into map axes.
+    numbers (as for space()): the picture is a recording frame between keyframes; the ray then starts from the
+    trained camera at that frame (pose_at) and is cast into the nearest keyframe's depth (cast).
     Returns [{"name", "position": [east, north, up], "from": "trained depth"}] for the places that can be placed."""
     depth, K, E, size = views
     keyframe = {int(f): int(j) for f, j in paired}
@@ -178,11 +236,25 @@ def place_points(waypoints, paired, views, matrix, reach=(2, 5)):
     out = []
     for w in waypoints:
         try:
-            j = keyframe.get(int(w["frame"]))
+            f = int(w["frame"])
+            j = keyframe.get(f)
             u, v = float(w["u"]), float(w["v"])
         except (KeyError, TypeError, ValueError):
             continue
-        if j is None or j >= len(depth) or not (0 <= u <= 1 and 0 <= v <= 1):
+        if not (0 <= u <= 1 and 0 <= v <= 1):
+            continue
+        if numbers and numbers[1] and 0 <= f < len(numbers[0]):
+            got = pose_at(E, numbers[1], int(numbers[0][f]))
+            if got is None:
+                continue
+            if int(numbers[0][f]) != int(numbers[1][got[1]]):  # between keyframes: cast from the frame's own pose
+                point = cast(got[0], K[got[1]], got[1], views, u, v)
+                if point is not None:
+                    placed = m[:3, :3] @ point + m[:3, 3]
+                    out.append({"name": w["name"], "position": [round(float(c), 2) for c in placed], "from": "trained depth"})
+                continue
+            j = got[1]
+        if j is None or j >= len(depth):
             continue
         rows, cols = depth[j].shape
         cx, cy = round(u * (cols - 1)), round(v * (rows - 1))
