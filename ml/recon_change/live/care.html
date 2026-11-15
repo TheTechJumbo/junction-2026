@@ -829,9 +829,10 @@ function asFound(x, fallbackName) {  // one /find answer or sighting, as {name, 
     at, image: x.image || x.photo || null, box2d: Array.isArray(x.box2d) && x.box2d.length === 4 ? x.box2d.map(Number) : null,
     doubt: !!x.doubt };
 }
+let liveFromFind = [];
 async function tickFind() {
   if (Date.now() - findDown < 60000) return;
-  const out = [];
+  const out = [], liveOut = [];
   for (const what of FIND) {
     let reply;
     try {
@@ -843,7 +844,10 @@ async function tickFind() {
     } catch { continue; }
     const list = Array.isArray(reply) ? reply : reply.items || reply.results || reply.found_items || (reply.found === false ? [] : [reply]);
     for (const x of list) { const f = asFound(x, what); if (f) out.push(f); }
+    const lv = reply && reply.live;  // the item finder on the newest photo: outlined live even before it has a place
+    if (lv && Array.isArray(lv.box2d) && lv.box2d.length === 4) liveOut.push({ name: String(reply.what || what), box2d: lv.box2d.map(Number), at: Number(lv.at) || null, score: lv.score });
   }
+  liveFromFind = liveOut;
   foundFromFind = out;
   drawFound();
 }
@@ -946,6 +950,11 @@ async function tickLive() {
     const wanted = new Set(FIND.map((w) => w.toLowerCase()));
     const boxes = foundFromFind.filter((f) => f.box2d && f.at && now - f.at <= LIVE_FOUND_S)
       .map((f) => ({ name: f.name, box: f.box2d, note: `${Math.max(0, Math.round(now - f.at))} s ago` }));
+    for (const f of liveFromFind) {
+      if (f.at && now - f.at <= LIVE_FOUND_S + 2 && !boxes.some((b) => b.name.toLowerCase() === f.name.toLowerCase())) {
+        boxes.push({ name: f.name, box: f.box2d, note: f.score != null ? `${Math.round(100 * f.score)}%` : 'now' });
+      }
+    }
     if ((fix.age_s ?? 99) <= LIVE_FOUND_S) {
       for (const it of fix.items || []) {
         if (Array.isArray(it.box) && it.box.length === 4 && !boxes.some((b) => b.name.toLowerCase() === String(it.name).toLowerCase())) {

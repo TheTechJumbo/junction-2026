@@ -239,6 +239,7 @@ except ImportError:  # route.py is missing: fixes go out without a route, the di
 # --- end route finding --------------------------------------------------------------------------
 
 # ---- find me X (live/finder.py): where watched things were put, from the fixes' item finder. Pure Python. ----
+FIND_ALIASES = {"orange box": ["orange object", "orange block"]}  # also asked of the item finder, which scores these higher
 sys.path.insert(0, str(HERE))
 import finder as finds  # noqa: E402
 FIND_RECENT = 3  # a newly asked thing is also looked for in this many of the zone's latest photos (and its pictures)
@@ -739,6 +740,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
     searched = {}  # {(zone, name, room job): when}: the zone's pictures are searched once per name and room map
     live_finds, live_until, detecting = {}, {}, set()  # the newest live detection per zone; until when to run them
 
+    LIVE_SHOW_SCORE = float(os.environ.get("BEACON_LIVE_SHOW", "0.25"))  # outlined live from this score (confirming needs finder.LIMITS)
+    LIVE_ALIASES = FIND_ALIASES
+    LIVE_HOLD_S = 4.0  # a live hit stays on /find this long when the next photos miss it (scores hover at the limit)
+
     def find_live(zone, photo, taken):
         """While someone asks (FIND_LIVE_S after a /find or a find question), the newest photo goes to the item finder
         alone (worker op "detect", about a second, between full fixes), one at a time per zone: the live outline."""
@@ -748,21 +753,33 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
 
         def run():
             try:
+                watched = found_things.watched(zone)
+                asked = list(dict.fromkeys(watched + [a for w in watched for a in LIVE_ALIASES.get(w, [])]))[:8]
                 header, _ = (bg_link or link).call({"op": "detect", "zone": zone, "device": "gpu",
-                                                    "look_for": found_things.watched(zone)}, one_photo(photo))
+                                                    "look_for": asked}, one_photo(photo))
                 if not header.get("ok"):
+                    sys.stderr.write(f"find live: detect failed: {str(header.get('error'))[:160]}" + chr(10))
                     return
-                boxes = [b for b in header["result"].get("items_live") or [] if found_things.check_live(b)]
+                raw = header["result"].get("items_live") or []
+                back = {a: w for w in watched for a in LIVE_ALIASES.get(w, [])}  # "orange object" -> "orange box"
+                raw = [{**b, "name": back.get(b.get("name"), b.get("name")), "asked_as": b.get("name")} for b in raw]
+                boxes = [b for b in raw if found_things.check_live(b)]  # these may confirm a sighting
+                shown = [b for b in raw if (b.get("score") or 0) >= LIVE_SHOW_SCORE and  # these are only outlined live
+                         (b.get("colour") is None or b["colour"] >= finds.COLOUR_LEAST)]
+                sys.stderr.write(f"find live: {len(raw)} raw " + str([(b.get("name"), round(b.get("score") or 0, 3), b.get("colour"))
+                                 for b in raw][:6]) + f" kept {len(boxes)} in {round(time.time() - taken, 1)} s" + chr(10))
                 image = None
-                if boxes:
+                if shown:
                     try:
                         (evidence_dir / header["job"]).mkdir(parents=True, exist_ok=True)
                         (evidence_dir / header["job"] / "seen.jpg").write_bytes(photo)
                         image = f"/evidence/{header['job']}/seen.jpg"
                     except OSError:
                         pass
-                live_finds[zone] = {"at": taken, "done_at": time.time(), "boxes": boxes, "image": image, "job": header["job"],
-                                    "latency_s": round(time.time() - taken, 2), "seconds": header["result"].get("seconds")}
+                held = live_finds.get(zone) or {}
+                if shown or not held.get("boxes") or taken - held.get("at", 0) > LIVE_HOLD_S:  # a miss right after a hit keeps the hit
+                    live_finds[zone] = {"at": taken, "done_at": time.time(), "boxes": shown, "image": image, "job": header["job"],
+                                        "latency_s": round(time.time() - taken, 2), "seconds": header["result"].get("seconds")}
                 now_fix = where.get(zone) or {}  # where the photo was taken from: the fix made from it (instant or full)
                 if boxes and now_fix.get("state") != "lost" and now_fix.get("position") and -3 < now_fix.get("at", 0) - taken < finds.LIVE_WITHIN_S:  # (a fix ends seconds after its photo)
                     pose = [float(now_fix["position"][0]), float(now_fix["position"][1]), float(now_fix.get("heading_deg") or 0)]
@@ -820,7 +837,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         """A fix's (or a search's) boxes of watched names -> the finder; returns its events, already logged. With the
         photo the fix was made from, it is kept as evidence/<job>/seen.jpg: the picture each box2d outlines."""
         accepted = [{**b, "accepted": True} for b in result.get("items") or []]
-        boxes = [b for b in accepted + list(result.get("items_candidates") or []) if b.get("position")]
+        back = {a: w for w, names in FIND_ALIASES.items() for a in names}  # "orange object" -> "orange box"
+        boxes = [{**b, "name": back.get(b.get("name"), b.get("name"))} for b in accepted + list(result.get("items_candidates") or [])
+                 if b.get("position")]
         if not boxes:
             return []
         image = next(((images or {}).get(b.get("image") or "") for b in boxes if b.get("image")), None)
@@ -2336,7 +2355,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if op == "locate":  # the spots where items were seen, so the worker can look at them again
                 job["remembered"] = [{"name": s["name"], "position": s["position"]} for s in seen.get(zone, {}).values()]
                 job["grow"] = growing
-                job["look_for"] = list(dict.fromkeys(AUTO_PLACES + found_things.watched(zone)))[:8]  # + find me X
+                job["look_for"] = list(dict.fromkeys(AUTO_PLACES + found_things.watched(zone) + [a for w in found_things.watched(zone) for a in FIND_ALIASES.get(w, [])]))[:8]  # + find me X
             header, blob = link.call(job, clip)
             seconds["total"] = round(time.time() - t0, 2)
             if not header.get("ok"):
