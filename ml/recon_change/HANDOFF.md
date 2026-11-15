@@ -356,3 +356,71 @@ event API on Seb's laptop have also stopped: nothing is listening on ports 8000,
 - The glasses were returned. Found before that: the app disconnects them whenever it leaves the screen, and
   the glasses end an idle session after about 3.5 minutes without a camera or microphone stream ("Session
   ended by device"). `android-autostart` reconnects for both, untested on hardware.
+
+## HAND-OFF, Sun 15 Nov ~01:40 UTC (03:40 local): start here
+
+Written so someone else (or a new chat) can finish without us. Per-area details are in
+`ml/recon_change/handoff/*.md` (one file per workstream). Never print or commit `.env.demo`.
+
+**Paste this into a new chat:** "Continue the Junction 2026 vision + glasses work for Seb. Repo
+github.com/TheTechJumbo/junction-2026. Check out `jun-26-recording-splat` and read the last section of
+`ml/recon_change/HANDOFF.md` plus `ml/recon_change/handoff/*.md`. Rules: ask before downloads; never print or
+commit keys/tokens (`.env.demo`), data, images, recordings or weights; merge with merge commits; `android/` is
+Ed's: changes stay on a branch for his review; Iridis is treated as untrusted (see handoff/privacy.md)."
+
+**Branches and PRs** (all pushed)
+- PR #46 `jun-22-hud-waypoints` -> `main`: local mode on a 6 GB laptop, live room map, verify demo. Mergeable,
+  verified (verify_demo 15/0/2). Merge first, with a merge commit.
+- PR #47 `jun-26-recording-splat` -> `jun-22-hud-waypoints` (stacked): record a room -> Gaussian splat trained
+  on Iridis, whole-video uploads, fly-throughs, labels (deduped), playback, anonymiser, caretaker page (/care),
+  places (live/auto), /navigate, privacy work in progress. Retarget to `main` after #46 merges.
+- `claude/glasses-dc-fix-038490` (no PR; Ed to review): the Android app. Ed's wearer screen first, our setup
+  behind the gear, auto setup, glasses reconnect fixes, live camera / Record room / Record video, opt-in
+  always-on recording, wearer map + "take me to", debug panel (459ed3a). See handoff/android-app.md.
+- `claude/caretaker-app` (5c54032): the caretaker page's history; its files are folded into PR #47.
+- `android-autostart`: superseded by `claude/glasses-dc-fix-038490`.
+- `main` also gained PR #55 (wearer-guidance) from a teammate at 01:30 local; not yet merged into our branches.
+
+**What runs where (now)**
+- Laptop (Seb's, Windows): event API `scripts/run_local.py --port 8000` (from run_demo.sh) and the relay
+  `python -u live/relay.py --host 0.0.0.0 --port 8090 --token <RELAY_KEY> --quick --train-host iridis`
+  started from `ml/recon_change` with env `EVENT_API_URL=http://127.0.0.1:8000/events`,
+  `EVENT_API_TOKEN=<API_TOKEN>`; logs `%TEMP%\beacon-relay.log` / `.err.log`. Both keys are in `.env.demo`
+  (RELAY_KEY rotated 02:51 local; old copy `.env.demo.bak-before-rotate`, git-ignored).
+- Iridis (`ssh iridis`, VPN): GPU worker `jun-worker` (L4) and `jun-worker-cpu`, each with a replacement queued;
+  gsplat training jobs (`video-map`, `private-train`) launched by the relay; a test servers job
+  `jun-servers-test` (the API + relay on a compute node, synthetic zones only). Code under
+  `/scratch/ase1g23/junction-recon`, deployed with `iridis/deploy_from_laptop.sh`.
+- Phone (Pixel, USB): `adb reverse tcp:8000 tcp:8000` and `tcp:8090 tcp:8090` (adb in
+  `C:\Users\User\platform-tools`). Apps: glasses app `com.junction.glasses` (build f15eadd installed; 459ed3a with
+  debug panel + venue_zone not installed yet), Ed's family app "Daylight" (Live 3D tab shows /care; set the
+  key by touch-and-hold).
+- Relay pages (add `?k=<RELAY_KEY>`): /dashboard, /care?zone=Z, /viewer?live=Z, /places, /dayview.
+
+**Zones**
+- `kitchen`: the demo venue, changed several times tonight. 02:45: a stray always-on recording
+  (aon-20261115-024529) replaced its map (Seb first kept it, later asked to "restore kitchen now"). 03:12: the
+  app uploaded Seb's 02:59 glasses video (session 20261115_025911_0a9dfa62, 1347 frames) to kitchen, and the
+  map was rebuilt from it at 03:13; its training was still running at 03:40. Check `GET /room?zone=kitchen` and
+  handoff/relay-and-recording.md for what it points at, and ask Seb which venue he wants before switching. Seb's original glasses venue is intact:
+  `%TEMP%\beacon-evidence\train-kitchen-glasses-20261115-001625-1\` (24.59 dB, 1.73M Gaussians), Iridis
+  backups in `/scratch/ase1g23/backup/`. Places must be named again on whichever pictures kitchen ends up with.
+- `validate-room`: the validation zone (Seb's latest glasses video; training job may need fetching).
+- `always-on-test`: where the app now records by default, so stray taps can't touch kitchen.
+
+**Open items, in priority order**
+1. One bundled relay restart (when no upload is running): link kitchen's chosen splat, fetch validate-room's
+   training (set its recordings.json state to "running" first), load the most-recent-map fallback for
+   /navigate and the caretaker's same-frames pairing (already in relay.py). Restarts cut uploads in flight.
+2. Name kitchen's places again (the glasses session has the procedure); then test "take me to" end to end.
+3. Install the app build with the debug panel + venue_zone (one Meta AI approval).
+4. Privacy: Seb wants Iridis treated as untrusted (blur + keyed garble + encryption at rest, outputs encrypted).
+   Modules exist; the trusted side (phone vs laptop) is Seb's decision. The move of the API and relay onto
+   Iridis is built and tested but PAUSED until that is decided (handoff/iridis-servers.md).
+5. Publish the anonymised venue splat (Git LFS, .splat only) once Seb confirms.
+6. Merge #46, then #47; get Ed's review of the app branch.
+
+**Lessons that cost time**: relay restarts kill uploads and pending training fetches; UI automation over adb
+can tap buttons by accident (the 02:45 recording); every CI build has a new debug key, so installs need an
+uninstall and a new Meta AI approval; glasses need Developer Mode per pair and drop idle sessions after
+~3.5 min; the laptop GPU throttles at 80+ °C, so the models run on Iridis.
