@@ -6,6 +6,34 @@ Wearables Device Access Toolkit 1.0.1 (official source reference
 No Meta agent or ElevenLabs key belongs in this app. `/ask` and `/speak` use the
 central backend's session token; provider credentials stay server-side.
 
+## The wearer's screen (phone and glasses)
+
+The app opens on the wearer's screen (the gear shows setup). Anna sees one card at a time, the
+same on the phone and the glasses: symbols, a time, a distance, a word or two. `core/Wearer.kt`
+picks the first that applies:
+
+| Card | When | Shows |
+| --- | --- | --- |
+| Night | Before 06:00, door opened in the last 10 min or she is at the door | Moon, time, "Bed?" |
+| Reminder | A relay reminder is due | Bell, time, the place, arrow and metres, Done |
+| Going out | Daytime, at the door or within 2 min of it opening | Keys, wallet, phone and where each was last seen |
+| Answer | Up to 45 s after a question | Pills: ✓ and the opening time, or ✗ and the way. Door, Keys likewise |
+| Guide | After **Go**, or "take me to the bathroom" | Arrow to the next corner, the place, metres to walk and turns left; ✓ when there |
+| Idle | Otherwise | Phone: clock and next reminder. Glasses: nothing |
+
+Cards say only what was observed: an opened pill box, never "pills taken"; a closed door, never
+"locked". `wearer/WearerPanel.kt` draws the phone card plus Pills?/Door?/Keys? and the mic;
+`meta/GlassesCards.kt` sends it with Meta's display components (Meta icons where they exist, our
+`wearer/Glyphs.kt` as bitmaps otherwise). Data: `GET /timeline` with the backend token, and
+optionally the vision relay's `/reminders` and `/where` (key in `X-Key`), every 10 s.
+Directions use the relay's route around the furniture when it has one (else the straight line). Any
+place the carer named on the relay's `/places` page can be asked for; while walking, `/where` is read
+every 2 s. An opened pill box never shows the way back to it.
+With glasses that have no display (Gen 2, the default), the guide, reminder, night and going-out
+cards are also spoken in a few words ("Pill box: turn left, 3 metres"), once and again only when the
+direction or distance step changes, never over an answer being spoken. Setup can turn this off.
+Setup › **Wearer demo: next scene** steps through nine example scenes with no hardware.
+
 ## Build and install
 
 Use Java 17, Android SDK platform 36 and Android Studio or the command-line tools.

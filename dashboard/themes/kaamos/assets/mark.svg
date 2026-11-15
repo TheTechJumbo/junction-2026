@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" class="kaamos-mark">
+  <rect class="kaamos-mark-sky" x="0" y="0" width="48" height="48" fill="#1d2a4a"/>
+  <circle class="kaamos-mark-sun" cx="35" cy="17" r="5" fill="#f7d9a0"/>
+  <path class="kaamos-mark-roof" d="M4 30 L13 19 L35 19 L44 30 Z" fill="#3b4763"/>
+  <path class="kaamos-mark-snow" d="M10 23 L13 18.5 L35 18.5 L38 23 Q32 25.5 27 23.5 Q21 26 16 23.5 Q13 25 10 23 Z" fill="#eef2f6"/>
+  <rect class="kaamos-mark-wall" x="6" y="30" width="36" height="18" fill="#121a35"/>
+  <rect class="kaamos-mark-window" x="20" y="34" width="8" height="9" fill="#f2b04a"/>
+  <rect class="kaamos-mark-sill" x="18.5" y="43" width="11" height="2" fill="#eef2f6"/>
+</svg>

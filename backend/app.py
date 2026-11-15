@@ -70,6 +70,9 @@ class Settings:
     stream_poll_seconds: float = .1
     stream_keepalive_seconds: float = 15
     allowed_origins: tuple[str, ...] = ()
+    # Trip hazards (GET /hazards) are an optional guess from the 3D map; False answers 404 so the family
+    # app hides them. HAZARDS_ENABLED=0 switches them off without touching anything else.
+    hazards_enabled: bool = True
     # Optional device-specific bearer credentials. Do not configure real credentials in code.
     device_tokens: dict[str, str] = field(default_factory=dict, repr=False)
 
@@ -84,6 +87,7 @@ class Settings:
             sensor_offline_seconds=float(os.environ.get("SENSOR_OFFLINE_SECONDS", "30")),
             evidence_mode=os.environ.get("EVIDENCE_MODE", "local_only"),
             allowed_origins=tuple(filter(None, os.environ.get("ALLOWED_ORIGINS", "").split(","))),
+            hazards_enabled=os.environ.get("HAZARDS_ENABLED", "1").strip().lower() not in ("0", "false", "off", "no"),
         )
 
 
@@ -403,6 +407,38 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
     def summary(day: date | None = None):
         selected, events, questions, alerts = daily(day)
         return Summary(text=engine.summarize(events, alerts, questions, selected, settings.timezone))
+
+    @app.get("/mesh", dependencies=auth)
+    def home_mesh():
+        """The home in 3D: the mesh the vision stage last wrote (ml/recon_change/splat_mesh.py) to
+        <LOCAL_DATA_DIR>/mesh/home.ply, as a binary PLY. 404 until there is one."""
+        path = Path(settings.local_data_dir) / "mesh" / "home.ply"
+        if not path.is_file():
+            raise APIError(404, "not_found", "No 3D map of the home yet.")
+        return Response(path.read_bytes(), media_type="application/octet-stream",
+                        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+    def mesh_json(name, missing):
+        path = Path(settings.local_data_dir) / "mesh" / name
+        if not path.is_file():
+            raise APIError(404, "not_found", missing)
+        return Response(path.read_bytes(), media_type="application/json",
+                        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+    @app.get("/hazards", dependencies=auth)
+    def trip_hazards():
+        """Things on the floor in the way of the night walks (ml/recon_change/hazards.py writes
+        mesh/hazards.json). Suggestions for the family to clear up, never alerts."""
+        if not settings.hazards_enabled:
+            raise APIError(404, "not_found", "The trip hazard check is switched off.")
+        return mesh_json("hazards.json", "No trip hazard check yet.")
+
+    @app.get("/night", dependencies=auth)
+    def night_walk(day: date | None = None):
+        """The night before `day` (default today), walked (ml/recon_change/night.py writes
+        mesh/night-YYYY-MM-DD.json)."""
+        selected = day or now().astimezone(zone).date()
+        return mesh_json(f"night-{selected.isoformat()}.json", "No night track for that day.")
 
     @app.post("/ask", response_model=Answer, dependencies=auth)
     def ask(body: AskRequest):

@@ -18,7 +18,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import com.junction.glasses.core.*
+import com.junction.glasses.meta.GlassesCards
 import com.junction.glasses.meta.MetaGlassesAdapter
+import com.junction.glasses.wearer.WearerController
+import com.junction.glasses.wearer.WearerPanel
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 
@@ -41,6 +48,7 @@ class MainActivity : ComponentActivity() {
     private var configuredClient: HttpBackendClient? = null
     private var configuredOrigin: String? = null
     private var configuredEvidence: EvidenceClient? = null
+    private var configuredDay: DayClient? = null
     private var connectionCheck: Cancelable? = null
     private var connectionGeneration = 0L
     private var diagnosticJob: Job? = null
@@ -58,6 +66,12 @@ class MainActivity : ComponentActivity() {
     private var pendingPhoneListen = false
     private var recognitionGeneration = 0L
     private var displayJob: Job? = null
+    // The wearer's screen (wearer/WearerController.kt owns what it shows).
+    private lateinit var wearer: WearerPanel
+    private lateinit var screen: WearerController
+    private lateinit var setup: LinearLayout
+    private val home: ZoneId = ZoneId.of("Europe/Helsinki")
+    private var cardJob: Job? = null
     private fun stopRecognition() {
         recognitionGeneration++
         pendingPhoneListen = false
@@ -166,15 +180,57 @@ class MainActivity : ComponentActivity() {
         button("Start glasses motion") { glasses.startMotion() }
         button("Stop glasses motion") { glasses.stopMotion() }
         button("Disconnect glasses") { stopTurn(); glasses.disconnect() }
+        label("Wearer screen", 22f)
+        column.addView(CheckBox(this).apply {
+            text = "Speak directions and reminders (for glasses without a display)"
+            isChecked = true
+            setOnCheckedChangeListener { _, on -> screen.speakCues = on }
+        })
+        val relayUrl = field("Vision relay URL (optional)").apply { if (BuildConfig.DEBUG) setText("http://127.0.0.1:8090") }
+        val relayKey = field("Vision relay key", true)
+        button("Connect vision relay") {
+            screen.relay = try { RelayClient(relayUrl.text.toString(), relayKey.text.toString(), allowLocalHttp = BuildConfig.DEBUG) }
+                catch (_: Exception) { null }
+            relayKey.text.clear()
+            status.text = if (screen.relay == null) "Use the relay origin and its key." else "Vision relay configured for reminders and directions."
+            screen.refresh()
+        }
+        button("Wearer demo: next scene") { status.text = "Wearer demo scene ${screen.nextDemoScene()} of ${WearerController.DEMO_SCENES}" }
+        button("Wearer demo: off") { screen.demoOff() }
         label("Audio uses Android’s selected media output. Check the Bluetooth output at the venue. Phone recognition may use the device’s speech service; no recordings are saved by this app.")
+        setup = column.apply { visibility = android.view.View.GONE }
+        wearer = WearerPanel(this).apply {
+            onAsk = { q -> question.setText(q); submit(q) }
+            onMic = {
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    pendingPhoneListen = true; permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                } else startPhoneListening()
+            }
+            onDone = { screen.finishReminder(it) }
+            onDismiss = { screen.dismissNight() }
+            onGo = { screen.startGuide(it) }
+            onStopGuide = { screen.stopGuide() }
+            onSetup = { setup.visibility = if (setup.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE }
+        }
+        screen = WearerController(wearer, main, home, speak = { line -> audio.speakFallback(line) {} }, toGlasses = { card ->
+            cardJob?.cancel()
+            cardJob = lifecycleScope.launch {
+                glasses.showCard(card, { id -> main.post { screen.finishReminder(id) } }, { target -> main.post { screen.startGuide(target) } }, { main.post { screen.stopGuide() } })
+            }
+        })
         setContentView(ScrollView(this).apply {
-            addView(column)
+            setBackgroundColor(WearerPanel.NIGHT); isFillViewport = true
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
+                addView(wearer); addView(setup)
+            })
             setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
                 view.setPadding(0, bars.top, 0, bars.bottom)
                 insets
             }
         })
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply { isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false }
         lifecycleScope.launch { glasses.state.collect { s ->
             deviceStatus.text = "Registration: ${s.registration}\nDevices: ${s.deviceCount} · ${s.connection}\nCamera: ${s.camera} · ${displayDescription(s.display)}\nSpeech: ${s.speech} · Motion: ${s.motion}\nGlasses consent — Camera: ${s.cameraPermission}; microphone: ${s.microphonePermission}" + (s.error?.let { "\n$it" } ?: "")
         } }
@@ -208,6 +264,7 @@ class MainActivity : ComponentActivity() {
                 ?: throw IllegalArgumentException() else HttpBackendClient(origin, suppliedToken, allowLocalHttp = BuildConfig.DEBUG)
             if (suppliedToken.isNotBlank()) {
                 configuredEvidence = EvidenceClient(origin, suppliedToken, allowLocalHttp = BuildConfig.DEBUG)
+                configuredDay = DayClient(origin, suppliedToken, home, allowLocalHttp = BuildConfig.DEBUG)
             }
             configuredClient = client; configuredOrigin = origin
             token.text.clear()
@@ -219,9 +276,11 @@ class MainActivity : ComponentActivity() {
                 connectionCheck = null; connectButton.isEnabled = true
                 result.fold(onSuccess = {
                     evidenceClient = configuredEvidence
+                    screen.dayClient = configuredDay
                     controller = VoiceTurnController(client, audio, { work -> if (Looper.myLooper() == main.looper) work() else main.post(work) }, ::renderTurn)
                     backendStatus.text = "Backend: reachable and authenticated at last check."
                     status.text = "Backend connection verified. Ask a question or test audio."
+                    screen.refresh()
                 }, onFailure = { failure ->
                     backendStatus.text = when ((failure as? BackendFailure)?.status) {
                         401, 403 -> "Backend: token rejected. Enter the backend API_TOKEN and retry."
@@ -275,11 +334,21 @@ class MainActivity : ComponentActivity() {
     private fun submit(text: String) {
         cancelDiagnostic()
         stopRecognition(); glasses.stopListening()
-        if (controller == null) { status.text = "Connect the backend first."; return }
+        if (screen.ask(text)) return // the wearer demo answers by itself
+        if (controller == null) { status.text = "Connect the backend first."; if (::wearer.isInitialized) wearer.setStatus("Not connected"); return }
         lastQuestion = text
         controller?.submit(text)
     }
     private fun renderTurn(turn: TurnState) {
+        renderStatus(turn)
+        screen.turnBusy = turn.phase in setOf(TurnPhase.ASKING, TurnPhase.FETCHING_SPEECH, TurnPhase.PLAYING, TurnPhase.FALLBACK)
+        if (::wearer.isInitialized) wearer.setStatus(when (turn.phase) {
+            TurnPhase.ASKING -> "…"; TurnPhase.ERROR -> "No answer. Try again."; else -> ""
+        })
+        turn.answer?.let(screen::answered)
+        renderAnswer(turn)
+    }
+    private fun renderStatus(turn: TurnState) {
         speechStatus.text = when (turn.speechSource) {
             SpeechSource.NONE -> "Speech source: not used for this turn yet."
             SpeechSource.ELEVENLABS -> "Speech source: ElevenLabs through backend."
@@ -301,6 +370,8 @@ class MainActivity : ComponentActivity() {
             TurnPhase.CANCELLED -> "Stopped"
         }
         if (turn.question == "Audio test") diagnosticStatus.text = "Audio test: ${status.text}\n${speechStatus.text} Confirm where you hear the sound."
+    }
+    private fun renderAnswer(turn: TurnState) {
         if (turn.phase == TurnPhase.ASKING) {
             displayJob?.cancel(); shownAnswer = null; latestEvidence = emptyList(); answerView.text = "Finding observations…"; evidenceView.text = ""
         }
@@ -391,11 +462,13 @@ class MainActivity : ComponentActivity() {
         // Meta registration and consent intentionally leave this Activity briefly.
         cancelConnectionCheck(); cancelDiagnostic()
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
+        screen.pause()
         if (!glasses.isExternalFlowPending) { glasses.stopListening(); glasses.suspendLifecycle() }
         super.onStop()
     }
     override fun onResume() {
         super.onResume()
+        screen.resume()
         if (::glasses.isInitialized) glasses.onResume()
         updatePermissionStatus()
     }

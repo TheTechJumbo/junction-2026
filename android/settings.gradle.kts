@@ -4,4 +4,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "JunctionGlasses"
-include(":app")
+include(":app", ":family")
