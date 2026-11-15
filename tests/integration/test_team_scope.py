@@ -57,7 +57,7 @@ def test_wrong_zone_door_cannot_raise_front_door_alert_or_count_in_summary(clien
     assert client.post("/events", json=wrong).status_code == 200
     timeline = client.get("/timeline", params={"day": "2026-11-14"}).json()
     assert timeline["alerts"] == [], timeline
-    assert "0 front door opening(s)" in client.get("/summary").json()["text"]
+    assert "0 front door openings" in client.get("/summary").json()["text"]
 
 
 @pytest.mark.parametrize("event_type", ["pillbox_open", "pills_taken", "medication_taken"])
@@ -85,4 +85,4 @@ def test_latest_state_and_repeat_counts_use_real_api_and_storage(client):
         assert "cannot confirm" in answer["answer"]
         assert [e["id"] for e in answer["evidence"]] == ["opened"]
     assert client.get("/timeline").json()["questions"][0]["count"] == 2
-    assert "2 question(s)" in client.get("/summary").json()["text"]
+    assert "2 questions" in client.get("/summary").json()["text"]

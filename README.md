@@ -53,16 +53,21 @@ It supports people; it does not diagnose them.
 
 ## Challenges we're targeting
 
-| Challenge | Fit |
-| --- | --- |
-| **Meta: AI Glasses for Everyone, Everyday** (main) | The first-person view catches the moment (pills in hand, door being locked) and gives help right then. |
-| Google DeepMind: Best Use of Gemini API | Spots key actions in glasses frames, answers "did I…?" from the log, writes the daily summary. |
-| Arduino: Best Use of Arduino UNO Q | The pill box and door sensors are the ground truth; the debouncing runs on the device. |
-| MLH: Best Use of ElevenLabs | Calm, natural spoken prompts in the glasses. |
-| Aiven: Best Use of Aiven | Events, timeline and profiles in Aiven PostgreSQL. |
-| Cloudinary: Best Use of Cloudinary | Blurring bystanders' faces in stored moments. |
+| Challenge | Fit | Claim it when |
+| --- | --- | --- |
+| **Meta: AI Glasses for Everyone, Everyday** (main) | Ask "Did I take my pills?" or "Where are my keys?" hands-free. The glasses answer from what the home recorded, and the display points the way to the pill box or the keys. | Now. Meta also asks for a deck. |
+| MLH: Best Use of ElevenLabs | Every answer and reminder is spoken in one calm voice, with the phone's voice as fallback. | Once a live call with a real key works. |
+| Google DeepMind: Best Use of Gemini API | Answers open questions about the day from the event log and writes the family's daily note (text only, no photos). | Once Gemini does that in the demo. Participants must be 18 or older. |
+| Arduino: Best Use of Arduino UNO Q | The pill-box sensor and the household store run on the UNO Q, and photos and 3D data stay on it. The 3D model also runs on the board, slowly. | Once a real pill-box sensor works (the simulator alone does not count). |
+| Aiven: Best Use of Aiven | Event records (never photos) are copied to Aiven PostgreSQL, and the home keeps working when the link drops. | Once it is connected. |
+| Verda: Verda Compute Track | The 3D model behind directions and lost items runs on a Verda GPU in Europe; it does not fit on a laptop. | Once the GPU worker runs on Verda. |
+| OpenAI: Best Use of Codex | Codex agents built the event API, answer engine, dashboard and Android glasses app. | Once Bartek confirms. |
 
-Tech challenges can be combined with the main challenge. Only claim the ones we genuinely use.
+Dropped: Cloudinary. We don't use it: faces are blurred locally and photos stay local by design.
+
+Tech challenges stack on top of the main challenge. Only claim the ones we genuinely use.
+The Arduino tracks also need a post on Arduino Project Hub with the tag "Junction Finland 2026".
+Facts per challenge: `hackathon-context/challenges.md`. Plan per track: `hackathon-context/track-plan.md`.
 Full list: <https://junction2026.com/challenges>.
 
 ## How it works

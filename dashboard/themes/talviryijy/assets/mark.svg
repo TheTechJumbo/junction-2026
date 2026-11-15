@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" class="tr-mark" shape-rendering="crispEdges">
+<path class="tr-mark-ground" fill="#2c3d6b" d="M16 0h64v8h-64zM8 8h64v8h-64zM80 8h8v8h-8zM0 16h56v8h-56zM72 16h24v8h-24zM0 24h40v8h-40zM72 24h24v8h-24zM0 32h32v8h-32zM64 32h32v8h-32zM0 40h24v8h-24zM72 40h24v8h-24zM0 48h16v8h-16zM80 48h16v8h-16zM0 56h8v8h-8zM88 56h8v8h-8zM0 64h16v8h-16zM80 64h16v8h-16zM0 72h16v8h-16zM80 72h16v8h-16zM0 80h16v8h-16zM80 80h16v8h-16zM8 88h8v8h-8zM80 88h8v8h-8z"/>
+<path class="tr-mark-star" fill="#eef2f6" d="M72 8h8v8h-8z"/>
+<path class="tr-mark-chimney" fill="#3b4763" d="M56 16h16v8h-16zM56 24h16v8h-16z"/>
+<path class="tr-mark-snow" fill="#eef2f6" d="M40 24h16v8h-16zM32 32h32v8h-32zM24 40h48v8h-48zM16 48h64v8h-64z"/>
+<path class="tr-mark-roof" fill="#3b4763" d="M8 56h80v8h-80z"/>
+<path class="tr-mark-wall" fill="#141c38" d="M16 64h64v8h-64zM16 72h16v8h-16zM48 72h32v8h-32zM16 80h16v8h-16zM48 80h32v8h-32zM16 88h64v8h-64z"/>
+<path class="tr-mark-lamp" fill="#f2b04a" d="M32 72h16v8h-16zM40 80h8v8h-8z"/>
+<path class="tr-mark-hot" fill="#ffe2a6" d="M32 80h8v8h-8z"/>
+</svg>

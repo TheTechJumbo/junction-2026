@@ -1,0 +1,5 @@
+Latin subsets from the @fontsource packages, under the SIL Open Font License 1.1
+(full text in ../../OFL.txt).
+
+Schibsted Grotesk (400, 700, 900): Copyright 2023 The Schibsted-Grotesk Project Authors (https://github.com/schibsted/schibsted-grotesk)
+IBM Plex Mono (400): Copyright 2017 IBM Corp. All rights reserved.
