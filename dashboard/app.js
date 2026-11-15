@@ -39,9 +39,12 @@ const setVar = (name, value) => root.style.setProperty(name, String(value));
 // Each theme is a folder under themes/: theme.css plus SVG assets (mark, scene, icons). The SVGs are
 // inlined so the theme's CSS can colour and animate them. They are our own files, but are still
 // stripped of scripts, event handlers and external links before they are added to the page.
-let themes = [{id: 'kaamos', name: 'Kaamos'}];
-function storedTheme() { try { return localStorage.getItem('daylight-theme'); } catch { return null; } }
-function storeTheme(id) { try { localStorage.setItem('daylight-theme', id); } catch { /* private mode */ } }
+const DEFAULT_THEME = 'kaamos';
+let themes = [{id: DEFAULT_THEME, name: 'Kaamos'}];
+// Only a pick made with Look is remembered; ?theme= previews don't stick. The key changed when Kaamos
+// became the default, so older remembered picks reset once.
+function storedTheme() { try { return localStorage.getItem('daylight-look'); } catch { return null; } }
+function storeTheme(id) { try { localStorage.setItem('daylight-look', id); } catch { /* private mode */ } }
 function cleanSvg(text) {
   const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
   const svg = doc.documentElement;
@@ -59,8 +62,8 @@ async function loadAsset(id, name) {
   try { const response = await fetch(`themes/${id}/assets/${name}.svg`); if (!response.ok) return null; return cleanSvg(await response.text()); }
   catch { return null; }
 }
-async function applyTheme(id) {
-  if (!themes.some(theme => theme.id === id)) id = themes[0].id;
+async function applyTheme(id, remember = false) {
+  if (!themes.some(theme => theme.id === id)) id = DEFAULT_THEME;
   const link = $('theme-css'), href = `themes/${id}/theme.css`;
   const loaded = link.getAttribute('href') === href ? Promise.resolve()
     : new Promise(resolve => { link.addEventListener('load', resolve, {once: true}); link.addEventListener('error', resolve, {once: true}); link.setAttribute('href', href); });
@@ -69,7 +72,7 @@ async function applyTheme(id) {
   document.querySelectorAll('[data-asset="scene"]').forEach(slot => slot.replaceChildren(...(scene ? [scene] : [])));
   $('sprite').replaceChildren(...(icons ? [icons] : []));
   root.dataset.themeId = id;
-  storeTheme(id);
+  if (remember) storeTheme(id);
   await Promise.race([loaded, new Promise(resolve => setTimeout(resolve, 1500))]);
   syncThemeColor();
   document.querySelectorAll('#theme-options input').forEach(input => { input.checked = input.value === id; });
@@ -83,7 +86,7 @@ function buildThemeOptions() {
   $('theme-options').replaceChildren(...themes.map(theme => {
     const label = node('label', undefined, 'theme-option');
     const input = node('input'); input.type = 'radio'; input.name = 'theme'; input.value = theme.id;
-    input.addEventListener('change', () => applyTheme(theme.id));
+    input.addEventListener('change', () => applyTheme(theme.id, true));
     const swatches = node('span', undefined, 'swatches');
     for (const color of theme.swatches || []) { const swatch = node('span', undefined, 'swatch'); swatch.style.setProperty('background', color); swatches.append(swatch); }
     const words = node('span', undefined, 'theme-words'); words.append(node('strong', theme.name), node('small', theme.description || ''));
@@ -330,5 +333,5 @@ window.addEventListener('appinstalled', () => { installPrompt = null; $('install
 // ---------- Start ----------
 try { const response = await fetch('themes/themes.json'); if (response.ok) themes = await response.json(); } catch { /* keep the default */ }
 buildThemeOptions();
-await applyTheme(params.get('theme') || storedTheme() || themes[0].id);
+await applyTheme(params.get('theme') || storedTheme() || DEFAULT_THEME);
 load();
