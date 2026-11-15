@@ -477,8 +477,25 @@
     cameraUp: cam.up, initialCameraPosition: cam.eye, initialCameraLookAt: cam.look,
     sharedMemoryForWorkers: false, gpuAcceleratedSort: false, selfDrivenMode: true,
   });
-  fetch(scene.splat, {method: 'HEAD'}).then(r => { const n = Number(r.headers.get('content-length')) / 32; if (n) setStat('seen', n, 'Gaussians seen'); }).catch(() => {});
-  splatView.addSplatScene(scene.splat, {showLoadingUI: false, progressiveLoad: false, splatAlphaRemovalThreshold: 5})
+  // GitHub Pages sends .splat files compressed, and the viewer's own loader sizes its buffer from the
+  // compressed length, so the file "cannot be loaded". Fetch it here (the browser unpacks it), showing
+  // progress, and hand the viewer a local copy of the right size.
+  async function fetchSplat(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`${url}: ${response.status}`);
+    const reader = response.body.getReader(), parts = [];
+    let got = 0, shown = 0;
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      parts.push(value); got += value.length;
+      if (got - shown > 1e6) { shown = got; $('splat-status').textContent = `Loading the splat… ${(got / 1e6).toFixed(0)} MB`; }
+    }
+    setStat('seen', Math.round(got / 32), 'Gaussians seen'); // 32 bytes per Gaussian
+    return URL.createObjectURL(new Blob(parts));
+  }
+  fetchSplat(scene.splat)
+    .then(local => splatView.addSplatScene(local, {format: GS.SceneFormat.Splat, showLoadingUI: false, progressiveLoad: false, splatAlphaRemovalThreshold: 5}))
     .then(() => { splatView.start(); $('splat-status').textContent = 'drag to orbit · scroll to zoom'; window.demo.splat = true; drawHouse(); window.demo.ready.then(goHome); })
     .catch(e => { $('splat-status').textContent = 'Could not load the splat: ' + e.message; });
 </script>
