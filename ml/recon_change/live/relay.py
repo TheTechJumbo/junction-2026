@@ -1259,6 +1259,13 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200, {"ok": True, **got, "age_s": round(time.time() - got["at"]), "building": bool(building.get(zone))})
             if url.path == "/care/space":  # the splat the caretaker's page shows, and the matrix into the room map's axes
                 code, reply = care_view(zone)
+                if code == 200 and reply.get("kind") == "trained" and parse_qs(url.query).get("lite", [""])[0] and care_space:
+                    try:  # the wearer's phone: a lighter copy, made once next to the trained splat (care_space.make_lite)
+                        with space_lock:
+                            made = care_space.make_lite(evidence_dir / reply["splat"].split("/")[2])
+                        reply = {**reply, "lite_splat": f"/evidence/{made.parent.name}/{made.name}", "lite_gaussians": made.stat().st_size // 32}
+                    except (OSError, ValueError) as err:
+                        sys.stderr.write(f"care lite splat: {type(err).__name__}: {err}" + chr(10))
                 return self.send_json(code, {**reply, "named": care_named(zone, reply)} if code == 200 else reply)
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)

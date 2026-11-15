@@ -12,6 +12,7 @@ either side. space() pairs them by heading, in order, and returns the similarity
 into map axes: the turn about up from the paired headings, the scale and the shift from the paired positions.
 
     python live/care_space.py ROOM.json CAMERAS.npz   # how well a trained splat fits a room map
+    python live/care_space.py --lite TRAINED_FOLDER   # write the lighter copy (lite.splat) for the wearer's phone
 """
 import json
 import math
@@ -37,6 +38,27 @@ def load_keyframes(path):
     """The recording frame number of each of a trained splat's keyframes (cameras.npz "keyframes"), or None."""
     with np.load(path) as got:
         return [int(n) for n in got["keyframes"]] if "keyframes" in got.files else None
+
+
+LITE_MOST = 400_000  # Gaussians in the lighter copy for a phone (the trained splat has 1 to 2 million)
+
+
+def make_lite(folder, most=LITE_MOST, name="lite.splat"):
+    """A lighter copy of folder/trained.splat for a phone (/care?view=wearer): the `most` Gaussians that cover the
+    most (opacity times their size seen face on), written once next to it as lite.splat (again when the trained splat
+    is newer). Same axes, so the same matrix places it. Returns the file."""
+    src, out = folder / "trained.splat", folder / name
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return out
+    rec = np.fromfile(src, dtype=[("pos", "<f4", 3), ("scale", "<f4", 3), ("rgba", "u1", 4), ("rot", "u1", 4)])
+    if len(rec) > most:
+        area = np.prod(np.abs(rec["scale"].astype(np.float64)), 1) ** (2 / 3)
+        weight = rec["rgba"][:, 3] / 255.0 * area
+        rec = rec[np.sort(np.argpartition(-weight, most)[:most])]
+    tmp = out.with_name(out.name + ".part")
+    rec.tofile(tmp)
+    tmp.replace(out)
+    return out
 
 
 def wrap(deg):
@@ -276,5 +298,10 @@ def place_points(waypoints, paired, views, matrix, numbers=None, reach=(2, 5)):
 
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--lite":  # python live/care_space.py --lite TRAINED_FOLDER [GAUSSIANS]
+        from pathlib import Path
+        made = make_lite(Path(sys.argv[2]), int(sys.argv[3]) if len(sys.argv) > 3 else LITE_MOST)
+        print(made, made.stat().st_size // 32, "Gaussians")
+        sys.exit(0)
     room = json.loads(open(sys.argv[1], encoding="utf-8").read())
     print(json.dumps(space(load_cameras(sys.argv[2]), room["cameras"], float(sys.argv[3]) if len(sys.argv) > 3 else None), indent=1))
