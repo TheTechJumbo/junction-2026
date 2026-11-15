@@ -254,6 +254,28 @@ def box_iou(a, b):
         return 0.0
 
 
+LIVE_THING_M = float(os.environ.get("BEACON_LIVE_THING_M", "0.2"))  # the size a live outline is read as (the orange box)
+LIVE_VFOV_DEG = float(os.environ.get("BEACON_LIVE_VFOV", "85"))     # the glasses' upright picture, top to bottom
+
+
+def place_from_photo(box, fix):
+    """Where a thing outlined in a live photo is, without depth: from the wearer's fix (position, heading), the outline's
+    place across the picture (left/right of ahead) and its height in it (a thing LIVE_THING_M tall). Rough (+-50% in
+    distance), but it moves when the thing moves. None without a usable fix."""
+    try:
+        u0, v0, u1, v1 = (float(v) for v in box)
+        frac = max(0.02, v1 - v0)
+        vfov = math.radians(LIVE_VFOV_DEG)
+        dist = min(4.0, max(0.4, LIVE_THING_M / (frac * 2 * math.tan(vfov / 2))))
+        hfov = 2 * math.atan(math.tan(vfov / 2) * 9 / 16)  # an upright 9:16 picture
+        turn = ((u0 + u1) / 2 - 0.5) * hfov  # + right of ahead
+        way = math.radians(float(fix.get("heading_deg") or 0)) + turn
+        east, north, up = (float(c) for c in (list(fix["position"]) + [0.0])[:3])
+        return [round(east + dist * math.sin(way), 3), round(north + dist * math.cos(way), 3), round(up - 0.4, 3)]
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
 def orange_patch(photo):
     """The largest strongly orange patch in a JPEG, as a live box {"name": "orange box", "score", "box" [u0, v0, u1, v1],
     "colour", "source": "colour"}, or None. A few ms on the laptop: the outline shows even when the item finder misses
@@ -828,7 +850,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     live_finds[zone] = {"at": taken, "done_at": time.time(), "boxes": shown, "image": image, "job": header["job"],
                                         "latency_s": round(time.time() - taken, 2), "seconds": header["result"].get("seconds")}
                 now_fix = where.get(zone) or {}  # where the photo was taken from: the fix made from it (instant or full)
-                if boxes and now_fix.get("state") != "lost" and now_fix.get("position") and -3 < now_fix.get("at", 0) - taken < finds.LIVE_WITHIN_S:  # (a fix ends seconds after its photo)
+                usable = now_fix.get("state") != "lost" and now_fix.get("position") and -3 < now_fix.get("at", 0) - taken < finds.LIVE_WITHIN_S
+                follow = [b for b in shown if (b.get("score") or 0) >= finds.LIMITS.get(b["name"], finds.DEFAULT_LIMIT)]
+                if follow and usable:  # every time it is seen: its spot from this photo and the wearer's fix (no depth)
+                    best = max(follow, key=lambda b: b["score"])
+                    spot = place_from_photo(best["box"], now_fix)
+                    if spot:
+                        events = found_things.observe(zone, [{"name": best["name"], "position": spot, "score": best["score"],
+                                                              "size_m": LIVE_THING_M, "colour": best.get("colour") or 0.6,
+                                                              "box2d": best["box"]}], find_places(zone),
+                                                      header["job"], at=taken, image=image, source="live")
+                        sys.stderr.write(f"find live: placed {best['name']} at {spot} ({best.get('source', 'model')})" + chr(10))
+                        if events:
+                            find_events(events)
+                if boxes and usable:  # (a fix ends seconds after its photo)
                     pose = [float(now_fix["position"][0]), float(now_fix["position"][1]), float(now_fix.get("heading_deg") or 0)]
                     for name in {b["name"] for b in boxes}:
                         best = max((b for b in boxes if b["name"] == name), key=lambda b: b["score"])
