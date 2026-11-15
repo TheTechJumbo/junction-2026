@@ -181,6 +181,20 @@ more). A tick with no new frame is skipped and counted, never filled with a repe
 never waits for the camera. The zip holds up to 1200 frames or 120 MB, named `0000.jpg`
 onward, and replaces the zone's baseline on the relay.
 
+## Wearer map and "take me to"
+
+Under the wearer screen there is a map of the venue, north up: places as labelled dots, the
+wearer as a green dot with an arrow for the way they face. Tap a place, or say or type "take me
+to / where is / how do I get to the pill box" (close names are forgiven; "stop" ends it), and
+the app asks the relay `GET /navigate?zone=&to=` every second, draws the route and speaks short
+lines through the selected audio output (the glasses over Bluetooth): when the direction changes,
+otherwise at most every 4 s, and "You're there" within 0.7 m. Position fixes come from the
+always-on recording or, without it, from the live glasses camera started for the walk.
+
+The map and guidance use the **venue zone**, apart from the zone field that recordings go to,
+so recordings can go to a test zone while the wearer is guided in the venue. Debug builds set it
+with `--es venue_zone kitchen` (remembered); without it they use the zone field.
+
 ## Always-on recording (screen off, until Stop)
 
 The **Always-on recording** card records the room for the laptop all the time: with the

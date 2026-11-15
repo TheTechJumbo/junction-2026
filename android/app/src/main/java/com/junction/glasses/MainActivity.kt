@@ -97,6 +97,8 @@ class MainActivity : ComponentActivity() {
         private const val DEMO_SCENES = 9
         /** How often guidance asks the relay for the way while walking. */
         private const val NAV_POLL_MS = 1_000L
+        private const val VENUE_PREFS = "venue"
+        private const val VENUE_ZONE = "zone"
     }
     private val main = Handler(Looper.getMainLooper())
     private lateinit var glasses: MetaGlassesAdapter
@@ -220,6 +222,11 @@ class MainActivity : ComponentActivity() {
     private var navStartedLive = false
     private var navRelayFor: String? = null
     private var navRelayCached: FailoverRelay<RelayClient>? = null
+    /**
+     * The venue the map and guidance use (debug extra venue_zone, remembered), apart from the zone field
+     * that recordings go to, so recordings can go to a test zone while the wearer is guided in the venue.
+     */
+    private val venueZone: String? get() = getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).getString(VENUE_ZONE, null)
     private fun stopRecognition() {
         recognitionGeneration++
         pendingPhoneListen = false
@@ -535,6 +542,11 @@ class MainActivity : ComponentActivity() {
         val extras = DebugBackendLaunch.read(source, BuildConfig.DEBUG) ?: return false
         setIntent(DebugBackendLaunch.withoutExtras(source))
         if (!apply) return false
+        extras.venueZone?.takeIf { RelayClient.isZone(it) }?.let { zone ->
+            getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).edit().putString(VENUE_ZONE, zone).apply()
+            navRelayFor = null
+            refreshMap()
+        }
         extras.alwaysOn?.let { on ->
             RecordingService.setWanted(this, on)
             if (!on && AlwaysOn.isRecording) RecordingService.stop(this)
@@ -1570,7 +1582,7 @@ class MainActivity : ComponentActivity() {
     /** The relay for the map and guidance: USB first, the Wi-Fi address when the cable is out. */
     private fun navRelay(): FailoverRelay<RelayClient>? {
         val key = relayKey?.takeIf { it.isNotBlank() } ?: return null
-        val zone = cardZone().takeIf { RelayClient.isZone(it) } ?: relayZone
+        val zone = venueZone?.takeIf { RelayClient.isZone(it) } ?: cardZone().takeIf { RelayClient.isZone(it) } ?: relayZone
         val settings = listOf(relayUrl, relayLanUrl, zone, key.hashCode()).joinToString("|")
         if (settings == navRelayFor) return navRelayCached
         val primary = try { RelayClient(relayUrl, key, zone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) { return null }

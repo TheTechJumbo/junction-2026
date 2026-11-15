@@ -189,12 +189,14 @@ internal class DebugBackendLaunch private constructor(
     val relayLanUrl: String? = null,
     /** `--ez always_on false` switches the always-on recording off (and stops it); true opts in. Null: unchanged. */
     val alwaysOn: Boolean? = null,
+    /** The zone the wearer's map and "take me to" use (the venue), apart from the recording zone. */
+    val venueZone: String? = null,
 ) {
     val hasBackend: Boolean get() = backendUrl != null || apiToken != null
     val hasRelay: Boolean get() = relayUrl != null || relayKey != null || relayZone != null || relayLanUrl != null
 
     override fun toString() = "DebugBackendLaunch(backendUrl=$backendUrl, apiToken=${secret(apiToken)}, " +
-        "relayUrl=$relayUrl, relayKey=${secret(relayKey)}, relayZone=$relayZone, relayLanUrl=$relayLanUrl, alwaysOn=$alwaysOn)"
+        "relayUrl=$relayUrl, relayKey=${secret(relayKey)}, relayZone=$relayZone, relayLanUrl=$relayLanUrl, alwaysOn=$alwaysOn, venueZone=$venueZone)"
 
     companion object {
         const val EXTRA_BACKEND_URL = "backend_url"
@@ -204,7 +206,8 @@ internal class DebugBackendLaunch private constructor(
         const val EXTRA_RELAY_ZONE = "relay_zone"
         const val EXTRA_RELAY_LAN_URL = "relay_lan_url"
         const val EXTRA_ALWAYS_ON = "always_on"
-        private val EXTRAS = listOf(EXTRA_BACKEND_URL, EXTRA_API_TOKEN, EXTRA_RELAY_URL, EXTRA_RELAY_KEY, EXTRA_RELAY_ZONE, EXTRA_RELAY_LAN_URL, EXTRA_ALWAYS_ON)
+        const val EXTRA_VENUE_ZONE = "venue_zone"
+        private val EXTRAS = listOf(EXTRA_BACKEND_URL, EXTRA_API_TOKEN, EXTRA_RELAY_URL, EXTRA_RELAY_KEY, EXTRA_RELAY_ZONE, EXTRA_RELAY_LAN_URL, EXTRA_ALWAYS_ON, EXTRA_VENUE_ZONE)
 
         private fun secret(value: String?) = if (value == null) "absent" else "redacted"
 
@@ -221,6 +224,7 @@ internal class DebugBackendLaunch private constructor(
                     relayZone = intent.getStringExtra(EXTRA_RELAY_ZONE)?.trim()?.takeIf { it.isNotEmpty() },
                     relayLanUrl = intent.getStringExtra(EXTRA_RELAY_LAN_URL)?.trim()?.takeIf { it.isNotEmpty() },
                     alwaysOn = if (intent.hasExtra(EXTRA_ALWAYS_ON)) intent.getBooleanExtra(EXTRA_ALWAYS_ON, false) else null,
+                    venueZone = intent.getStringExtra(EXTRA_VENUE_ZONE)?.trim()?.takeIf { it.isNotEmpty() },
                 )
             } catch (_: RuntimeException) { null }
         }
