@@ -32,7 +32,11 @@ here. Seb's ask: no plain images leave the trusted side; garble them with a key,
 - Venue glasses session (50 frames): median pairwise rotation 6.3° off plain, depth 7%, fixes found 5 against 7
   (of 12), splat −1.6 dB held-out and −4.4 dB on trained views (2.7 dB of that is decoding). "strong" mixing breaks
   VGGT (45°).
-- The 2-minute videos (aon, 2k): `privacy-eval` jobs 2226600 / 2226599, results in `privacy-out/kitchen-*/summary.json`.
+- The 2-minute videos. aon: 0.9° and depth 7.4%, fixes 11 = 11, splat −0.7 dB. 2k: 5.2° and depth 6.2%, fixes
+  0 found in plain or garbled, splat −0.8 dB held-out. "tone only" breaks the 2k video (24°).
+- VGGT's focal estimate is fragile under garbling: 1.6–2× off on aon, 40–50% on the hall, 3% on the venue.
+- End to end (`privtest-hall`, job 2226733): works. The key reached RAM through srun in 3 s, scratch holds only `.jv`,
+  and the laptop decoded in 34 s. The decoded render is 18–22 dB, with false-colour speckle in flat areas.
 - Keys vary: most leave the brightness pattern (median |corr| 0.95), so keys are screened (< 0.8, about 2 s).
 - Split computing: after 4 DINOv2 blocks the tokens invert to a near-photo, faces visible (23 dB). The full backbone
   is about 1 TFLOP a frame (41–225 s on the busy laptop CPU), and tokens are 2.8 MB a frame. Rejected.
@@ -56,12 +60,12 @@ here. Seb's ask: no plain images leave the trusted side; garble them with a key,
 ## Iridis
 - Code is deployed in `junction-recon` (`live/garble.py`, `vault.py`, `private_job.py`, `eval/*`, `iridis/*.slurm`).
   The YuNet model is in `privacy-models/`.
-- Outputs: `privacy-out/` (evals), `trained/kitchen-glasses-20261115-001625-anon/` (venue splat and anonymised
-  frames), `private/privtest-hall/` (sealed test).
+- Outputs: `privacy-out/{hall,kitchen-*}/summary.json` (evals), `trained/kitchen-glasses-20261115-001625-anon/`
+  (venue splat and anonymised frames), `private/privtest-hall/` (sealed test). The jobs are all finished.
 
 ## Next steps
 1. Run `python live/test_garble.py`, `test_vault.py` and `test_private_train.py` (also on Iridis: `test_vault.py`).
-2. Read the aon and 2k results and the end-to-end `privtest-hall` result into PRIVACY.md sections 4 and 7.
+2. Fix `remote_train.to_webm` on the laptop (OpenCV 4.9 cannot write VP8 WebM: empty file).
 3. After Seb chooses, wire `BEACON_PRIVATE=1` into `relay.py` (through the integrator), test on a test zone, never
    kitchen.
 4. Live fixes: KeyInbox in `worker.py`, `push_key` from the relay, and sealed queue files.

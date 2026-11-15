@@ -120,19 +120,37 @@ How much each variant hides (medians over 8 keyframes, key 00..1f, a lucky key):
 | kitchen glasses-20261115-001625 (venue, 50 frames) | tone | 5.8° / 14.6° | 46% | 5.9% | 5/3/4 (7/1/4), 0.79 m, 2° | |
 | | **garbled** | 6.3° / 18.6° | 45% | 7.2% | 5/2/5 (7/1/4), 0.45 m, 1° | **13.26 dB** (20.55) against plain 14.86 (24.99) |
 | | strong | 45° / 126° | 20% | 11.9% | 10/0/2, 0.65 m, 9° | |
-| kitchen 20261115_004109_2k (2 min video) | | *pending* | | | | |
-| kitchen aon-20261115-010701 (2 min video) | | *pending* | | | | |
+| kitchen 20261115_004109_2k (2 min video, 1854 frames, 64 keyframes) | tone | 23.7° / 79° | 16% | 5.5% | 1/10/1 (0/12/0), 0.37 m, 5° | |
+| | **garbled** | 5.2° / 24° | 48% | 6.2% | 0/10/2 (0/12/0), 0.51 m, 1.5° | **11.73 dB** (23.32) against plain 12.49 (25.12) |
+| | mild | 3.9° / 10.5° | 65% | 5.7% | 2/8/2 (0/12/0), 0.30 m, 2° | 11.14 dB (21.27) |
+| kitchen aon-20261115-010701 (2 min video, 2247 frames, 64 keyframes) | tone | 1.23° / 3.8° | 91% | 5.3% | 11/0/1 (11/1/0), 0.02 m, 0° | |
+| | **garbled** | 0.90° / 3.5° | 91% | 7.4% | 11/0/1 (11/1/0), 0.01 m, 1° | **18.44 dB** (17.96) against plain 19.14 (18.67) |
+| | mild | 0.83° / 2.2° | 91% | 3.4% | 11/0/1 (11/1/0), 0.01 m, 0° | 17.17 dB (16.68) |
 
-What this says so far:
+What this says:
+* Over the four recordings, garbling costs nothing (hall), little (aon) or a fair amount (venue, 2k): median camera
+  agreement 0.3° / 0.9° / 6.3° / 5.2°, depth within 4–7.4% everywhere, decoded splats 0.05 / 0.7 / 1.6 / 0.8 dB
+  below plain on held-out views. Fixes found: 6/6 against 6/6, 11 against 11, 5 against 7, 0 against 0 (the 2k
+  video gives only "unsure" fixes even in plain). It does not ruin VGGT; it makes the hard sequences (moving, crowded,
+  repetitive) worse.
 * On the hall, garbling changes nothing measurable: cameras agree to 0.3° and the decoded splat is within 0.05 dB.
 * On the crowded venue session, garbling costs some agreement: half the camera pairs are more than 5° off the plain
   pass, depth stays within 7%, and fixes drop from 7 to 5 found out of 12. The decoded splat loses 1.6 dB on held-out
   views and 4.4 dB on the views it trained on. Of that 4.4 dB, 2.7 dB is decoding (garbled colours blend
   non-linearly, so decoding each Gaussian's colour is not the same as decoding the picture) and 1.7 dB is training on
   garbled frames.
-* `tone` (no coupling layers) costs VGGT about as much as `garbled`: the channel reversals and the reorder do most of
-  the damage, and the couplings add little. `strong` breaks VGGT (45° median). Do not use it.
-* VGGT's focal length came out 40–50% different on the hall (garbled against plain) but only 2–3% on the venue.
+* `tone` (no coupling layers) is no safer for VGGT than `garbled`: about the same on the venue and much worse on the 2k
+  video (24° median). The channel reversals and reorder do most of the damage. `strong` breaks VGGT (45° median on the
+  venue). Do not use either.
+* On the 2-minute aon video garbling costs little: cameras within 0.9° (p90 3.5°), the same 11 of 12 fixes found and
+  1 cm apart, the decoded splat 0.7 dB below plain on held-out views.
+* `mild` (no reversals, channels in order) helps VGGT a little: aon depth 3.4% against 7.4%, 2k rotations 3.9°
+  against 5.2°. But its splats decode worse (0.6–1.3 dB below `garbled`) and it hides much less (its grey picture is
+  nearly the photo's), so the default stays.
+* **VGGT's focal length is the fragile part**: garbled against plain it came out 40–50% different on the hall and
+  1.6–2× on aon (`mild` 0.75×), but 2–3% on the venue. Rotations and depth (after one scale) agree, so this mostly
+  stretches the room sideways: distances across the room are less reliable with garbled frames. A fixed, known focal
+  length for the glasses would remove it; not tried.
 
 ## 5. Where the trusted side runs (Seb to choose)
 
@@ -168,9 +186,28 @@ Not wired in (needs the parent session, since others edit these files):
   are the parts most likely to lose accuracy.
 * `GET /frame`, the dashboard's camera view: ungarble on the relay before showing it.
 
-## 7. End-to-end test (test name `privtest-hall`, never a real zone)
+## 7. End-to-end test (test name `privtest-hall`, never a real zone): it works
 
-*pending*
+`python live/private_train.py FRAMES privtest-hall OUT`. The frames are hall-rec/test1's 120 frames (540×960), copied
+to the laptop. The `--resume JOB` mode was added on the way, after the login node dropped the client's SSH
+connection while polling.
+* Laptop: 120 frames blurred, cropped, garbled and sealed in 9.2 s (77 ms a frame, 4 threads), 22.9 MB uploaded as
+  one `frames.zip.jv`. This run's key predates key screening.
+* Iridis, job 2226733 on ecsai06: the inbox was ready at 01:56:32 and the key arrived through srun 3 s later. The
+  frames opened into RAM in 0.1 s. VGGT took 7.3 s (23 keyframes, 60% of pixels confirmed) and gsplat 148 s
+  (752,080 Gaussians). 14 results were sealed.
+  `private/privtest-hall` on scratch now holds only `*.jv` files, and the job's log shows the key id, never the key.
+  `/dev/shm` could not be checked from outside: `pam_slurm_adopt` refuses SSH to a node where you have no running job,
+  which also keeps other users off it. The job deletes its RAM folder in a `finally`.
+* Laptop: results fetched, opened and decoded in 34 s. The splats' colours were decoded, the renders, bird's-eye view
+  and fly-through un-garbled, and the keyframes written from the laptop's own frames.
+* Quality: the decoded render against the laptop's plain keyframe is 17.9 / 18.3 / 21.9 dB at keyframes 0 / 11 / 22.
+  The plain pass of this recording scored 18.2 dB on trained views (section 4). By eye, flat areas such as the wall show
+  green and purple false-colour speckle where Gaussians of different garbled colours blend: that is the decoding loss.
+* Waiting time: 37 min in the queue, partly because I held the job behind a teammate's; about 6 min running.
+* Loose ends: `flythrough.webm` came out empty. This laptop's OpenCV cannot write VP8 WebM; `remote_train.to_webm` is
+  shared, and `flythrough.mp4` is fine. Labels were skipped, because this job's environment had no `transformers`;
+  `private_train.slurm` now adds the item-finder environment.
 
 ## 8. The venue splat for the public repo (waiting for Seb's OK)
 
