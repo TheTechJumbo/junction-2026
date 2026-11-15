@@ -154,6 +154,17 @@ export function ribbon(s, points, width, colourAt) {
   }
   return s;
 }
+/** An upright band along points (each at its own height): seen edge-on from above, as a strip from the side.
+ * With a ribbon through the same points it reads as a tube from any angle. */
+export function wall(s, points, height, colourAt) {
+  for (let i = 0; i + 1 < points.length; i++) {
+    const a = points[i], b = points[i + 1], c = colourAt(i), h = height / 2;
+    if (Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) < 1e-4) continue;
+    tri(s, [a[0], a[1] - h, a[2]], [b[0], b[1] - h, b[2]], [b[0], b[1] + h, b[2]], c);
+    tri(s, [a[0], a[1] - h, a[2]], [b[0], b[1] + h, b[2]], [a[0], a[1] + h, a[2]], c);
+  }
+  return s;
+}
 /** A dashed band between two points on the floor. */
 export function dashes(s, a, b, width, colour, dash = 0.18) {
   const l = Math.hypot(b[0] - a[0], b[2] - a[2]), n = Math.max(1, Math.floor(l / dash));

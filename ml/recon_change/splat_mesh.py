@@ -128,10 +128,24 @@ def mesh(m, include_movable=True, levels=None):
     return v, nrm, c, t, summary
 
 
-def write_ply(m, path, include_movable=True, comments=()):
-    """Write the map's mesh as a binary PLY with vertex normals and colours. Returns the summary.
+def from_splat(data, voxel=0.05, min_alpha=64, drop_largest=0.01):
+    """A trained splat file (the 32-byte .splat records: video_map.py's trained.splat, splat.py's
+    output) -> (vertices, normals, colours, triangles). There are no cells or detail levels in it, so it
+    is meshed at one voxel size. Near-transparent Gaussians (alpha below min_alpha) and the largest
+    drop_largest share (trained splats keep big faint blobs for the background and stray floaters)
+    are left out, so the mesh follows the surfaces."""
+    rec = np.frombuffer(bytes(data), sr.RECORD)
+    keep = rec["rgba"][:, 3] >= min_alpha
+    if drop_largest and keep.sum() > 100:
+        size = rec["scale"].max(1)
+        keep &= size <= np.quantile(size[keep], 1 - drop_largest)
+    rec = rec[keep]
+    return surface_nets(rec["pos"].astype(np.float64), rec["rgba"][:, :3], disc_normals(rec["rot"]), voxel)
+
+
+def write_mesh(v, nrm, c, t, path, comments=()):
+    """Write a mesh as a binary PLY with vertex normals and colours (the format the dashboard reads).
     comments go in the header; "up z" tells the dashboard's viewer which way is up (default -y, VGGT's)."""
-    v, nrm, c, t, summary = mesh(m, include_movable)
     vert = np.zeros(len(v), [("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4"),
                              ("red", "u1"), ("green", "u1"), ("blue", "u1")])
     vert["x"], vert["y"], vert["z"] = v.T
@@ -139,7 +153,7 @@ def write_ply(m, path, include_movable=True, comments=()):
     vert["red"], vert["green"], vert["blue"] = c.T
     face = np.zeros(len(t), [("n", "u1"), ("i", "<i4", 3)])
     face["n"], face["i"] = 3, t
-    header = ("ply\nformat binary_little_endian 1.0\n" + "".join(f"comment {c}\n" for c in comments) + f"element vertex {len(v)}\n"
+    header = ("ply\nformat binary_little_endian 1.0\n" + "".join(f"comment {x}\n" for x in comments) + f"element vertex {len(v)}\n"
               "property float x\nproperty float y\nproperty float z\nproperty float nx\nproperty float ny\nproperty float nz\n"
               "property uchar red\nproperty uchar green\nproperty uchar blue\n"
               f"element face {len(t)}\nproperty list uchar int vertex_indices\nend_header\n")
@@ -147,5 +161,24 @@ def write_ply(m, path, include_movable=True, comments=()):
         f.write(header.encode())
         f.write(vert.tobytes())
         f.write(face.tobytes())
+
+
+def write_ply(m, path, include_movable=True, comments=()):
+    """Write the map's mesh (all detail levels) as a binary PLY. Returns the summary."""
+    v, nrm, c, t, summary = mesh(m, include_movable)
+    write_mesh(v, nrm, c, t, path, comments)
     summary["total"] = {"vertices": len(v), "triangles": len(t)}
     return summary
+
+
+if __name__ == "__main__":
+    # A trained splat to the dashboard's mesh:  python splat_mesh.py trained.splat home.ply [voxel] [up]
+    # up is the splat's up axis: "-y" for VGGT's coordinates (the default), "z" for z-up scenes.
+    import sys
+    src, out = sys.argv[1], sys.argv[2]
+    voxel = float(sys.argv[3]) if len(sys.argv) > 3 else 0.05
+    up = sys.argv[4] if len(sys.argv) > 4 else "-y"
+    v, nrm, c, t = from_splat(open(src, "rb").read(), voxel)
+    write_mesh(v, nrm, c, t, out, comments=[f"up {up}", f"from {src.split('/')[-1]}"])
+    print(out, len(v), "vertices", len(t), "triangles")
+
