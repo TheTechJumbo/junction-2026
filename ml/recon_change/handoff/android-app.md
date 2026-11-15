@@ -43,7 +43,7 @@ Full docs are in `android/README.md` on that branch. No secrets here: real value
 |---|---|---|---|
 | map + "take me to" | f15eadd | 43658963658 green | **installed** 02:43 EET 15 Nov |
 | + venue_zone | 5ba4802 | 43661863300 green | not installed |
-| + debug panel (last app commit; later commits are docs only) | 459ed3a | 43663155524 (was running when written) | not installed |
+| + debug panel (last app commit; later commits are docs only) | 459ed3a | 43663155524 green | not installed |
 
 The installed f15eadd ignores `venue_zone`, so its map uses the zone field (currently `always-on-test`).
 Seb's decision: install the tip only once the relay's `/navigate` is live, so it costs one Meta AI approval.
