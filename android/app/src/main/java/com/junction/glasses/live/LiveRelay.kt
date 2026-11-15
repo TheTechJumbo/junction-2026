@@ -218,6 +218,33 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
 
     suspend fun locate(jpeg: ByteArray): LocateReply = LocateReply.parse(send(http, request(jpeg)))
 
+    /**
+     * GET {relay}/navigate?zone=&to=: where the wearer is, the way to [to] and the room for the map.
+     * Without [to] it is only the map (where the wearer is and the places).
+     */
+    fun navigateRequest(to: String?): Request = Request.Builder()
+        .url(base.newBuilder().addPathSegment("navigate").addQueryParameter("zone", zone)
+            .apply { if (!to.isNullOrBlank()) addQueryParameter("to", to) }.build())
+        .header("X-Key", key)
+        .header("Accept", "application/json")
+        .get()
+        .build()
+
+    suspend fun navigate(to: String?): com.junction.glasses.core.NavReply =
+        com.junction.glasses.core.NavReply.parse(send(http, navigateRequest(to)))
+
+    /** The zone's named places (GET {relay}/waypoints?zone=): names only, for "take me to …". */
+    suspend fun placeNames(): List<String> {
+        val body = send(http, Request.Builder()
+            .url(base.newBuilder().addPathSegment("waypoints").addQueryParameter("zone", zone).build())
+            .header("X-Key", key).header("Accept", "application/json").get().build())
+        return try {
+            JsonParser.parseString(body).asJsonObject.getAsJsonArray("waypoints")
+                ?.mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject?.get("name")?.takeIf { n -> n.isJsonPrimitive }?.asString }
+                .orEmpty()
+        } catch (_: Exception) { emptyList() }
+    }
+
     suspend fun baseline(zip: ByteArray, zone: String): BaselineReply =
         BaselineReply.parse(send(slowHttp, baselineRequest(zip, zone)))
 

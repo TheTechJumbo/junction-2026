@@ -65,6 +65,8 @@ import com.junction.glasses.meta.MetaGlassesAdapter
 import kotlinx.coroutines.delay
 import com.junction.glasses.meta.GlassesCards
 import com.junction.glasses.wearer.WearerPanel
+import com.junction.glasses.wearer.WearerMap
+import com.junction.glasses.live.FailoverRelay
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import com.junction.glasses.core.RelayClient as WearerRelayClient
@@ -93,6 +95,8 @@ class MainActivity : ComponentActivity() {
         private const val FIRST_FRAME_WAIT_MS = 45_000L
         /** The wearer screen's demo scenes (Ed's). */
         private const val DEMO_SCENES = 9
+        /** How often guidance asks the relay for the way while walking. */
+        private const val NAV_POLL_MS = 1_000L
     }
     private val main = Handler(Looper.getMainLooper())
     private lateinit var glasses: MetaGlassesAdapter
@@ -204,8 +208,18 @@ class MainActivity : ComponentActivity() {
     private var shownCard: Card? = null
     private var cardJob: Job? = null
     private val refresher = object : Runnable {
-        override fun run() { refreshWearer(); main.postDelayed(this, 10_000) }
+        override fun run() { refreshWearer(); refreshMap(); main.postDelayed(this, 10_000) }
     }
+    // The wearer's map and "take me to …" guidance (core/Navigation.kt, wearer/WearerMap.kt).
+    private lateinit var navMap: WearerMap
+    private var navGuide: NavGuide? = null
+    private var navJob: Job? = null
+    /** The zone's place names, for matching what the wearer says; refreshed with the map. */
+    private var knownPlaces: List<String> = emptyList()
+    /** The live camera was started for guidance (to keep fixes coming) and stops with it. */
+    private var navStartedLive = false
+    private var navRelayFor: String? = null
+    private var navRelayCached: FailoverRelay<RelayClient>? = null
     private fun stopRecognition() {
         recognitionGeneration++
         pendingPhoneListen = false
@@ -457,11 +471,17 @@ class MainActivity : ComponentActivity() {
             onDismiss = { nightAnsweredAt = Instant.now(); showWearer() }
             onSetup = { setup.visibility = if (setup.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE }
         }
+        navMap = WearerMap(this).apply {
+            onPlaceTap = { name -> startNavigation(name) }
+            onStop = { stopNavigation("Stopped.") }
+        }
         setContentView(ScrollView(this).apply {
             setBackgroundColor(WearerPanel.NIGHT); isFillViewport = true
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
-                addView(wearer); addView(setup)
+                addView(wearer)
+                addView(navMap, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(320)).apply { setMargins(dp(20), 0, dp(20), dp(20)) })
+                addView(setup)
             })
             setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
@@ -1346,6 +1366,12 @@ class MainActivity : ComponentActivity() {
     private fun submit(text: String) {
         cancelDiagnostic()
         stopRecognition(); glasses.stopListening()
+        // "Take me to / where is / how do I get to <place>" and "stop" are guidance, not questions.
+        when (val command = NavPhrases.parse(text, knownPlaces)) {
+            is NavCommand.GoTo -> { startNavigation(command.place); return }
+            NavCommand.Stop -> if (navGuide != null) { stopNavigation("Stopped."); return }
+            null -> Unit
+        }
         asked = Asked(WearerBrain.classify(text), wearerNow().toInstant(), null)
         if (demoScene >= 0) { showWearer(); return }
         if (controller == null) { status.text = "Connect the backend first."; if (::wearer.isInitialized) wearer.setStatus("Not connected"); return }
@@ -1539,6 +1565,84 @@ class MainActivity : ComponentActivity() {
         showWearer()
     }
 
+    // ---- The wearer's map and guidance ----
+
+    /** The relay for the map and guidance: USB first, the Wi-Fi address when the cable is out. */
+    private fun navRelay(): FailoverRelay<RelayClient>? {
+        val key = relayKey?.takeIf { it.isNotBlank() } ?: return null
+        val zone = cardZone().takeIf { RelayClient.isZone(it) } ?: relayZone
+        val settings = listOf(relayUrl, relayLanUrl, zone, key.hashCode()).joinToString("|")
+        if (settings == navRelayFor) return navRelayCached
+        val primary = try { RelayClient(relayUrl, key, zone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) { return null }
+        val lan = relayLanUrl?.let { url -> try { RelayClient(url, key, zone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) { null } }
+        navRelayFor = settings
+        return FailoverRelay(primary, lan).also { navRelayCached = it }
+    }
+
+    /** Idle refresh (every 10 s): the zone's place names and, when the relay has it, the map. */
+    private fun refreshMap() {
+        if (!::navMap.isInitialized || navGuide != null) return
+        val relay = navRelay() ?: return
+        lifecycleScope.launch {
+            try { relay.call { it.placeNames() }.takeIf { it.isNotEmpty() }?.let { knownPlaces = it } } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+            try {
+                val reply = relay.call { it.navigate(null) }
+                if (navGuide == null) renderMap(reply, null)
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
+    }
+
+    private fun renderMap(reply: NavReply, target: String?) {
+        if (reply.places.isNotEmpty()) knownPlaces = (knownPlaces + reply.places.map { it.name }).distinct()
+        navMap.show(reply.plan, reply.places, reply.position, reply.headingDeg, if (target != null) reply.route else emptyList(),
+            target, if (!reply.ok) reply.error else null)
+    }
+
+    /** Guides the wearer to [place]: map route, spoken directions on each new fix, until there or "stop". */
+    private fun startNavigation(place: String) {
+        val relay = navRelay() ?: run { if (::wearer.isInitialized) wearer.setStatus("Set up the relay first"); return }
+        stopNavigation(null)
+        val guide = NavGuide(place)
+        navGuide = guide
+        wearer.setStatus("To $place")
+        speak("Going to $place.")
+        // Directions follow new position fixes: the always-on recording sends them; otherwise the live
+        // camera does (newest frame only, one at a time), started here and stopped with the guidance.
+        if (!AlwaysOn.isRecording && liveLoop == null && recordJob == null && videoRecorder == null) {
+            startLiveCamera()
+            navStartedLive = liveLoop != null
+        }
+        navJob = lifecycleScope.launch {
+            while (navGuide === guide) {
+                try {
+                    val reply = relay.call { it.navigate(place) }
+                    renderMap(reply, place)
+                    if (!reply.ok) wearer.setStatus(reply.error ?: "No directions yet")
+                    guide.next(reply, SystemClock.elapsedRealtime())?.let { say -> speak(say); wearer.setStatus(say) }
+                    if (guide.arrived) { stopNavigation(null); wearer.setStatus("You're there: $place"); break }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    wearer.setStatus("No directions: ${LiveRelayLoop.describe(e)}")
+                }
+                delay(NAV_POLL_MS)
+            }
+        }
+    }
+
+    private fun stopNavigation(message: String?) {
+        val wasGuiding = navGuide != null
+        navGuide = null
+        navJob?.cancel(); navJob = null
+        if (navStartedLive) { navStartedLive = false; stopLiveCamera("Live camera is off.") }
+        if (wasGuiding && ::navMap.isInitialized) navMap.show(emptyList(), emptyList(), null, null, emptyList(), null, null)
+        message?.let { speak(it); if (::wearer.isInitialized) wearer.setStatus(it) }
+        if (wasGuiding) refreshMap()
+    }
+
+    /** A short spoken line on the selected audio output (the glasses' when they are the Bluetooth audio). */
+    private fun speak(text: String) { audio.speakFallback(text) { } }
+
     override fun onStop() {
         // Meta registration and consent intentionally leave this Activity briefly.
         backendInterrupted = connectionCheck != null
@@ -1579,6 +1683,7 @@ class MainActivity : ComponentActivity() {
             token.text.isEmpty() && endpoint.text.toString().trim() == configuredOrigin) connectBackend()
     }
     override fun onDestroy() {
+        navJob?.cancel(); navGuide = null
         stopLiveCamera("Live camera is off.")
         stopRecording("Recording stopped.")
         videoRecorder?.release()
