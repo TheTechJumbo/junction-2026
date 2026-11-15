@@ -763,6 +763,15 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                         pass
                 live_finds[zone] = {"at": taken, "done_at": time.time(), "boxes": boxes, "image": image, "job": header["job"],
                                     "latency_s": round(time.time() - taken, 2), "seconds": header["result"].get("seconds")}
+                now_fix = where.get(zone) or {}  # where the photo was taken from: the fix made from it (instant or full)
+                if boxes and now_fix.get("state") != "lost" and now_fix.get("position") and abs(now_fix.get("at", 0) - taken) < 3:
+                    pose = [float(now_fix["position"][0]), float(now_fix["position"][1]), float(now_fix.get("heading_deg") or 0)]
+                    for name in {b["name"] for b in boxes}:
+                        best = max((b for b in boxes if b["name"] == name), key=lambda b: b["score"])
+                        event = found_things.confirm_live(zone, name, taken, pose, header["job"], find_places(zone),
+                                                          image=image, box2d=best["box"])
+                        if event:
+                            find_events([event])
             except Exception as err:  # noqa: BLE001  the live outline is an extra
                 sys.stderr.write(f"find live: {type(err).__name__}: {err}" + chr(10))
             finally:
@@ -832,6 +841,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             for b in mine:
                 b["box2d"] = b.get("box")
                 b["dims"] = find_dims(zone, b, result.get("position"), shape)
+                if result.get("position") and result.get("heading_deg") is not None:
+                    b["fix_pose"] = [round(float(result["position"][0]), 2), round(float(result["position"][1]), 2), float(result["heading_deg"])]
         try:
             events = found_things.observe(zone, boxes, find_places(zone), job, at=at, image=image, source=source)
         except Exception as err:  # noqa: BLE001  the finder is an extra: the fix must still go out

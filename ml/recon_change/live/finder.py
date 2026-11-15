@@ -36,6 +36,7 @@ AGREE_VIEWS = 2    # views from different fixes that make a sighting
 AGREE_S = 900      # agreeing views at most this far apart in time
 MOVED_M = 1.5      # a sighting this far from the last one is a move (over the day log's ITEM_MOVED_M, 1 m)
 VIEWS_KEPT = 30
+LIVE_WITHIN_S, LIVE_FROM_M, LIVE_TURN_DEG = 20.0, 1.0, 35.0  # a live detection confirms a single view (confirm_live)
 WANT_S = 12 * 3600  # an asked name stays on the watch list this long
 MOST_WANTED = 6     # names on a zone's watch list (the worker takes 8 in all)
 NEAR_M = 1.5        # the named place within this is "near"; within ON_M, "on" a table, "at" a booth, "by" a door
@@ -68,7 +69,7 @@ PLACE_LIKE = {"room", "kitchen", "bathroom", "toilet", "loo", "wc", "garage", "b
               "exit", "entrance", "stairs", "lift", "elevator", "office", "lounge", "shop", "street", "station", "stage",
               "booth", "table", "fridge", "desk", "bed", "sofa", "couch", "corridor", "lobby", "reception", "car", "house",
               "home", "flat", "building", "floor", "venue", "area", "zone", "place"}
-OUTLINE = ("image", "box2d", "dims", "fix_position")  # kept from the newest view: the photo, the box in it, its size
+OUTLINE = ("image", "box2d", "dims", "fix_pose")  # kept from the newest view: the photo, the box in it, its size
 SURFACES = ("table", "desk", "shelf", "counter", "bench", "worktop", "bed", "sofa", "couch", "chair", "stool", "cabinet")
 STANDS = ("booth", "stand", "stall", "stage", "station")
 
@@ -306,7 +307,7 @@ class Finder:
                 view = {"position": [round(float(c), 3) for c in box["position"][:3]], "score": round(float(box["score"]), 3),
                         "at": round(at, 1), "job": job, "size_m": box.get("size_m"), "colour": box.get("colour"),
                         "source": source, **({"image": image} if image else {}),
-                        **{k: box[k] for k in ("box2d", "dims") if box.get(k) is not None}}
+                        **{k: box[k] for k in ("box2d", "dims", "fix_pose") if box.get(k) is not None}}
                 thing["views"] = [v for v in thing["views"] if v["job"] != job][-VIEWS_KEPT + 1:] + [view]
                 got = self.settle(zone, name, thing, view, places)
                 if got:
@@ -314,6 +315,26 @@ class Finder:
             if best:
                 self.save()
         return events
+
+    def confirm_live(self, zone, name, at, pose, job, places, image=None, box2d=None):
+        """A live detection (worker op "detect": no depth) of `name` in a photo taken from where a single view not yet
+        confirmed was taken (within LIVE_FROM_M and LIVE_TURN_DEG, LIVE_WITHIN_S later): it is there again, so that view
+        is confirmed (the second agreeing view, at the same spot). pose: [east, north, heading] of the live photo's fix.
+        Returns the event (a sighting or a move) or None."""
+        with self.lock:
+            thing = (self.things.get(zone) or {}).get(name)
+            maybe = self.single_view(zone, name)
+            if not thing or not maybe or not pose or not maybe.get("fix_pose") or not 0 < at - maybe["at"] <= LIVE_WITHIN_S:
+                return None
+            fp = maybe["fix_pose"]
+            if math.dist(fp[:2], pose[:2]) > LIVE_FROM_M or abs((pose[2] - fp[2] + 180) % 360 - 180) > LIVE_TURN_DEG:
+                return None
+            view = {**maybe, "at": round(at, 1), "job": job, "source": "live",
+                    **({"image": image} if image else {}), **({"box2d": box2d} if box2d else {})}
+            thing["views"] = thing["views"][-VIEWS_KEPT + 1:] + [view]
+            event = self.settle(zone, name, thing, view, places)
+            self.save()
+            return event
 
     def settle(self, zone, name, thing, view, places):
         """After a new view: is there a sighting (AGREE_VIEWS agreeing views, the newest among them), and is it the one

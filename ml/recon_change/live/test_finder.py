@@ -164,6 +164,21 @@ def test_answers():
     assert finds.side_words(170) == "behind you" and finds.metres(0.9) == "about 0.9 metres" and finds.metres(3.4) == "about 3 metres"
 
 
+def test_live_confirm():
+    """A live detection (no depth) from the same standpoint confirms a single view: the second agreeing view."""
+    f = finds.Finder(now=lambda: 1000.0)
+    b = {**box(TABLE, score=0.32, size=0.12, colour=0.3), "box2d": [0.5, 0.6, 0.6, 0.7], "fix_pose": [0.0, 0.0, 10.0]}
+    assert f.observe(ZONE, [b], PLACES, "j1", at=1000.0) == []
+    assert f.confirm_live(ZONE, "orange box", 1001.0, [3.0, 0.0, 10.0], "l0", PLACES) is None  # another standpoint
+    assert f.confirm_live(ZONE, "orange box", 1001.0, [0.2, 0.1, 80.0], "l0", PLACES) is None  # turned away
+    assert f.confirm_live(ZONE, "orange box", 1030.0, [0.2, 0.1, 20.0], "l0", PLACES) is None  # too late
+    event = f.confirm_live(ZONE, "orange box", 1002.5, [0.2, 0.1, 20.0], "l1", PLACES, image="/evidence/l1/seen.jpg", box2d=[0.4, 0.5, 0.5, 0.6])
+    assert event and event["kind"] == "seen" and event["near"] == "our table", event
+    s = f.sighting(ZONE, "orange box")
+    assert s["image"] == "/evidence/l1/seen.jpg" and s["box2d"] == [0.4, 0.5, 0.5, 0.6] and s["at"] == 1002.5, s
+    assert f.confirm_live(ZONE, "orange box", 1004.0, [0.2, 0.1, 20.0], "l2", PLACES) is None  # nothing left to confirm
+
+
 class Gateway:
     """The next fix it answers is whatever the test puts in self.next; it keeps every job it was sent."""
 
@@ -352,6 +367,7 @@ def main():
     test_checks()
     test_sightings_and_moves()
     test_answers()
+    test_live_confirm()
     test_relay()
     print("find me X: all checks passed")
 
