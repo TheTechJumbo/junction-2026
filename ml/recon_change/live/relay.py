@@ -527,16 +527,18 @@ def to_events(report, zone, images):
     ]
 
 
-def post_events(url, events):
-    request = urllib.request.Request(url, json.dumps(events).encode(), {"Content-Type": "application/json"})
+def post_events(url, events, token=None):
+    """POST events to the event API. It needs its token (EVENT_API_TOKEN): without one it answers 401."""
+    headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})}
+    request = urllib.request.Request(url, json.dumps(events).encode(), headers)
     with urllib.request.urlopen(request, timeout=5) as response:
         return response.status
 
 
-def _post_quietly(url, events):
+def _post_quietly(url, events, token=None):
     """post_events for the finder's events (live/finder.py): in the background, a failure only noted in the log."""
     try:
-        post_events(url, events)
+        post_events(url, events, token)
     except (OSError, ValueError) as err:
         sys.stderr.write(f"find: event not posted: {type(err).__name__}" + chr(10))
 
@@ -752,7 +754,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 event = {"id": eid, "type": "object_appeared" if e["kind"] == "seen" else "object_moved", "source": "vision",
                          "ts": datetime.fromtimestamp(e["at"], timezone.utc).isoformat(timespec="seconds"), "zone": e["zone"],
                          "object": e["name"], "evidence_url": None, "confidence": 0.6 if e.get("views", 0) >= 3 else 0.5}
-                threading.Thread(target=lambda ev=event: _post_quietly(event_api, [ev]), daemon=True).start()
+                threading.Thread(target=lambda ev=event: _post_quietly(event_api, [ev], api_token), daemon=True).start()
 
     def find_seen(zone, result, job, at, images=None, source="fix"):
         """A fix's (or a search's) boxes of watched names -> the finder; returns its events, already logged."""
@@ -2278,7 +2280,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             body["report"] = result
             if event_api and events:
                 try:
-                    body["posted_to_event_api"] = post_events(event_api, events)
+                    body["posted_to_event_api"] = post_events(event_api, events, api_token)
                 except OSError as err:
                     body["posted_to_event_api"] = f"failed: {err}"
             self.send_json(200, body)

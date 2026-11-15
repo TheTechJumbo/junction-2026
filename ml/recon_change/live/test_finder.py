@@ -185,6 +185,8 @@ class EventApi(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
         if self.path.startswith("/events"):
+            if self.headers.get("Authorization") != "Bearer token":  # the event API refuses events without its token
+                return self.reply({"error": "unauthorised"}, 401)
             EventApi.posted += body
             return self.reply({"accepted": len(body)})
         return self.reply({"answer": "The event API answered.", "evidence": []})
@@ -192,9 +194,9 @@ class EventApi(BaseHTTPRequestHandler):
     def do_GET(self):
         return self.reply({"events": [], "next_cursor": None})
 
-    def reply(self, body):
+    def reply(self, body, code=200):
         data = json.dumps(body).encode()
-        self.send_response(200)
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
