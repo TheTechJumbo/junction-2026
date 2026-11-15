@@ -112,6 +112,17 @@ def check_pictures():
           f"garbled frame vs photo at most {closest:.1f} dB; best colour matrix fitted with the photo known: {best_affine:.1f} dB")
 
 
+def check_screening():
+    """Keys differ in how much brightness they leave; screened_key draws until one hides the samples' brightness."""
+    pictures = [room(s) for s in (11, 12)]
+    seen = [garble.brightness_kept(garble.Garbler(bytes([k]) * 32), pictures) for k in range(8)]
+    key, kept, tries = garble.screened_key(pictures, limit=0.7, tries=64)
+    assert kept < 0.7 and len(key) == 32, (kept, tries)
+    assert abs(garble.brightness_kept(garble.Garbler(key), pictures) - kept) < 1e-9
+    print(f"screening: 8 fixed keys leave {min(seen):.2f} to {max(seen):.2f} of the brightness pattern; "
+          f"screened_key found one at {kept:.2f} in {tries} tries")
+
+
 def check_speed():
     t0 = time.perf_counter()
     g = garble.Garbler(bytes(range(7, 39)))
@@ -133,6 +144,7 @@ def main():
     check_keys()
     check_reference()
     check_pictures()
+    check_screening()
     check_speed()
     print("garble: all checks passed")
 

@@ -23,6 +23,11 @@ if [ -d "$GS/pkgs" ]; then
     export CC=gcc CXX=g++
     export PYTHONPATH="$GS/pkgs${PYTHONPATH:+:$PYTHONPATH}" PATH="$GS/pkgs/bin:$PATH" TORCH_CUDA_ARCH_LIST="8.9" MAX_JOBS=4
 fi
+# Labels (OWLv2 + CLIP, as video_map.slurm finds them). They see garbled keyframes: how well they work then is unmeasured.
+ITEMS_ENV="$(realpath -m "${RECON_ITEMS_ENV:-items}")"
+if [ -d "$ITEMS_ENV/pkgs" ]; then
+    export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$ITEMS_ENV/pkgs" RECON_ITEMS_CACHE="${RECON_ITEMS_CACHE:-$ITEMS_ENV/hf/hub}"
+fi
 echo "== $(hostname) $(date +%T) $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
 "$PY" -u live/private_job.py "$@"
 echo "== done $(date +%T)"

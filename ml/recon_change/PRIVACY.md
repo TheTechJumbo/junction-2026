@@ -50,9 +50,10 @@ Iridis).
   Iridis does not offer it. The other way out is not to send the data: the laptop's RTX 2060 already runs position
   fixes locally (local mode: 6.3 s a fix, 3.8 GB).
 * **A per-pixel transform keeps shapes and edges.** It is obfuscation of appearance, not encryption. A garbled frame
-  is far from the photo (6–8 dB PSNR), and no 3×3 colour matrix brings it back (25–30 dB even when fitted with the
-  true photo known). But a person can still see what is where, and with one known picture under the same key, a
-  cubic fit gets about 36 dB. Use a fresh key per session; never reuse one across rooms.
+  is far from the photo (median 8 dB PSNR over random keys), and no 3×3 colour matrix brings it back (25–30 dB even
+  when fitted with the true photo known). But a person can still see what is where; for many keys even the
+  brightness pattern survives (section 4, which is why keys are screened). With one known picture under the same
+  key, a cubic fit gets about 36 dB. Use a fresh key per session; never reuse one across rooms.
 * **Anonymise misses people**, above all seated ones (section 4). A missed face is garbled but not blurred.
 * What is not covered: file names and times, the worker's logs, item names and the questions asked, and
   `labels.json` (object names and 3D positions, in plain text inside the sealed file, readable in job memory).
@@ -92,7 +93,16 @@ reversals only. `garbled` is the default (4 keyed coupling layers). `strong` mix
 | Garbled frame against the photo | 6–8 dB (not viewable as the photo) |
 | Best 3×3 colour matrix fitted with the photo known | 25–30 dB; a cubic polynomial fit 33–36 dB |
 
-How much each variant hides (medians over 8 keyframes, key 00..1f):
+**Keys differ a lot.** Over 40 random keys on real keyframes, the grey garbled picture's |correlation| with the grey
+photo had a median of 0.95: for most keys, a garbled frame shown in grey looks much like the photo or its negative.
+The best key was 0.3, and 8 fixed keys gave 0.18 to 0.86 on test rooms. So the trusted side screens keys:
+`garble.screened_key` draws session keys until one leaves less than 0.8 of the brightness pattern on 4 of the
+session's own frames. That takes a few keys and about 2 s; a 0.7 limit took 25 keys and 18 s. The key used for the
+VGGT measurements below (sha256 of "privacy-eval") is a middling one: 0.86 for `garbled`. Hiding brightness further
+is what breaks VGGT: `strong` gets 0.27 and VGGT fails (45° median error). For a per-pixel code, privacy and VGGT
+accuracy trade against each other.
+
+How much each variant hides (medians over 8 keyframes, key 00..1f, a lucky key):
 
 | Variant | Against the photo | Its grey picture against the photo's (\|correlation\|) | Best colour matrix / cubic, photo known | Through JPEG 4:4:4 |
 |---|---|---|---|---|
@@ -161,3 +171,23 @@ Not wired in (needs the parent session, since others edit these files):
 ## 7. End-to-end test (test name `privtest-hall`, never a real zone)
 
 *pending*
+
+## 8. The venue splat for the public repo (waiting for Seb's OK)
+
+The hacking hall from the glasses session `glasses-20261115-001625` (50 frames), retrained from anonymised frames
+with `eval/venue_anon.py` + `video_map.py` (`iridis/venue_anon.slurm`). This ran on Iridis, where those frames
+already were.
+
+* `anonymise.py` alone is not enough for a crowded hall. HOG found 4 person boxes in 50 frames, one of them a wall,
+  and seated people were missed. So OWLv2, already in the workers' model cache (nothing downloaded), looked for "a
+  person", "a human head" and "a human face" over the whole frame and 2×2 tiles, at score 0.15. It found 619 person
+  boxes and 321 head and face boxes. Each person box was pixelated on its own to about 8 blocks. An earlier run merged
+  overlapping boxes, which turned the crowd into one big blurred rectangle. Each head and face box was grown by 35% and
+  filled with one flat colour.
+* Faces left in the anonymised frames: 0 by OWLv2 "a human face" (score 0.3 or more). YuNet and Haar flagged 3 patches;
+  by eye they are flat or pixelated areas.
+* Splat: 1,022,521 Gaussians, 32.7 MB, 25.6 dB on its (anonymised) keyframes, trained in 105 s. The renders show
+  people as coarse blocks.
+* Staged outside the repo, so nothing commits it by accident: the shared notes folder `venue-publish/` (the splat, a
+  short README with these numbers, `.gitattributes` for Git LFS). No photos, video, depths or keyframes.
+

@@ -75,6 +75,7 @@ def main():
     ap.add_argument("--steps", type=int, default=400)
     ap.add_argument("--out", default=None)
     ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--no-cpu", action="store_true", help="skip the CPU timing (part 1)")
     args = ap.parse_args()
     dino, mean, std, torch = load_backbone()
     torch.set_num_threads(args.threads)
@@ -94,7 +95,7 @@ def main():
     print(f"1. CPU time, float32, {args.threads} threads, one 518 x 518 picture")
     with torch.no_grad():
         tokens(dino, x0, 1, mean, std)
-        for k in sorted(set(blocks + [1, 2])):
+        for k in [] if args.no_cpu else sorted(set(blocks + [1, 2])):
             times = []
             for _ in range(3):
                 t0 = time.perf_counter()
@@ -126,14 +127,20 @@ def main():
                 rebuilt = (img * std + mean).clamp(0, 1)
             else:
                 y = torch.full_like(x, 0.5).requires_grad_(True)
-                opt = torch.optim.Adam([y], lr=0.03)
+                opt = torch.optim.Adam([y], lr=0.03 if k <= 4 else 0.01)
+                best, best_loss = y.detach().clone(), float("inf")
                 for step in range(args.steps):
                     opt.zero_grad()
                     loss = ((tokens(dino, y.clamp(0, 1), k, mean, std) - target) ** 2).mean()
+                    if not torch.isfinite(loss):  # deep blocks can blow up on a strange picture: keep the best so far
+                        break
+                    if float(loss) < best_loss:
+                        best, best_loss = y.detach().clone(), float(loss)
                     tv = (y[..., 1:, :] - y[..., :-1, :]).abs().mean() + (y[..., :, 1:] - y[..., :, :-1]).abs().mean()
                     (loss / target.var() + 0.02 * tv).backward()
+                    torch.nn.utils.clip_grad_norm_([y], 1.0)
                     opt.step()
-                rebuilt = y.detach().clamp(0, 1)
+                rebuilt = best.clamp(0, 1)
             p = psnr(rebuilt, x)
             print(f"   picture {i}, after {k:2d} blocks: rebuilt at {p:5.1f} dB PSNR ({time.time() - t0:.0f} s)", flush=True)
             if out:

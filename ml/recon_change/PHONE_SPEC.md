@@ -40,11 +40,16 @@ does not need to seal: its link to the relay is local (adb reverse over USB, or 
 
 ## The key
 
-* The relay makes a session master key K: 32 bytes from `secrets.token_bytes`, one per zone and recording session.
-* The phone gets only `derive(K, "garble")` = HMAC-SHA256(K, "derive|garble"). Iridis gets only
-  `derive(K, "vault")`. Neither can compute the other's key.
-* Handover: `POST /privacy/session?zone=Z` on the relay, with `X-Key`, over adb reverse (localhost) only, returns
-  `{"garble_key": hex, "kid": hex}`. This endpoint is still to be added to the relay; coordinate with the parent session.
+* The phone makes the session master key K: 32 bytes from `SecureRandom`, one per zone and recording session. It
+  **screens** it before use, like `garble.screened_key`: on 4 of the session's first frames (128×128 copies), garble
+  them with the exact G and compute |Pearson correlation| between the grey garbled picture and the grey original.
+  Grey = 0.299 R + 0.587 G + 0.114 B. Take the median over the 4. If it is 0.8 or more, draw a new K. Usually it takes
+  a few draws: most keys leave the brightness pattern nearly intact (PRIVACY.md section 4).
+* The phone garbles with `derive(K, "garble")` = HMAC-SHA256(K, "derive|garble"). Iridis gets only
+  `derive(K, "vault")` = HMAC-SHA256(K, "derive|vault"). Neither can compute the other's key.
+* Handover: `POST /privacy/session?zone=Z` on the relay, with `X-Key`, over adb reverse (localhost) only, body
+  `{"key": hex of K}`. The relay needs K to seal (the vault key) and to decode the splat for the carer's page (the
+  garbling key). This endpoint is still to be added to the relay; coordinate with the parent session.
   Keep the key in memory. Never write it to storage, never log it, and drop it when the session ends.
 
 ## The transform G (all maths in float64)

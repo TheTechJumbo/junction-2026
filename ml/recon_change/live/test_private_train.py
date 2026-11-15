@@ -22,11 +22,13 @@ from test_anonymise import drawn_face, room  # noqa: E402
 
 
 def main():
-    master = vault.new_key()
+    sample = room(5, 720, 1280)
+    master, kept, _ = garble.screened_key([sample], derive=lambda k: vault.derive(k, "garble"), make=vault.new_key)
+    assert kept < 0.8, kept
     g = garble.Garbler(vault.derive(master, "garble"))
     vkey = vault.derive(master, "vault")
     with tempfile.TemporaryDirectory() as folder:
-        frame = room(5, 720, 1280)  # a portrait frame: 720 wide, 1280 high
+        frame = sample.copy()  # a portrait frame: 720 wide, 1280 high
         face = drawn_face(160)
         frame[500:500 + face.shape[0], 250:250 + face.shape[1]] = face
         path = Path(folder) / "000000_0.jpg"
