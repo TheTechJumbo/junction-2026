@@ -32,7 +32,7 @@ SIZES_M = {"orange box": (0.1, 0.6)}
 DEFAULT_SIZE_M = (0.02, 2.0)
 COLOUR_LEAST = 0.2
 AGREE_M = 1.0      # two views this close agree (two fixes of one carton on the venue table: 0.74 m apart)
-AGREE_VIEWS = 2    # views from different fixes that make a sighting
+AGREE_VIEWS = int(os.environ.get("BEACON_FIND_AGREE_VIEWS", "2"))  # views from different fixes that make a sighting (1: every view)
 AGREE_S = 900      # agreeing views at most this far apart in time
 MOVED_M = 1.5      # a sighting this far from the last one is a move (over the day log's ITEM_MOVED_M, 1 m)
 VIEWS_KEPT = 30
@@ -343,6 +343,9 @@ class Finder:
         if old and math.dist(old["position"], view["position"]) <= AGREE_M and view["at"] >= old["at"]:
             old["at"], old["last_job"] = view["at"], view["job"]  # seen again where it was: the time moves on
             old.update({k: view[k] for k in OUTLINE if k in view})  # and the outline is the newest photo's
+            old["position"] = list(view["position"])  # and the spot is the newest view's (it follows the thing as it is nudged)
+            near = nearest(old["position"], places, skip=name)
+            old["near"], old["near_m"] = (near[0], round(near[1], 2)) if near else ("", None)
             return None
         group = [v for v in thing["views"] if abs(v["at"] - view["at"]) <= AGREE_S and
                  math.dist(v["position"], view["position"]) <= AGREE_M]
@@ -350,7 +353,7 @@ class Finder:
             return None
         if old and view["at"] < old["at"]:
             return None  # older pictures that disagree with a newer sighting change nothing
-        position = median3([v["position"] for v in group])
+        position = list(view["position"]) if AGREE_VIEWS == 1 else median3([v["position"] for v in group])  # 1: the newest view
         near = nearest(position, places, skip=name)
         sighting = {"position": position, "at": max(v["at"] for v in group), "first_at": min(v["at"] for v in group),
                     "confirmed_at": round(self.now(), 1), "views": len({v["job"] for v in group}),
