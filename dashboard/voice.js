@@ -2,9 +2,20 @@
 export function setupVoice(getToken) {
   const $ = id => document.getElementById(id);
   let recorder, stream, timer, recording, playbackURL, sourceURL, generation = 0, controller, busy = false;
+  let elapsedTimer, recordingStarted = 0;
+  const elapsed = () => { const seconds = Math.min(120, Math.floor((performance.now() - recordingStarted) / 1000)); return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; };
   const message = text => { $('voice-message').textContent = text; };
   function stop() {
     clearTimeout(timer);
+    clearInterval(elapsedTimer);
+    if (recorder?.state === 'recording') {
+      $('voice-recording-label').textContent = 'Recording stopped — microphone off';
+      $('voice-recording-time').textContent = elapsed();
+      $('voice-recording').dataset.active = 'false';
+    }
+    $('voice-record').disabled = false;
+    $('voice-record').textContent = 'Record my voice';
+    $('voice-file').disabled = false;
     if (recorder?.state === 'recording') recorder.stop();
     stream?.getTracks().forEach(track => track.stop());
     stream = null;
@@ -16,6 +27,7 @@ export function setupVoice(getToken) {
     if (playbackURL) URL.revokeObjectURL(playbackURL);
     sourceURL = playbackURL = null;
     recording = null;
+    $('voice-recording').hidden = true;
     $('voice-file').value = '';
   }
   async function request(path = '', body, audio = false) {
@@ -53,7 +65,7 @@ export function setupVoice(getToken) {
     const current = generation;
     $('voice-actions').disabled = true;
     message('Working…');
-    try { await action(); if (current === generation) message('Done.'); }
+    try { await action(); if (current === generation) message(recorder?.state === 'recording' ? 'Microphone is on. Stop when you have finished; nothing uploads until you choose Upload and create my voice.' : 'Done.'); }
     catch (error) {
       if (current === generation && error.name !== 'AbortError') {
         try { if (getToken()) show(await request()); } catch { /* retain original error */ }
@@ -100,11 +112,24 @@ export function setupVoice(getToken) {
     recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     recorder.onstop = () => {
       if (current !== generation) return;
+      stop();
+      $('voice-recording-label').textContent = 'Recording stopped — microphone off';
+      $('voice-recording-time').textContent = elapsed();
+      $('voice-recording').dataset.active = 'false';
       recording = new Blob(chunks, {type});
       sourceURL = URL.createObjectURL(recording); $('voice-source').src = sourceURL;
       message('Recording ready. Listen before uploading.');
     };
     recorder.start(); $('voice-stop').disabled = false;
+    recordingStarted = performance.now();
+    $('voice-recording').hidden = false;
+    $('voice-recording').dataset.active = 'true';
+    $('voice-recording-label').textContent = 'Recording — microphone on';
+    $('voice-recording-time').textContent = '00:00';
+    elapsedTimer = setInterval(() => { $('voice-recording-time').textContent = elapsed(); }, 250);
+    $('voice-record').disabled = true;
+    $('voice-record').textContent = 'Recording…';
+    $('voice-file').disabled = true;
     timer = setTimeout(stop, 120000);
   });
   $('voice-stop').onclick = stop;

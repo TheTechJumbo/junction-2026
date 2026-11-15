@@ -31,3 +31,8 @@ fieldset{border:0;margin:0;padding:0;min-width:0}
 .familiar-voice label{display:block;margin-block:1rem}
 .familiar-voice audio{display:block;max-width:100%;margin-block:1rem}
 .familiar-voice input[type=checkbox]{width:auto}
+
+.voice-recording{display:flex;flex-wrap:wrap;gap:1rem;align-items:center;border:2px solid currentColor;border-radius:.5rem;padding:1rem;margin-block:1rem}
+.voice-recording[data-active="true"]{background:#fff0f0;color:#8b1524}
+.voice-recording[data-active="true"] strong::before{content:"● ";color:#b42338}
+.voice-recording time{font-variant-numeric:tabular-nums;font-size:1.35em}

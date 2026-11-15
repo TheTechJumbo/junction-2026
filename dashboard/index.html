@@ -122,6 +122,10 @@
           <p>Record 1–2 minutes of your own clear speech in a quiet room, or upload WebM, MP3, WAV, M4A or Ogg audio (up to 10 MiB). Recording stops after two minutes.</p>
           <button type="button" class="ghost" id="voice-record">Record my voice</button>
           <button type="button" class="ghost" id="voice-stop" disabled>Stop recording</button>
+          <div id="voice-recording" class="voice-recording" hidden>
+            <strong id="voice-recording-label" role="status">Recording — microphone on</strong>
+            <span><time id="voice-recording-time" aria-label="Elapsed recording time">00:00</time> / 02:00</span>
+          </div>
           <label>Or choose a recording <input id="voice-file" type="file" accept="audio/webm,audio/mpeg,audio/wav,audio/mp4,audio/ogg"></label>
           <audio id="voice-source" controls aria-label="Your recording"></audio>
           <p>Creating a clone sends this recording to ElevenLabs. Tuttu does not save the source recording locally. ElevenLabs processes and stores voice data under its own terms; deleting the voice requests removal through their API.</p>
