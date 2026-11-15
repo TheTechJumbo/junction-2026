@@ -956,7 +956,10 @@ async function tickLive() {
       }
     }
     if ((fix.age_s ?? 99) <= LIVE_FOUND_S) {
+      const iou = (a, b) => { const w = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), h = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+        const u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - w * h; return u > 0 ? (w * h) / u : 0; };
       for (const it of fix.items || []) {
+        if (Array.isArray(it.box) && it.box.length === 4 && boxes.some((b) => wanted.has(b.name.toLowerCase()) && iou(b.box, it.box) >= 0.3)) continue;  // the orange box, not a "phone"
         if (Array.isArray(it.box) && it.box.length === 4 && !boxes.some((b) => b.name.toLowerCase() === String(it.name).toLowerCase())) {
           boxes.push({ name: String(it.name), box: it.box.map(Number), note: it.score != null ? `${Math.round(100 * it.score)}%` : '' });
         }

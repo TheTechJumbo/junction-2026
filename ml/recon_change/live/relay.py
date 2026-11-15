@@ -242,6 +242,18 @@ except ImportError:  # route.py is missing: fixes go out without a route, the di
 FIND_ALIASES = {"orange box": ["orange object", "orange block"]}  # also asked of the item finder, which scores these higher
 
 
+def box_iou(a, b):
+    """Overlap of two [u0, v0, u1, v1] boxes (0..1), as intersection over union; 0 for anything else."""
+    try:
+        w = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+        h = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+        inter = w * h
+        union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+        return inter / union if union > 0 else 0.0
+    except (TypeError, IndexError):
+        return 0.0
+
+
 def orange_patch(photo):
     """The largest strongly orange patch in a JPEG, as a live box {"name": "orange box", "score", "box" [u0, v0, u1, v1],
     "colour", "source": "colour"}, or None. A few ms on the laptop: the outline shows even when the item finder misses
@@ -2442,6 +2454,19 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     where_file.write_text(json.dumps(where))
                 except OSError:
                     pass
+                # A watched thing wins over the worker's own five where they overlap: the orange box is not a "phone".
+                wanted = set(found_things.watched(zone)) | {a for w in found_things.watched(zone) for a in FIND_ALIASES.get(w, [])}
+                theirs = [b["box"] for b in (result.get("items") or []) + (result.get("items_candidates") or [])
+                          if b.get("name") in wanted and isinstance(b.get("box"), list)]
+                tint = orange_patch(shot) if shot is not None and "orange box" in wanted else None
+                if tint:
+                    theirs.append(tint["box"])
+                if theirs:
+                    def mine(item):
+                        return item.get("name") in wanted or not any(box_iou(item.get("box"), b) >= 0.3 for b in theirs)
+                    result["items"] = [it for it in result.get("items") or [] if mine(it)]
+                    if fix.get("items"):
+                        fix["items"] = [it for it in fix["items"] if mine(it)]
                 remember_items(zone, result, images)
                 fix["found"] = find_seen(zone, result, header["job"], t0, images, photo=shot)  # find me X: sightings, moves
                 if shot is not None:  # a newly asked name is also looked for in the latest photos
