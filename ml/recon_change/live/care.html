@@ -230,30 +230,64 @@ splatFrame.add(objectAnchors);
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight;
+  // The middle of the view is the middle of the part the panel leaves free (left of it, or above it on a phone),
+  // so whatever Follow keeps in the middle is not under the panel.
+  const r = document.getElementById('panel').getBoundingClientRect();
+  const side = r.left > innerWidth / 2, below = !side && r.top > innerHeight / 3;
+  const dx = side ? (innerWidth - r.left) / 2 : 0, dy = below ? (innerHeight - r.top) / 2 : 0;
+  if (dx || dy) camera.setViewOffset(innerWidth, innerHeight, dx, dy, innerWidth, innerHeight);
+  else camera.clearViewOffset();
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', () => { resize(); if (typeof renderWent === 'function') renderWent(); });
 resize();
 
-// The wearer: a head with a cone where they look, a line down to about the floor, and today's path.
-const colours = { found: 0x4aa3ff, unsure: 0xffb84d, lost: 0xff6b5b, stale: 0x6f7d8c };
-const wearer = new THREE.Group();
-const coneMat = new THREE.MeshBasicMaterial({ color: colours.found, transparent: true });
-const cone = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.15, 20), coneMat);
-cone.position.y = 0.11;  // the cone's tip along +y: north before the wearer's heading turns it
+// The wearer, "you are here": a puck on the floor with an arrow the way they face, a head at eye height with a view
+// cone, a ring as wide as the position is uncertain, and a trail of the last 30 s. Drawn over the splat, so it is
+// never hidden inside it. Live: blue (amber when unsure) with a pulse; last seen: grey with a dashed ring.
+const colours = { found: 0x4aa3ff, unsure: 0xffb84d, lost: 0xff6b5b, stale: 0x8a96a3 };
+const FLOOR = -1.45;  // the floor, below the eye height the fixes report (z = 0 at the first camera)
+const onTop = (m, order = 20) => { m.renderOrder = order; m.material.depthTest = false; m.material.depthWrite = false; return m; };
+const wearer = new THREE.Group();  // at the eye; rotation.z = -heading, so +y is the way they face
+const coneMat = new THREE.MeshBasicMaterial({ color: colours.found, transparent: true, opacity: 0.22, side: THREE.DoubleSide });
+const viewGeo = new THREE.ConeGeometry(Math.tan(Math.PI / 6) * 1.1, 1.1, 32, 1, true);  // 60 degrees wide, 1.1 m long
+viewGeo.rotateZ(Math.PI); viewGeo.translate(0, 0.55, 0);  // apex at the eye, opening the way they face
+const cone = onTop(new THREE.Mesh(viewGeo, coneMat), 21);
 const headMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
-const head = new THREE.Mesh(new THREE.SphereGeometry(0.035, 20, 14), headMat);
-const stem = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -0.08), new THREE.Vector3(0, 0, -1.45)]),
-  new THREE.LineBasicMaterial({ color: 0x9fd0ff, transparent: true, opacity: 0.55 }));
-const feet = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.2, 32), new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
-feet.position.z = -1.45;
+const head = onTop(new THREE.Mesh(new THREE.SphereGeometry(0.055, 24, 16), headMat), 23);
+const stem = onTop(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -0.07), new THREE.Vector3(0, 0, FLOOR)]),
+  new THREE.LineBasicMaterial({ color: 0xcfe6ff, transparent: true, opacity: 0.8 })));
+const puckMat = new THREE.MeshBasicMaterial({ color: colours.found, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
+const puck = onTop(new THREE.Mesh(new THREE.CircleGeometry(0.17, 40), puckMat), 22);
+puck.position.z = FLOOR;
+const rim = onTop(new THREE.Mesh(new THREE.RingGeometry(0.17, 0.2, 40), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, side: THREE.DoubleSide })), 22);
+rim.position.z = FLOOR;
+const arrowShape = new THREE.Shape([new THREE.Vector2(-0.11, 0.24), new THREE.Vector2(0, 0.55), new THREE.Vector2(0.11, 0.24)]);
+const arrow = onTop(new THREE.Mesh(new THREE.ShapeGeometry(arrowShape), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, side: THREE.DoubleSide })), 22);
+arrow.position.z = FLOOR;
+// how sure the position is: a ring (solid when live, dashed when last seen) and a faint disc, scaled to metres
+const ring = new THREE.Group();
+ring.position.z = FLOOR;
+const ringFill = onTop(new THREE.Mesh(new THREE.CircleGeometry(1, 64), new THREE.MeshBasicMaterial({ color: colours.found, transparent: true, opacity: 0.1, side: THREE.DoubleSide })), 19);
+const ringLine = onTop(new THREE.Mesh(new THREE.RingGeometry(0.975, 1, 96), new THREE.MeshBasicMaterial({ color: colours.found, transparent: true, opacity: 0.85, side: THREE.DoubleSide })), 19);
+const circle = Array.from({ length: 97 }, (_, i) => new THREE.Vector3(Math.cos(i / 96 * Math.PI * 2), Math.sin(i / 96 * Math.PI * 2), 0));
+const ringDash = onTop(new THREE.Line(new THREE.BufferGeometry().setFromPoints(circle), new THREE.LineDashedMaterial({ color: colours.stale, dashSize: 0.08, gapSize: 0.06, transparent: true })), 19);
+ringDash.computeLineDistances();
+const pulse = onTop(new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 64), new THREE.MeshBasicMaterial({ color: colours.found, transparent: true, side: THREE.DoubleSide })), 19);
+ring.add(ringFill, ringLine, ringDash);
 const wearerTagAt = new THREE.Object3D();
-wearerTagAt.position.z = 0.22;
-wearer.add(cone, head, stem, feet, wearerTagAt);
+wearerTagAt.position.z = 0.16;
+wearer.add(cone, head, stem, puck, rim, arrow, ring, pulse, wearerTagAt);
+pulse.position.z = FLOOR;
 wearer.visible = false;
+const marker = { radius: 0.4, radiusWant: 0.4, stale: false };
+// the last 30 s of the marker's own (smoothed) way, fading out, on the floor
+const trailLine = onTop(new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ vertexColors: true, transparent: true })), 18);
+const trail = [];  // [{t (s), x, y}]
+const TRAIL_S = 30;
 const pathLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.7 }));
 const placeGroup = new THREE.Group();
-space.add(wearer, pathLine, placeGroup);
+space.add(wearer, pathLine, placeGroup, trailLine);
 
 // ---- labels: HTML tags that follow points in 3D, so they stay sharp and readable on a phone ----
 const tags = new Map();  // id -> {el, anchor, lift}
@@ -301,6 +335,7 @@ function setMode(m) {
   $('follow').classList.toggle('on', m === 'follow');
   $('eyes').classList.toggle('on', m === 'eyes');
   head.visible = cone.visible = m !== 'eyes';
+
 }
 function takeOver() { if (mode !== 'free') setMode('free'); flight = null; }
 let hintTimer = 0;
@@ -593,6 +628,14 @@ function knownPose() {  // the live position, else the last known one (stale: tr
   return p ? { position: [p[1], p[2], 0], heading: 0, state: 'lost', at: p[0], stale: true } : null;
 }
 const target = { pos: new THREE.Vector3(), heading: 0, has: false };
+function uncertainty(f, pose) {  // metres: the fix's (or the steady pose's) own uncertainty when given, else a guess
+  const given = Number((f && f.uncertainty_m) ?? (f && f.stable && f.stable.uncertainty_m));
+  if (Number.isFinite(given) && given > 0) return Math.min(5, Math.max(0.1, given));
+  if (!pose || pose.stale) return 1.5;
+  const pct = f && f.stable && f.stable.confidence_pct;
+  if (Number.isFinite(pct) && pct > 0) return 0.25 + (1 - Math.min(100, pct) / 100) * 1.2;
+  return pose.state === 'unsure' ? 0.8 : 0.35;
+}
 function nearestPlace(pose) {
   let best = null;
   for (const p of places) {
@@ -611,8 +654,13 @@ function updateWearer() {
   target.pos.set(pose.position[0], pose.position[1], pose.position[2] || 0);
   target.heading = pose.heading;
   if (!target.has) { wearer.position.copy(target.pos); wearer.rotation.z = -pose.heading * Math.PI / 180; target.has = true; }
-  coneMat.color.setHex(stale ? colours.stale : colours[pose.state] || colours.found);
-  const t = tag('wearer', stale ? `Last seen ${clock(pose.at)}` : 'Wearer', 'wearer', wearerTagAt, () => toWearer('follow'));
+  const colour = stale ? colours.stale : colours[pose.state] || colours.found;
+  for (const m of [coneMat, puckMat, ringFill.material, ringLine.material, pulse.material]) m.color.setHex(colour);
+  marker.stale = stale;
+  marker.radiusWant = uncertainty(fix, pose);
+  ringLine.visible = ringFill.visible = pulse.visible = !stale;
+  ringDash.visible = stale;
+  const t = tag('wearer', stale ? `Last seen ${clock(pose.at)}` : `Here now · ±${metres(marker.radiusWant)}`, 'wearer', wearerTagAt, () => toWearer('follow'));
   t.el.classList.toggle('stale', stale);
   t.hidden = () => mode === 'eyes';
 }
@@ -839,6 +887,9 @@ function drawAbove(track) {
     const h = (pose.heading || 0) * Math.PI / 180;
     const tip = at([pose.position[0] + 0.5 * Math.sin(h), pose.position[1] + 0.5 * Math.cos(h)]);
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(...xy); ctx.lineTo(...tip); ctx.stroke();
+    const r = Math.hypot(...[0, 1].map((i) => at([pose.position[0] + marker.radius, pose.position[1]])[i] - xy[i]));
+    ctx.fillStyle = fresh(fix) ? 'rgba(74, 163, 255, .15)' : 'rgba(138, 150, 163, .12)';
+    ctx.beginPath(); ctx.arc(xy[0], xy[1], Math.max(8, r), 0, 7); ctx.fill();
     ctx.fillStyle = fresh(fix) ? '#4aa3ff' : '#6f7d8c'; ctx.strokeStyle = '#fff';
     ctx.beginPath(); ctx.arc(xy[0], xy[1], 6, 0, 7); ctx.fill(); ctx.stroke();
   }
@@ -869,7 +920,7 @@ function doingWords() {
   return out;
 }
 function renderNow() {
-  const pose = wearerPose(fix);
+  const pose = fix && fresh(fix) ? wearerPose(fix) : null;  // where they are now only from a live fix; else when last seen
   const dot = $('dot');
   dot.className = 'dot' + (fix && fresh(fix) ? (pose && pose.state === 'unsure' ? ' unsure' : ' live') : '');
   if (!fix) {
@@ -1012,6 +1063,7 @@ $('fold').onclick = () => {
   const folded = $('panel').classList.toggle('folded');
   $('fold').textContent = folded ? 'Show' : 'Hide';
   $('fold').setAttribute('aria-expanded', String(!folded));
+  setTimeout(resize, 50);  // the free part of the view changed
 };
 
 // ---- every frame: move, follow, animate the wearer, place the tags ----
@@ -1020,12 +1072,35 @@ const tmp = new THREE.Vector3();
 renderer.setAnimationLoop((now) => {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  // the wearer glides to the newest position instead of jumping
+  // the wearer glides to the newest position instead of jumping (about a third of a second to settle)
   if (target.has) {
-    wearer.position.lerp(target.pos, 1 - Math.exp(-dt * 6));
+    wearer.position.lerp(target.pos, 1 - Math.exp(-dt * 4));
     const want = -target.heading * Math.PI / 180;
     const diff = Math.atan2(Math.sin(want - wearer.rotation.z), Math.cos(want - wearer.rotation.z));
-    wearer.rotation.z += diff * (1 - Math.exp(-dt * 6));
+    wearer.rotation.z += diff * (1 - Math.exp(-dt * 4));
+    marker.radius += (marker.radiusWant - marker.radius) * (1 - Math.exp(-dt * 3));
+    ring.scale.setScalar(marker.radius);
+    const beat = (now / 1600) % 1;  // live: a ring spreading out from the puck every 1.6 s
+    pulse.scale.setScalar(0.25 + beat * Math.max(0.4, marker.radius));
+    pulse.material.opacity = 0.55 * (1 - beat);
+    const secs = now / 1000;
+    const last = trail[trail.length - 1];
+    if (wearer.visible && !marker.stale && (!last || Math.hypot(last.x - wearer.position.x, last.y - wearer.position.y) > 0.02 || secs - last.t > 1)) {
+      trail.push({ t: secs, x: wearer.position.x, y: wearer.position.y });
+    }
+    while (trail.length && secs - trail[0].t > TRAIL_S) trail.shift();
+    if (trail.length > 1) {
+      const pos = new Float32Array(trail.length * 3), col = new Float32Array(trail.length * 4);
+      trail.forEach((p, i) => {
+        pos.set([p.x, p.y, FLOOR], i * 3);
+        col.set([0.29, 0.64, 1, Math.max(0, 1 - (secs - p.t) / TRAIL_S) * 0.9], i * 4);
+      });
+      trailLine.geometry.dispose();
+      trailLine.geometry = new THREE.BufferGeometry();
+      trailLine.geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      trailLine.geometry.setAttribute('color', new THREE.BufferAttribute(col, 4));
+    }
+    trailLine.visible = trail.length > 1;
   }
   if (flight) {
     flight.t = Math.min(1, flight.t + dt / flight.seconds);
@@ -1038,12 +1113,18 @@ renderer.setAnimationLoop((now) => {
     const w = wearer.getWorldPosition(tmp);
     const yaw = wearer.rotation.z;  // -heading in radians: the camera yaw that looks the same way (see yawOf)
     const ahead = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    const want = mode === 'eyes' ? w.clone() : w.clone().addScaledVector(ahead, -0.9).add(new THREE.Vector3(0, 0.3, 0));
+    const want = mode === 'eyes' ? w.clone() : w.clone().addScaledVector(ahead, -1.6).add(new THREE.Vector3(0, 0.75, 0));
     const k = 1 - Math.exp(-dt * 4);
     camera.position.lerp(want, k);
-    const yawDiff = Math.atan2(Math.sin(yaw - look.yaw), Math.cos(yaw - look.yaw));
-    look.yaw += yawDiff * k;
-    look.pitch += ((mode === 'eyes' ? 0 : -0.22) - look.pitch) * k;
+    let aimYaw = yaw, aimPitch = 0;
+    if (mode === 'follow') {  // look at the middle of the marker (between head and puck) from where the camera is now
+      const at = w.clone().add(new THREE.Vector3(0, FLOOR / 2, 0)).sub(camera.position);
+      aimYaw = Math.atan2(-at.x, -at.z);
+      aimPitch = Math.atan2(at.y, Math.hypot(at.x, at.z));
+    }
+    const turnK = 1 - Math.exp(-dt * (mode === 'follow' ? 8 : 4));  // aim faster than the camera moves: it stays centred
+    look.yaw += Math.atan2(Math.sin(aimYaw - look.yaw), Math.cos(aimYaw - look.yaw)) * turnK;
+    look.pitch += (aimPitch - look.pitch) * turnK;
   } else {
     const v = speedNow() * dt;
     const f = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
@@ -1059,7 +1140,9 @@ renderer.setAnimationLoop((now) => {
   camera.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
   if (wearer.visible) {  // fade the wearer out when the camera comes close, so it never fills the view
     const near = camera.position.distanceTo(wearer.getWorldPosition(tmp));
-    coneMat.opacity = headMat.opacity = Math.max(0, Math.min(0.95, (near - 0.25) / 0.6));
+    const fade = Math.max(0, Math.min(1, (near - 0.25) / 0.6));
+    headMat.opacity = 0.95 * fade;
+    coneMat.opacity = 0.22 * fade;
   }
   for (const g of placeGroup.children) {  // a place's ball fades out close up too, so it never fills the view
     const ball = g.children[0];

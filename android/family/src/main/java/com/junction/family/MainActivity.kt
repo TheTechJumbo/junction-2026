@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.text.method.HideReturnsTransformationMethod
+import android.text.method.PasswordTransformationMethod
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -18,6 +20,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -302,21 +305,33 @@ class MainActivity : ComponentActivity() {
     private fun askForRelay() {
         val now = relayStore.settings
         fun field(hintText: String, value: String, type: Int) = EditText(this).apply {
+            setSingleLine() // first: it replaces the text's transformation, which would undo a password field's dots
             inputType = type
             hint = hintText
             setText(value)
-            setSingleLine()
         }
         val address = field(getString(R.string.relay_address_hint), now?.address?.toString()?.trimEnd('/')
             ?: if (BuildConfig.DEBUG) "http://127.0.0.1:8090" else "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
-        val key = field(getString(R.string.relay_key_hint), now?.key.orEmpty(),
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        // The key is never shown: the field starts empty (left empty, the saved key is kept), shows dots while typing,
+        // and Show key reveals only what is typed in it now.
+        val key = field(getString(if (now != null) R.string.relay_key_hint_saved else R.string.relay_key_hint), "",
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply {
+            transformationMethod = PasswordTransformationMethod.getInstance()
+            importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO
+        }
+        val showKey = CheckBox(this).apply {
+            text = getString(R.string.relay_key_show)
+            setOnCheckedChangeListener { _, on ->
+                key.transformationMethod = if (on) HideReturnsTransformationMethod.getInstance() else PasswordTransformationMethod.getInstance()
+                key.setSelection(key.text.length)
+            }
+        }
         val room = field(getString(R.string.relay_zone_hint), now?.zone ?: "kitchen", InputType.TYPE_CLASS_TEXT)
         val padding = dp(20)
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(padding, padding / 2, padding, 0)
-            addView(address); addView(key); addView(room)
+            addView(address); addView(key); addView(showKey); addView(room)
         }
         AlertDialog.Builder(this)
             .setTitle(R.string.relay_title)
@@ -324,7 +339,7 @@ class MainActivity : ComponentActivity() {
             .setView(form)
             .setPositiveButton(R.string.address_save) { _, _ ->
                 val url = RelayAddress.parse(address.text.toString(), BuildConfig.DEBUG)
-                val secret = RelayAddress.key(key.text.toString())
+                val secret = RelayAddress.keyOrSaved(key.text.toString(), now?.key)
                 val zone = RelayAddress.zone(room.text.toString())
                 if (url == null || secret == null || zone == null) {
                     Toast.makeText(this, R.string.relay_invalid, Toast.LENGTH_LONG).show()
