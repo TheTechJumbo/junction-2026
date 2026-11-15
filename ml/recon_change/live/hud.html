@@ -491,13 +491,13 @@ function gateStep(moving, differs, now) {
 
 function drawGate(now) {
   show('strip', true);
-  const g = $('strip').getContext('2d'), colour = { moving: '#f0b429', settling: '#7d6a1f', photo: '#4aa3ff', still: '#4a3a1c' };
+  const g = $('strip').getContext('2d'), colour = { moving: '#f0b429', settling: '#7d6a1f', photo: '#4aa3ff', still: '#3b4763' };
   g.clearRect(0, 0, 600, 34);
   gate.ticks.forEach((state, i) => { g.fillStyle = colour[state]; g.fillRect(600 - (gate.ticks.length - i) * 2.5, state === 'photo' ? 0 : 8, state === 'photo' ? 3 : 2.5, state === 'photo' ? 34 : 18); });
   const timer = Math.max(1, Math.floor((now - gate.since) / 6000) + 1);  // what the old 6 s timer would have sent
   const words = { moving: 'moving: no photo', settling: 'settling', photo: 'photo sent', still: 'still: last answer holds' };
   $('gateline').textContent = `${words[gate.state]} · ${gate.sent} photo${gate.sent === 1 ? '' : 's'} sent, the 6 s timer would have sent ${timer}` +
-    ' · amber moving, green still, blue photo';
+    ' · amber moving, slate still, blue photo';
 }
 
 // A phone's motion sensor says "moving" sooner than the picture does (needs HTTPS on most phones).
