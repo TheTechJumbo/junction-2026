@@ -206,7 +206,7 @@
     <div class="status" id="photo-status" hidden></div>
   </section>
   <section id="splat-pane">
-    <div class="pane-head"><span class="step" id="splat-step">2</span><div><h2>As the glasses see it</h2><p id="splat-words">Gaussian splat</p></div></div>
+    <div class="pane-head"><span class="step" id="splat-step">2</span><div><h2 id="splat-title">As the glasses see it</h2><p id="splat-words">Gaussian splat</p></div></div>
     <div id="splat"></div><div class="status" id="splat-status">Loading…</div>
   </section>
   <section class="mesh-pane">
@@ -317,7 +317,7 @@
   if (scene.house) $('splat-words').textContent = 'Gaussian splat · the scanned room only';
   if (scene.photos) $('splat-words').textContent = 'Gaussian splat trained on those photos · 1.59 M Gaussians';
   if (scene.photos) {
-    $('title-from').textContent = 'From photos'; document.title = 'From photos to the family app';
+    $('title-from').textContent = 'From photos'; $('splat-title').textContent = 'As a Gaussian splat'; document.title = 'From photos to the family app';
     $('photo-pane').hidden = false; $('panes').classList.add('three');
     $('panes').after($('night-panel')); $('night-panel').classList.add('night-wide');
     words[2].textContent = 'the family app';
