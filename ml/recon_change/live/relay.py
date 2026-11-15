@@ -779,8 +779,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             return reply
         reply["live"] = {"at": got["at"], "box2d": mine["box"], "score": mine["score"], "colour": mine.get("colour"),
                          "image": got["image"], "age_s": round(time.time() - got["at"], 1), "latency_s": got["latency_s"]}
-        if got["at"] > (reply.get("at") or 0):
-            reply.update(box2d=mine["box"], image=got["image"], at=got["at"], stale=False)
+        if got["at"] >= (reply.get("at") or 0) - 0.5:  # the same photo as the sighting's, or a newer one (times are rounded)
+            reply.update(box2d=mine["box"], image=got["image"], at=round(got["at"], 1), stale=False)
         return reply
 
     def find_places(zone, fix=None):
