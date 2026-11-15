@@ -13,6 +13,10 @@ const plain = (error, fallback) => {
 };
 const params = new URLSearchParams(location.search);
 let demo = params.has('demo'), controller, generation = 0, evidenceController, evidenceObject, lastData = null, refreshedAt = null;
+// While today is on screen, connected and visible, the day reloads quietly so new sensor, glasses
+// and vision events appear without pressing Refresh.
+const LIVE_MS = 10000;
+let liveTimer, liveController, shownKey = '';
 
 // ---------- Words ----------
 const KINDS = {
@@ -258,12 +262,12 @@ function renderMedication(timeline) {
   }));
   $('medication-empty').hidden = openings.length > 0;
 }
-function render(data) {
-  lastData = data;
+function render(data, {quiet = false} = {}) {
+  lastData = data; shownKey = JSON.stringify(data);
   const {timeline, summary} = data;
   renderHero(); renderRhythm(timeline); renderAlerts(timeline); renderEvents(timeline); renderQuestions(timeline); renderSensors(timeline); renderMedication(timeline);
   $('content').hidden = false;
-  root.dataset.loaded = String(Date.now()); // themes may key entrance animations off this
+  if (!quiet) root.dataset.loaded = String(Date.now()); // themes key entrance animations off this; live updates don't replay them
 }
 
 // ---------- Evidence ----------
@@ -277,10 +281,26 @@ async function showEvidence(event) {
 }
 
 // ---------- Loading ----------
+function isLiveToday() { return !demo && api.token && !document.hidden && navigator.onLine && $('day').value === localDay(); }
+function scheduleLive() { clearTimeout(liveTimer); if (isLiveToday()) liveTimer = setTimeout(refreshQuietly, LIVE_MS); }
+// Reload today in place: the page stays on screen, redraws only when something changed, and keeps
+// what it shows if a reload fails (the next one tries again).
+async function refreshQuietly() {
+  if (!isLiveToday() || !lastData || root.dataset.loading || document.querySelector('dialog[open]')) { scheduleLive(); return; }
+  const active = generation; liveController = new AbortController();
+  try {
+    const data = await api.day($('day').value, liveController.signal);
+    if (active !== generation) return;
+    if (JSON.stringify(data) !== shownKey) render(data, {quiet: true});
+    refreshedAt = new Date(); status(''); tick();
+  } catch (error) { if (error.name !== 'AbortError' && active === generation) status(plain(error, 'Live updates paused.'), true); }
+  finally { if (active === generation) scheduleLive(); }
+}
 async function load() {
+  clearTimeout(liveTimer); liveController?.abort();
   controller?.abort(); controller = new AbortController(); const active = ++generation;
   cleanupEvidence(); if ($('evidence-dialog').open) $('evidence-dialog').close();
-  lastData = null; root.dataset.loading = 'true';
+  lastData = null; shownKey = ''; root.dataset.loading = 'true';
   $('content').hidden = true; $('refresh').disabled = true;
   root.dataset.mode = demo ? 'demo' : api.token ? 'live' : 'disconnected';
   $('connection-label').textContent = demo ? 'Example day' : api.token ? 'Connected' : 'Not connected';
@@ -308,7 +328,7 @@ async function load() {
     $('updated').textContent = demo ? 'Example data, not a real home' : 'Updated just now';
     tick();
   } catch (error) { if (error.name !== 'AbortError' && active === generation) { status(plain(error, 'This day could not be shown.'), true); $('updated').textContent = 'The day could not be loaded. Refresh to try again.'; } }
-  finally { if (active === generation) { $('refresh').disabled = false; delete root.dataset.loading; } }
+  finally { if (active === generation) { $('refresh').disabled = false; delete root.dataset.loading; scheduleLive(); } }
 }
 function goTo(day) { $('day').value = day; $('day-name').textContent = dayName(day); load(); }
 function toggleDemo() { demo = !demo; if (!demo) $('day').value = localDay(); load(); }
@@ -335,9 +355,13 @@ $('theme-button').addEventListener('click', () => $('theme-dialog').showModal())
 $('info-button').addEventListener('click', () => $('info-dialog').showModal());
 $('close-info').addEventListener('click', () => $('info-dialog').close());
 window.addEventListener('offline', () => { if (!demo && api.token) { controller?.abort(); generation++; $('refresh').disabled = false; $('content').hidden = true; status('You are offline. Reconnect, then refresh to load this day.', true); } });
-window.addEventListener('online', () => { if (!demo && api.token) status('Back online. Refresh to load the latest.'); });
+window.addEventListener('online', () => { if (!demo && api.token) load(); });
 setInterval(tick, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearTimeout(liveTimer); return; }
+  tick();
+  if (isLiveToday() && (!refreshedAt || Date.now() - refreshedAt > LIVE_MS)) refreshQuietly(); else scheduleLive();
+});
 
 // Installed app: register the service worker (static files only) and offer an Install button
 // where the browser supports it. Opening from the home screen starts in standalone mode.
