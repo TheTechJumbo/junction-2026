@@ -29,6 +29,12 @@ It prints the link to open. The link carries an access key, and every request ne
     POST /forget?zone=kitchen&name=keys   forget where an item was seen (no name: every item in the zone)
     POST /speak                   body = {"text": "..."} -> the sentence as MP3 speech
     GET  /changes?zone=kitchen    what was moved in view while the camera stood still, with before and now pictures
+    GET  /viewer?live=kitchen     the room in 3D with the wearer moving in it, live (needs the room map below)
+    POST /map?zone=kitchen        build the room map: the baseline pictures in one pass, as one splat (10 to 20 s)
+    POST /locate?...&quick=0      with --quick: ask the model (or the cheap gate), not the instant fix
+    GET  /room?zone=kitchen       the room map: its splat (/evidence/.../room.splat), places and baseline cameras
+    GET  /frame?zone=kitchen      the newest photo that reached /locate, as it came (the dashboard's camera view)
+    GET  /worker_log?lines=60     the end of the worker's log: model load, timings and peak GPU memory per job
 
 Every photo sent to /locate first goes through a cheap gate (view_verdict): the same view as the last one
 the model saw gets the last answer again in milliseconds ("reused": true, at most 45 s long); a view with a
@@ -149,13 +155,14 @@ except ImportError:  # route.py is missing: fixes go out without a route, the di
 class Link:
     """One long-lived connection to the gateway, speaking its JSON-line-plus-bytes protocol."""
 
-    def __init__(self, argv):
+    def __init__(self, argv, name="Iridis"):
         self.argv, self.proc, self.lock = argv, None, threading.Lock()
+        self.name = name  # where the gateway runs, for error messages: "Iridis" or "the local gateway"
 
     def _read(self):
         line = self.proc.stdout.readline()
         if not line:
-            raise ConnectionError("connection to Iridis closed")
+            raise ConnectionError(f"connection to {self.name} closed")
         header = json.loads(line)
         return header, self.proc.stdout.read(int(header.get("size", 0)))
 
@@ -181,7 +188,7 @@ class Link:
                 except (OSError, ValueError, ConnectionError) as err:
                     self.close()
                     if attempt == 2:
-                        return {"ok": False, "error": f"Cannot reach Iridis: {err}"}, b""
+                        return {"ok": False, "error": f"Cannot reach {self.name}: {err}"}, b""
 
 
 def pick_frames(video, n):
@@ -295,6 +302,61 @@ def view_verdict(a, b):
         r, c = np.nonzero(changed)
         box = [round(float(v), 3) for v in (c.min() / cols, r.min() / rows, (c.max() + 1) / cols, (r.max() + 1) / rows)]
     return {"kind": kind, "share": round(share, 3), "worst": round(float(differs.max()), 3), "box": box}
+
+
+# ---- instant pose (relay --quick): cosine similarity to the room's pictures, no model ----
+# The room map (POST /map) knows where each of the room's pictures was taken and which way it faced. A clean photo
+# (sharp, not dark) is compared with each picture as a small grey picture with its brightness and contrast taken out,
+# slid sideways: the best cosine similarity names the picture the wearer stands at, and the slide turns its heading
+# by that share of the camera's field of view. Milliseconds on the laptop's CPU. The model (a full fix) still runs
+# at least every FULL_EVERY_S while photos come, and gives the places their positions.
+QUICK_W = 64          # the small pictures are this many pixels wide (one pixel: about 1 degree of a phone camera)
+QUICK_SHIFT = 0.25    # slid sideways up to this share of the width each way (about 12 degrees of a phone held upright)
+QUICK_FOUND, QUICK_MIN = 0.7, 0.45  # similarity for "found", and below which the photo is not placed at all
+QUICK_SHARP = 60.0    # Laplacian variance of a 320 px wide grey copy below this: a blurred photo, skipped
+FULL_EVERY_S = 4.0
+
+
+def quick_print(frame, shape=None):
+    """A frame as a small grey picture (QUICK_W wide), cropped first to the aspect of `shape` (h, w), normalised."""
+    if shape is not None:
+        h, w = frame.shape[:2]
+        want = shape[1] / shape[0]
+        if w / h > want:
+            keep = max(1, round(h * want))
+            frame = frame[:, (w - keep) // 2:(w - keep) // 2 + keep]
+        else:
+            keep = max(1, round(w / want))
+            frame = frame[(h - keep) // 2:(h - keep) // 2 + keep]
+    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    size = (QUICK_W, max(8, round(QUICK_W * grey.shape[0] / grey.shape[1])))
+    small = cv2.GaussianBlur(cv2.resize(grey, size, interpolation=cv2.INTER_AREA), (3, 3), 0).astype(np.float32)
+    return (small - small.mean()) / (small.std() + 1e-3)
+
+
+def quick_match(now, keys):
+    """[(cosine similarity, frame, slide as a share of the width)] for each key picture, best first. A positive slide:
+    the room appears further right in the photo than in the picture, so the wearer faces further left."""
+    out = []
+    width = now.shape[1]
+    reach = int(QUICK_SHIFT * width)
+    for frame, key in keys:
+        if key.shape != now.shape:
+            continue
+        scores = []
+        for s in range(-reach, reach + 1):
+            a = now[:, max(0, s):width + min(0, s)]
+            b = key[:, max(0, -s):width - max(0, s)]
+            a, b = a - a.mean(), b - b.mean()
+            scores.append(float((a * b).sum() / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-6)))
+        i = int(np.argmax(scores))
+        slide = float(i - reach)
+        if 0 < i < len(scores) - 1:  # between whole pixels: the top of the parabola through the best three
+            down = scores[i - 1] - 2 * scores[i] + scores[i + 1]
+            if down < 0:
+                slide += 0.5 * (scores[i - 1] - scores[i + 1]) / down
+        out.append((scores[i], frame, slide / width))
+    return sorted(out, reverse=True)
 
 
 # Things the wearer may ask for, and the words that mean them. Keep in step with the worker's RECON_ITEMS.
@@ -424,11 +486,14 @@ def item_photo(photo):
 REPO = "TheTechJumbo/junction-2026"
 
 
+AUTO_SPLATS_KEPT = 12  # with --splat-every-fix, only the newest few of those 3D files stay on disk (each about 4 MB)
+
 # What the watch-only key may read (GET only): the glasses display page and the replies it polls.
 VIEW_PATHS = {"/hud", "/where", "/reminders", "/status", "/waypoints"}
 
 
-def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None, api_token=None, view_token=None):
+def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None, api_token=None,
+                 splat_every_fix=False, quick=False, view_token=None):
     # The event API's address without the /events at its end: where /ask and /speak live.
     api_base = re.sub(r"/events/?$", "", event_api).rstrip("/") if event_api and api_token else None
     history_file = evidence_dir / "history.json"
@@ -707,6 +772,13 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
 
     # ---- the cheap gate (see view_verdict): per zone, the last photo the model saw and its answer ----
     views, changes = {}, {}
+    received = {}  # {zone: {"at", "photo"}}: the newest photo that reached /locate, model asked or not (the dashboard shows it)
+    auto_splats = []  # the 3D files made by --splat-every-fix, oldest first (see AUTO_SPLATS_KEPT)
+    rooms_file = evidence_dir / "rooms.json"
+    try:
+        rooms = json.loads(rooms_file.read_text())  # {zone: the room map (POST /map): its splat and its facts}
+    except (OSError, ValueError):
+        rooms = {}
     gate_count = {"model_not_asked": 0, "something_moved": 0, "camera_moved": 0, "first_or_refresh": 0}
 
     def change_pictures(job, before, now, box):
@@ -744,6 +816,119 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                         else:
                             splat_url = f"/evidence/{job}/{name}"
         return images, splat_url
+
+    building = {}  # {zone: "running" or "again"}: one room map build at a time per zone, one more if asked meanwhile
+    quick_keys, full_at = {}, {}  # --quick: {zone: the room pictures as small prints}, {zone: when the model last placed a photo}
+    recent = {}  # --quick: {zone: {"model": (print, pose) of the newest model fix's photo, "quick": (print, pose) of the newest instant one}}
+
+    def keys_for(zone):
+        """The room map's pictures as quick prints, with where each was taken (see quick_match). None without a map."""
+        room = rooms.get(zone)
+        if not room or not room.get("cameras") or cv2 is None:
+            return None
+        got = quick_keys.get(zone)
+        if got and got["job"] == room["job"]:
+            return got
+        keys, cams, shape = [], {}, None
+        for cam in room["cameras"]:
+            if "frame" not in cam:
+                continue
+            header, picture = link.call({"op": "baseline_image", "zone": zone, "frame": cam["frame"]})
+            frame = cv2.imdecode(np.frombuffer(picture, np.uint8), cv2.IMREAD_COLOR) if header.get("ok") else None
+            if frame is None:
+                continue
+            shape = shape or frame.shape[:2]
+            keys.append((cam["frame"], quick_print(frame, shape)))
+            cams[cam["frame"]] = cam
+        quick_keys[zone] = got = {"job": room["job"], "keys": keys, "cams": cams, "shape": shape, "fov": room.get("fov_deg") or 50.0}
+        return got
+
+    def quick_fix(zone, photo):
+        """An instant fix from the room's pictures, or None when this zone has no room map. A blurred or dark photo,
+        or one no picture resembles, gets the latest fix back, marked as such."""
+        t0 = time.time()
+        keys = keys_for(zone)
+        if not keys or not keys["keys"]:
+            return None
+        frame = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            return None
+        last = where.get(zone) or {}
+        clean = rc.sharpness(frame) >= QUICK_SHARP and frame.mean() > 30
+        if not clean:
+            return {**last, "zone": zone, "quick": {"skipped": "blurred or dark", "seconds": round(time.time() - t0, 3)}} if last else None
+        # References with a known pose: the room's pictures, the photo of the newest model fix and the newest instant
+        # frame. With the camera running, the newest frames are a few degrees apart and match strongly, so the heading
+        # follows the camera from frame to frame; the model's fix every FULL_EVERY_S takes the drift out, and the
+        # room's pictures catch the wearer again after a jump.
+        now = quick_print(frame, keys["shape"])
+        refs = [(("picture", f), pr) for f, pr in keys["keys"]]
+        for kind in ("model", "quick"):
+            got = recent.get(zone, {}).get(kind)
+            if got and got[0].shape == now.shape:
+                refs.append(((kind, 0), got[0]))
+        sim, ref, slide = quick_match(now, refs)[0]
+        if sim < QUICK_MIN:
+            return {**last, "zone": zone, "quick": {"skipped": f"nothing the room map knows looks like this (best {sim:.2f})",
+                                                     "similarity": round(sim, 2), "seconds": round(time.time() - t0, 3)}} if last else None
+        base = keys["cams"][ref[1]] if ref[0] == "picture" else recent[zone][ref[0]][1]
+        frame_k = ref[1] if ref[0] == "picture" else ref[0]
+        heading = (base["heading_deg"] - slide * keys["fov"] + 180) % 360 - 180
+        pose = {"position": base["position"], "heading_deg": heading}
+        if sim >= QUICK_FOUND:  # a strong match is the next frame's reference
+            recent.setdefault(zone, {})["quick"] = (now, pose)
+        places = [w for w in last.get("waypoints") or [] if w.get("position")] or (rooms.get(zone) or {}).get("places") or []
+        waypoints = []
+        for w in places:
+            distance, bearing = from_here(w["position"], pose)
+            waypoints.append({"name": w["name"], "distance_m": distance, "bearing_deg": bearing, "position": w["position"]})
+        state = "found" if sim >= QUICK_FOUND else "unsure"
+        fix = {"ok": True, "zone": zone, "job": None, "state": state, "confidence": round(sim, 2), "position": base["position"],
+               "heading_deg": int(round(heading)), "waypoints": waypoints, "map": last.get("map"),
+               "items": [], "items_looked_for": last.get("items_looked_for") or [],
+               "quick": {"similarity": round(sim, 2), "picture": frame_k, "turn_deg": round(-slide * keys["fov"], 1),
+                         "seconds": round(time.time() - t0, 3)},
+               "at": time.time(), "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               "seconds": {"total": round(time.time() - t0, 3)}}
+        fix["headline"], fix["detail"] = where_in_plain_words(fix)
+        return fix
+
+    def build_room(zone):
+        """Ask the worker for the zone's room map (see worker.room_map) and keep it. Returns the reply header."""
+        t0 = time.time()
+        header, blob = link.call({"op": "map", "zone": zone, "device": "gpu"})
+        if header.get("ok"):
+            _, splat_url = keep_evidence(header["job"], blob)
+            result = header["result"]
+            rooms[zone] = {**result, "zone": zone, "job": header["job"], "splat": splat_url, "at": time.time(),
+                           "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                           "seconds": {**result.get("seconds", {}), "total": round(time.time() - t0, 2)}}
+            try:
+                rooms_file.write_text(json.dumps(rooms))
+            except OSError:
+                pass
+        return header
+
+    def grow_room(zone):
+        """A fix added a picture of a part of the room not sampled before: build the room map again, in the background."""
+        if building.get(zone):
+            building[zone] = "again"
+            return
+        building[zone] = "running"
+
+        def run():
+            try:
+                while True:
+                    header = build_room(zone)
+                    if not header.get("ok"):
+                        sys.stderr.write(f"room map for {zone} not built: {header.get('error')}" + chr(10))
+                    if building.get(zone) != "again":
+                        break
+                    building[zone] = "running"
+            finally:
+                building.pop(zone, None)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def pull_requests():
         """The repo's pull requests, for the dashboard's work panel. Asked from `gh` at most once a minute."""
@@ -836,6 +1021,11 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200, {"ok": True, **log.report(date or None)})
             # ---- end day log ----
             zone = parse_qs(url.query).get("zone", [""])[0]
+            if url.path == "/room":  # the room map of a zone (POST /map makes it), for the live 3D page
+                got = rooms.get(zone)
+                if not got or not got.get("splat") or not (evidence_dir / got["job"] / "room.splat").exists():
+                    return self.send_json(404, {"ok": False, "error": f"No room map for '{zone}' yet: POST /map?zone={zone}."})
+                return self.send_json(200, {"ok": True, **got, "age_s": round(time.time() - got["at"]), "building": bool(building.get(zone))})
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:
@@ -870,7 +1060,21 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(404, header)
             if url.path == "/status":
                 header, _ = link.call({"op": "status"})
-                return self.send_json(200 if header.get("ok") else 503, {**header, "answers": bool(api_base)})
+                return self.send_json(200 if header.get("ok") else 503, {**header, "answers": bool(api_base), "worker_at": link.name})
+            if url.path == "/frame":  # the newest photo that reached /locate (in this zone, or in any)
+                got = received.get(zone) if zone else max(received.values(), key=lambda r: r["at"], default=None)
+                if not got:
+                    return self.send_json(404, {"ok": False, "error": "No photo has reached /locate since the relay started."})
+                return self.send_bytes(200, got["photo"], "image/png" if got["photo"][:4] == b"\x89PNG" else
+                                       "image/webp" if got["photo"][:4] == b"RIFF" else "image/jpeg")
+            if url.path == "/worker_log":  # the end of the worker's log, with its timing and GPU memory lines
+                try:
+                    lines = int(parse_qs(url.query).get("lines", ["60"])[0])
+                except ValueError:
+                    lines = 60
+                header, _ = link.call({"op": "worker_log", "lines": lines,
+                                       "device": "cpu" if parse_qs(url.query).get("device", [""])[0] == "cpu" else "gpu"})
+                return self.send_json(200 if header.get("ok") else 404, header)
             match = re.fullmatch(r"/evidence/([\w-]+)/(\w+)\.(jpg|splat)", url.path)
             if match and (evidence_dir / match[1] / f"{match[2]}.{match[3]}").exists():
                 kind = "image/jpeg" if match[3] == "jpg" else "application/octet-stream"
@@ -1079,12 +1283,35 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200 if header.get("ok") else 400, header)
             if op in ("scale", "watch", "enroll"):  # what the carer sets once: see change_setup
                 return self.change_setup(op, query, zone, size)
+            if op == "map":  # the room map: the zone's baseline pictures in one pass, as one splat in map axes
+                self.rfile.read(min(size, 65536))
+                if not re.fullmatch(ZONE_NAME, zone):
+                    return self.send_json(400, {"ok": False, "error": "POST /map?zone=NAME"})
+                header = build_room(zone)
+                if not header.get("ok"):
+                    return self.send_json(502, header)
+                return self.send_json(200, {"ok": True, **rooms[zone]})
             if op not in FRAMES or not zone or not 0 < size <= MAX_BODY:
                 return self.send_json(400, {"ok": False, "error": "POST /baseline, /check or /locate with ?zone=NAME and a video (or, for /locate, a photo) as the body."})
             t0 = time.time()
             clip = self.rfile.read(size)
             seconds = {}
             shot = clip if op == "locate" and is_photo(clip) else None  # the photo as it came, for the cheap gate
+            if shot is not None:
+                received[zone] = {"at": time.time(), "photo": shot}
+            # ---- --quick: an instant fix from cosine similarity, unless it is time for the model again ----
+            if quick and shot is not None and not query.get("fresh", [""])[0] and not query.get("view", [""])[0] \
+                    and query.get("quick", [""])[0] != "0" and time.time() - full_at.get(zone, 0) < FULL_EVERY_S:
+                try:
+                    fast = quick_fix(zone, shot)
+                except Exception as err:  # noqa: BLE001  the instant fix is an extra: the model is asked instead
+                    sys.stderr.write(f"quick fix: {type(err).__name__}: {err}" + chr(10))
+                    fast = None
+                if fast is not None:
+                    if "skipped" not in fast["quick"]:
+                        where[zone] = fast
+                    return self.send_json(200, {**fast, "age_s": round(time.time() - fast.get("at", time.time()), 1),
+                                                "seen": seen_list(zone, fast) if fast.get("position") else [], "stable": None})
             try:
                 if op == "locate" and is_photo(clip):
                     clip = one_photo(clip)
@@ -1113,7 +1340,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     log_fix(zone, fix, {**last["result"], "items": []})  # still here; nothing new was looked for
                     return self.send_json(200, {**routed(fix, stable), "age_s": 0.0, "seen": seen_list(zone, fix), "stable": stable})
             device = "cpu" if query.get("device", [""])[0] == "cpu" else "gpu"
-            job = {"op": op, "zone": zone, "device": device, "view": bool(query.get("view", [""])[0])}
+            # --splat-every-fix: every fix the model makes also builds the room as a 3D file (about 0.1 s on the worker),
+            # for the live 3D page (/viewer?live=ZONE). The cheap gate still answers an unchanged view without the model.
+            auto_splat = op == "locate" and splat_every_fix and not flag("view")
+            job = {"op": op, "zone": zone, "device": device, "view": flag("view") or auto_splat}
             if op == "locate":  # the spots where items were seen, so the worker can look at them again
                 job["remembered"] = [{"name": s["name"], "position": s["position"]} for s in seen.get(zone, {}).values()]
             header, blob = link.call(job, clip)
@@ -1123,8 +1353,14 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             result = header["result"]
             if op == "baseline":
                 views.pop(zone, None)  # new pictures of the room: the gate starts again
+                rooms.pop(zone, None)  # and the room map was made from the old ones
                 return self.send_json(200, {"ok": True, "zone": zone, "frames": result["frames"], "seconds": seconds})
             images, splat_url = keep_evidence(header["job"], blob)
+            if auto_splat and splat_url:  # keep only the newest few of the automatic 3D files
+                auto_splats.append(evidence_dir / header["job"] / "map.splat")
+                for old in auto_splats[:-AUTO_SPLATS_KEPT]:
+                    old.unlink(missing_ok=True)
+                del auto_splats[:-AUTO_SPLATS_KEPT]
             if op == "locate":
                 for part in ("points", "cameras"):  # whole centimetres: 32-bit numbers print with 17 digits otherwise
                     if isinstance(result.get("map"), dict):
@@ -1150,11 +1386,20 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                         del changes[zone][:-20]
                     views[zone] = {"print": now_view, "photo": shot, "result": result, "fix": fix, "at": time.time()}
                 where[zone] = fix
+                full_at[zone] = time.time()  # --quick: the next photos are placed by similarity for a while
+                keys = keys_for(zone) if quick and fix.get("state") == "found" and shot is not None else None
+                if keys and keys["shape"]:  # this photo, with the model's pose, is a reference for the next instant fixes
+                    photo = cv2.imdecode(np.frombuffer(shot, np.uint8), cv2.IMREAD_COLOR)
+                    if photo is not None:
+                        recent.setdefault(zone, {})["model"] = (quick_print(photo, keys["shape"]),
+                                                                {"position": fix["position"], "heading_deg": fix["heading_deg"]})
                 try:
                     where_file.write_text(json.dumps(where))
                 except OSError:
                     pass
                 remember_items(zone, result, images)
+                if result.get("picture_added"):  # a part of the room not sampled before: the room map grows
+                    grow_room(zone)
                 # t0: when the photo reached the relay. The steady position ages from the photo, not from the answer.
                 stable = steady(zone, result, t0)
                 # The day log gets the fix itself, not the steady answer. A found fix is right at the moment of its
@@ -1172,6 +1417,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     "settings": result.get("settings"), "rust_enabled": result.get("rust_enabled"),
                     "rust_threads": result.get("rust_threads"), "rust_disabled_functions": result.get("rust_disabled_functions"), "revision": result.get("revision"), "source_dirty": result.get("source_dirty"), "gaussians": result.get("gaussians"),
                     "median_depth": result.get("median_depth"), "watch": result.get("watch") or [],
+                    "gpu_peak_gb": result.get("gpu_peak_gb"),
                     "seconds": {**seconds, **result.get("seconds", {})}}
             history.append({**body, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")})
             del history[:-200]
@@ -1201,15 +1447,27 @@ def main():
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets a phone on the same network reach the relay")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--token", default=secrets.token_urlsafe(9), help="access key; a random one is made if not given")
+    ap.add_argument("--quick", action="store_true", help="place photos instantly by cosine similarity to the room map's "
+                    "pictures (POST /map), with the model at least every 4 s")
+    ap.add_argument("--splat-every-fix", action="store_true", help="every position fix also builds the room as a 3D file, "
+                    "for the live 3D page /viewer?live=ZONE (about 4 MB each: best with --local, not over SSH)")
+    ap.add_argument("--local", metavar="FOLDER", help="no cluster: the gateway runs on this machine and keeps its files in "
+                    "FOLDER; start live/worker.py here too, with BEACON_ROOT set to the same folder (see run_local.sh)")
     ap.add_argument("--view-token", default=secrets.token_urlsafe(9),
                     help="watch-only key: the glasses display and what it reads, nothing else (live/share.py hands it out)")
     args = ap.parse_args()
-    link = Link(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-                 "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, remote_command(args.remote_root)])
+    if args.local:  # everything on this machine: the same gateway code, started here instead of over SSH
+        Path(args.local).mkdir(parents=True, exist_ok=True)
+        os.environ["BEACON_ROOT"] = str(Path(args.local).resolve())
+        link = Link([sys.executable, "-u", str(HERE / "gateway.py")], name="the local gateway")
+    else:
+        link = Link(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                     "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, remote_command(args.remote_root)])
     evidence_dir = Path(tempfile.gettempdir()) / "beacon-evidence"
     evidence_dir.mkdir(exist_ok=True)
     event_api, api_token = os.environ.get("EVENT_API_URL"), os.environ.get("EVENT_API_TOKEN")
-    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, view_token=args.view_token)
+    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, splat_every_fix=args.splat_every_fix,
+                           quick=args.quick, view_token=args.view_token)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     addresses = ["127.0.0.1"]
     if args.host == "0.0.0.0":
@@ -1219,6 +1477,10 @@ def main():
         print(f"  http://{address}:{args.port}/?k={args.token}", flush=True)
     print(f"dashboard: http://127.0.0.1:{args.port}/dashboard?k={args.token}", flush=True)
     print(f"day log:   http://127.0.0.1:{args.port}/dayview?k={args.token}", flush=True)
+    print(f"live 3D:   http://127.0.0.1:{args.port}/viewer?live=kitchen&k={args.token} (the room map and the wearer in it; "
+          "change live= to the room)", flush=True)
+    if args.splat_every_fix:
+        print("every fix also builds its own 3D file (--splat-every-fix)", flush=True)
     print(f"watch-only key (for the apps' glasses list): python live/share.py --port {args.port} --view-token {args.view_token}", flush=True)
     print("questions (/ask, /speak): " + ("passed on to the event API" if event_api and api_token
                                            else "off (EVENT_API_URL and EVENT_API_TOKEN are not both set)"), flush=True)

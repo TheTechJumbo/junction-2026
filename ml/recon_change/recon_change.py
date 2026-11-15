@@ -22,7 +22,9 @@ check removes that: a flagged surface is dropped when the other clip has a surfa
 same (DINOv2 patch features, which VGGT computes anyway) within reach of it.
 """
 import argparse
+import functools
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -122,6 +124,18 @@ def fit_size(h, w, long_side=518, patch=14):
 
 
 # ----------------------------------------------------------------------------- model
+def _float32_block(block, forward, x, *args, **kwargs):
+    """Run one half-size transformer block in float32 (see load_model), and give its weights back at half size."""
+    import torch
+
+    block.float()
+    try:
+        with torch.autocast("cuda", enabled=False):
+            return forward(x.float(), *args, **kwargs)
+    finally:
+        block.half()
+
+
 def load_model(model_id="facebook/VGGT-1B", device=None):
     """Load VGGT. On a GPU this takes 13 to 17 s on Iridis, so a live service does it once.
     device: "cuda", "cpu", or None to use a GPU when there is one."""
@@ -130,9 +144,30 @@ def load_model(model_id="facebook/VGGT-1B", device=None):
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     t0 = time.time()
-    model = VGGT.from_pretrained(model_id).to(device).eval()
+    model = VGGT.from_pretrained(model_id)
+    # A graphics card with less than 10 GB (a laptop's) cannot hold the weights at full size next to the
+    # work of a pass: keep them at half size there (2.4 GB instead of 4.8). RECON_HALF=1 or 0 overrides.
+    wish = os.environ.get("RECON_HALF", "")
+    half = device == "cuda" and (wish == "1" or (wish != "0" and torch.cuda.get_device_properties(0).total_memory < 10e9))
+    if half:
+        # Only the trunk (the aggregator, almost all of the weights) goes to half size. VGGT runs its heads with
+        # autocast off on float32 tokens, so a half-size head fails ("expected scalar type Float but found Half"):
+        # the camera and depth heads stay float32. The point and track heads are never used here: dropped.
+        model.point_head = model.track_head = None
+        model.aggregator.half()
+        # The depth head works on full-size float32 maps, 8 frames at a time by default: on an RTX 2060 (6 GB) that
+        # asked for 8 to 10 GB and Windows spilled into shared RAM. 2 at a time measured the same speed and
+        # 4.7 GB (6 frames) to 5.1 GB (16 frames) at the most, all on the card. RECON_DEPTH_CHUNK overrides.
+        chunk = int(os.environ.get("RECON_DEPTH_CHUNK") or 2)
+        model.depth_head.forward = functools.partial(model.depth_head.forward, frames_chunk_size=max(1, chunk))
+        # The first stage (DINOv2) overflows float16 on some real pictures (a few of its tokens are very large): its
+        # tokens turn NaN and so does the whole pass, which then has no trusted point. Seen on 2 of 8 pictures of a
+        # hall and on synthetic views. Each of its blocks runs in float32, its weights widened only while it runs.
+        for block in model.aggregator.patch_embed.blocks:
+            block.forward = functools.partial(_float32_block, block, block.forward)
+    model = model.to(device).eval()
     name = torch.cuda.get_device_name(0) if device == "cuda" else f"CPU, {torch.get_num_threads()} threads"
-    print(f"VGGT loaded in {time.time() - t0:.0f} s on {name}", flush=True)
+    print(f"VGGT loaded in {time.time() - t0:.0f} s on {name}{', weights at half size' if half else ''}", flush=True)
     return model
 
 
@@ -162,7 +197,7 @@ def reconstruct(model, frames_bgr, long_side=518):
                     pred = model(images)
             else:
                 pred = model(images)  # plain float32 on a CPU
-            E, K = pose_encoding_to_extri_intri(pred["pose_enc"], images.shape[-2:])
+            E, K = pose_encoding_to_extri_intri(pred["pose_enc"].float(), images.shape[-2:])
     finally:
         hook.remove()
     if on_gpu:
@@ -177,6 +212,24 @@ def reconstruct(model, frames_bgr, long_side=518):
                  feat=reduce_features(tokens["x"], H // 14, W // 14) if "x" in tokens else None)
 
 
+def patch_tokens(model, frames_bgr, long_side=518):
+    """What VGGT's first stage (its DINOv2 backbone) sees in each frame, alone: (S, P, C) patch tokens as float16 on
+    the model's device. Frames as in reconstruct (same size and normalising); no attention across frames, so this
+    costs a small part of a pass. Used to say how much of a new view the room's pictures already show."""
+    import torch
+
+    device = next(model.parameters()).device
+    H, W = fit_size(*frames_bgr[0].shape[:2], long_side=long_side)
+    rgb = np.stack([cv2.cvtColor(cv2.resize(f, (W, H), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB) for f in frames_bgr])
+    images = torch.from_numpy(rgb).permute(0, 3, 1, 2).float().div(255).to(device)[None]
+    agg = model.aggregator
+    with torch.no_grad(), torch.autocast(device.type, dtype=torch.float16, enabled=device.type == "cuda"):
+        x = ((images - agg._resnet_mean) / agg._resnet_std).flatten(0, 1)
+        out = agg.patch_embed(x)
+        tokens = out["x_norm_patchtokens"] if isinstance(out, dict) else out
+    return tokens.half()
+
+
 def reduce_features(tokens, h, w, dim=FEAT_DIM):
     """Patch tokens (S, h*w, C) -> (S, h, w, dim) float16. Raw DINOv2 tokens share a large common
     part (every pair has cosine > 0.9); removing the mean and keeping the main directions of this
@@ -186,7 +239,12 @@ def reduce_features(tokens, h, w, dim=FEAT_DIM):
     x = tokens.float().reshape(-1, tokens.shape[-1])
     x = x - x.mean(0, keepdim=True)
     if dim < min(x.shape):
-        x = x @ torch.pca_lowrank(x, q=dim, center=False, niter=4)[2]
+        try:
+            main = torch.pca_lowrank(x, q=dim, center=False, niter=4)[2]
+        except RuntimeError:  # torch.linalg.LinAlgError: the GPU's SVD now and then fails to converge (seen on an
+            # RTX 2060, about 1 fix in 25, which then failed whole). Once more on the CPU in float64.
+            main = torch.pca_lowrank(torch.nan_to_num(x).double().cpu(), q=dim, center=False, niter=4)[2].to(x.device, x.dtype)
+        x = x @ main
     return x.reshape(len(tokens), h, w, -1).half().cpu().numpy()
 
 
@@ -219,7 +277,14 @@ def valid_mask(r, conf_pct):
     edge[:, :-1] |= jy
     kernel = np.ones((3, 3), np.uint8)
     edge = np.stack([cv2.dilate(e.astype(np.uint8), kernel) > 0 for e in edge])
-    return (r.conf > np.percentile(r.conf, conf_pct)) & (d > 0) & ~edge
+    floor = np.percentile(r.conf, conf_pct)
+    confident = r.conf > floor
+    if confident.mean() < 0.5 * (1 - conf_pct / 100):
+        # Most pixels tie at the same value: VGGT gave no usable confidence (measured on phone photos of a hall: 1.00,
+        # its lowest, nearly everywhere, at full and half precision). Then confidence decides nothing, and only the
+        # tied pixels above nothing would be kept; the depth edges and the callers' own geometry checks decide.
+        confident = r.conf >= floor
+    return confident & (d > 0) & ~edge
 
 
 def nearest_in_window(depth, size=7):

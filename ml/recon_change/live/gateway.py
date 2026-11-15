@@ -20,6 +20,8 @@ a JSON line, then `size` raw bytes. Requests and replies have the same shape.
   {"op": "enroll", "name": "keys", "size": N} + N bytes: one photo of the item
   {"op": "enroll", "name": "keys", "delete": true}             the whole item ("n": 1 too: that photo only)
   {"op": "enrolled_image", "name": "keys", "n": 0}             one of its photos
+  {"op": "worker_log", "lines": 60}                            the end of the worker's log (worker.log)
+  {"op": "map", "zone": "kitchen"}                             the room map: the baseline in one pass, as room.splat
 
 It only moves files: it drops the clip into queue/<job>/ for the GPU worker (see worker.py)
 and waits for the result. Named places are a small JSON file next to the zone's baseline
@@ -42,6 +44,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(os.environ.get("BEACON_ROOT") or Path(__file__).resolve().parent.parent)
+LOCAL = bool(os.environ.get("BEACON_ROOT"))  # the worker runs on this machine (relay.py --local), not on Iridis
 QUEUE, BASELINES, ENROLLED = ROOT / "queue", ROOT / "baselines", ROOT / "enrolled"
 IN, OUT = sys.stdin.buffer, sys.stdout.buffer
 WAIT_S = 180  # give up on a job after this long
@@ -360,6 +363,26 @@ def remembered(req):
     return spots
 
 
+def worker_log(device, lines):
+    """The last lines of the worker's log: worker.log in the data folder (run_local.sh writes it there), or on
+    the cluster the newest Slurm output file of a worker job next to the code."""
+    lines = lines if isinstance(lines, int) and not isinstance(lines, bool) and 0 < lines <= 400 else 60
+    found = ROOT / f"worker{lane(device)}.log"
+    if not found.exists():
+        outputs = sorted(ROOT.glob("slurm-*worker*.out"), key=lambda f: f.stat().st_mtime)
+        found = outputs[-1] if outputs else None
+    if found is None:
+        return {"ok": False, "error": "no worker log here"}
+    with open(found, "rb") as log:  # read only the end: a worker that ran for hours has a long log
+        log.seek(0, os.SEEK_END)
+        start = max(0, log.tell() - 200 * lines)
+        log.seek(start)
+        text = log.read().decode("utf-8", "replace")
+    if start:
+        text = text.partition("\n")[2]  # the first line was cut in the middle
+    return {"ok": True, "file": found.name, "local": LOCAL, "lines": text.splitlines()[-lines:]}
+
+
 def handle(req, blob):
     op = req.get("op")
     device = "cpu" if req.get("device") == "cpu" else "gpu"
@@ -368,6 +391,8 @@ def handle(req, blob):
         zones = sorted(p.name for p in BASELINES.glob("*") if any(p.glob("*.jpg")))
         workers = {d: worker_state(d) for d in ("gpu", "cpu")}
         return {"ok": True, "worker_running": any(w["running"] for w in workers.values()), "workers": workers, "zones": zones}, b""
+    if op == "worker_log":  # the end of the worker's log, for the dashboard
+        return worker_log(device, req.get("lines")), b""
     if op in ("enrolled", "enroll", "enrolled_image"):  # items belong to the home: no zone
         return handle_enrolled(op, req, blob)
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", str(req.get("zone", ""))):
@@ -376,18 +401,22 @@ def handle(req, blob):
         return handle_places(op, req["zone"], req)
     if op in ("scale", "watch", "watches"):
         return handle_setup(op, req["zone"], req)
-    if op not in ("baseline", "check", "locate"):
+    if op not in ("baseline", "check", "locate", "map"):
         return {"ok": False, "error": "bad request: unknown op"}, b""
-    if not blob:
+    if not blob and op != "map":  # the room map is made from the zone's own baseline pictures: nothing is sent
         return {"ok": False, "error": "empty clip"}, b""
     if age is None or age > STALE_S:
+        if LOCAL:
+            return {"ok": False, "error": f"the local {device.upper()} worker is not running (start it with run_local.sh; "
+                                          f"its log is {ROOT / f'worker{lane(device)}.log'})"}, b""
         script = "worker_cpu.slurm" if device == "cpu" else "worker.slurm"
         return {"ok": False, "error": f"the {device.upper()} worker is not running on Iridis (sbatch iridis/{script})"}, b""
 
     job = ROOT / f"queue{lane(device)}" / f"{time.strftime('%H%M%S')}-{uuid.uuid4().hex[:6]}"
     job.mkdir(parents=True)
     clip = "clip.zip" if blob[:2] == b"PK" else "clip.mp4"  # a zip of frames from the relay, or a video
-    (job / clip).write_bytes(blob)
+    if blob:
+        (job / clip).write_bytes(blob)
     (job / "request.json").write_text(json.dumps({"op": op, "zone": req["zone"], "file": clip, "view": bool(req.get("view")),
                                                   "remembered": remembered(req)}))
     (job / "READY").touch()  # last, so the worker never sees a half-written job
