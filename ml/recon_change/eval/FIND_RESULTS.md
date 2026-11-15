@@ -67,9 +67,24 @@ positive: two orange boxes on one table cannot be told apart without showing the
 
 That worker ran the deployed `items.py`, without size_m and colour (the relay lets such boxes pass both checks).
 
+## Latency (replay of last night's glasses photos at our table, about 3 a second, like the app's live camera)
+
+Relay with --quick, on its own L4 worker running this branch (zone find-test, after one warm-up photo):
+
+| Step | Time after the first photo showing the carton |
+|---|---|
+| Full fix sees it | 10.6 s (one view: "found", "I may have seen…") |
+| Second full fix agrees: sighting | 17.5 s ("The orange box is on our table…"; day log and event API) |
+
+- With this branch's items.py, the full fix's box passed every check: score 0.32, size 0.12 m from depth, colour 0.28.
+- Live outline (op detect, the item finder alone on the newest photo, while /find is polled): 1.1 to 1.3 s from the
+  photo to the detection when the worker is free, so a /find poll sees it 1.5 s after the photo. When it queues
+  behind a full fix (5 to 6 s each, one every ~10 s with --quick), it is 6 to 7 s.
+- A live detection from the same standpoint (within 1 m, 35°, 20 s) also confirms a single view. In this replay the
+  instant fixes' coarse positions were too far from the full fix's, so the second full fix confirmed it.
+
 ## Not measured yet
 
 - The true-positive rate on Seb's real orange box. It needs the box shown to the glasses camera in zone find-test.
-- The latency from putting the box down to the answer saying the new spot. Expected: two model fixes after the box
-  is in view, 5 to 6 s each on the shared L4 (the app sends the newest frame, one at a time), so about 12 s.
+- The latency from putting the real box down to the answer saying the new spot (live, with Seb).
 - The size check on real fixes. It needs this branch's `items.py` on the worker.
