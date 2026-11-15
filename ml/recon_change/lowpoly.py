@@ -80,16 +80,18 @@ def _boxes(grid, merge_dc):
     return boxes
 
 
-def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hide=True):
+def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hide=True, floor=None):
     """Gaussians (positions, 0-255 colours) -> (vertices, normals, colours, triangles) on the given up
-    axis. `cell` overrides the quality's square size; hide=False keeps hidden faces (for comparison)."""
+    axis. `cell` overrides the quality's square size; hide=False keeps hidden faces (for comparison).
+    `floor` is the floor's height on the up axis when known: in a room full of desks the busiest low
+    band (what is found otherwise) can be the desk tops rather than the floor."""
     q = dict(QUALITY[quality])
     if cell is not None:
         q["cell"] = cell
     cell = q["cell"]
     flat, height = hz.split_up(np.asarray(positions, float), up)
     rgb = np.asarray(colours, float)
-    floor = hz.floor_height(height, np.ones(len(height), bool))
+    floor = hz.floor_height(height, np.ones(len(height), bool)) if floor is None else float(floor)
     h = height - floor
     top_of_room = float(np.percentile(h, 99))
     (x0, y0), (x1, y1) = np.percentile(flat, OUTLINE_PCT, axis=0), np.percentile(flat, 100 - OUTLINE_PCT, axis=0)
@@ -188,7 +190,7 @@ def _normals(verts, tris):
     return (n / (np.linalg.norm(n, axis=1, keepdims=True) + 1e-9)).astype(np.float32)
 
 
-def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M):
+def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M, floor=None):
     """A trained .splat file -> the room as blocks (faint and huge Gaussians left out, as splat_mesh.from_splat)."""
     rec = np.frombuffer(bytes(data), sr.RECORD)
     keep = rec["rgba"][:, 3] >= 64
@@ -199,7 +201,7 @@ def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M
     pos = rec["pos"].astype(np.float64)
     if frame is not None:
         pos, up = room_frame.to_room(pos, frame), "z"
-    return build(pos, rec["rgba"][:, :3], up, quality, cell, wall), up
+    return build(pos, rec["rgba"][:, :3], up, quality, cell, wall, floor=floor), up
 
 
 def write(v, n, c, t, path, up, extra=()):
