@@ -11,10 +11,11 @@ export function parsePly(buffer) {
   const header = new TextDecoder().decode(bytes.subarray(0, end)).split('\n').map(line => line.trim());
   if (header[0] !== 'ply' || !header.includes('format binary_little_endian 1.0')) throw new Error('Not a binary PLY mesh.');
   const sizes = {char: 1, uchar: 1, int8: 1, uint8: 1, short: 2, ushort: 2, int16: 2, uint16: 2, int: 4, uint: 4, int32: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8};
-  const elements = []; let up = '-y';
+  const elements = []; let up = '-y', cull = false;
   for (const line of header) {
     const word = line.split(/\s+/);
     if (word[0] === 'comment' && word[1] === 'up' && /^-?[xyz]$/.test(word[2] || '')) up = word[2];
+    else if (word[0] === 'comment' && word[1] === 'cull') cull = true; // faces wound consistently: back faces can be skipped
     else if (word[0] === 'element') elements.push({name: word[1], count: Number(word[2]), props: []});
     else if (word[0] === 'property') elements.at(-1)?.props.push(word[1] === 'list' ? {list: true, countType: word[2], type: word[3], name: word[4]} : {type: word[1], name: word[2]});
   }
@@ -64,7 +65,7 @@ export function parsePly(buffer) {
   }
   if (!positions || !indices || !indices.length) throw new Error('The mesh is empty.');
   if (indices.some(i => i >= positions.length / 3)) throw new Error('The mesh file is damaged.');
-  return {positions: toYUp(positions, up), colours, indices, up};
+  return {positions: toYUp(positions, up), colours, indices, up, cull};
 }
 function findHeaderEnd(bytes) {
   const marker = [101, 110, 100, 95, 104, 101, 97, 100, 101, 114]; // "end_header"
@@ -272,7 +273,10 @@ export class Space {
       const at = gl.getAttribLocation(this.program, name); gl.enableVertexAttribArray(at); gl.vertexAttribPointer(at, 3, gl.FLOAT, false, 0, 0);
       return buffer;
     });
-    this.indexBuffer = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    // 16-bit indices when the mesh is small enough (half the memory), 32-bit otherwise.
+    const small = mesh.positions.length / 3 <= 65536;
+    this.indexType = small ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT; this.cull = Boolean(mesh.cull);
+    this.indexBuffer = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, small ? Uint16Array.from(mesh.indices) : mesh.indices, gl.STATIC_DRAW);
     this.count = mesh.indices.length;
     gl.bindVertexArray(null);
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -353,7 +357,11 @@ export class Space {
     gl.uniform1f(gl.getUniformLocation(this.program, 'time'), performance.now() / 1000);
     gl.uniform1f(glow, 0); gl.uniform1f(wave, 0);
     gl.vertexAttrib1f(gl.getAttribLocation(this.program, 'alpha'), 1); // the mesh has no alpha buffer: solid
-    gl.bindVertexArray(this.vao); gl.drawElements(gl.TRIANGLES, this.count, gl.UNSIGNED_INT, 0);
+    // Back faces culled when the file says its faces are wound consistently: half the work, and the wall
+    // between the camera and the room (it faces inwards) disappears by itself.
+    if (this.cull) { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
+    gl.bindVertexArray(this.vao); gl.drawElements(gl.TRIANGLES, this.count, this.indexType, 0);
+    gl.disable(gl.CULL_FACE);
     gl.uniform1f(glow, 1);
     // Solid layers, then see-through ones (blended, depth-tested but not hiding each other), then markers drawn over everything.
     const order = l => (!l.depth ? 2 : l.blend ? 1 : 0);
