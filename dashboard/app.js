@@ -139,8 +139,8 @@ function heroFor(data, state) {
   if (!data) return demo ? ['Loading…', ''] : ['Connect to see the day at home.', ''];
   const {timeline, summary} = data, alerts = timeline.alerts.length;
   const title = alerts ? `${plural(alerts, 'thing', 'things')} to notice${today ? ' today' : ''}.`
-    : !timeline.events.length ? (today ? 'Quiet so far today.' : 'A quiet day.')
-    : (today ? 'A calm day so far.' : 'A calm day.');
+    : !timeline.events.length ? 'No observations recorded for this day.'
+    : `${plural(timeline.events.length, 'observation', 'observations')} recorded${today ? ' today' : ''}.`;
   return [title, summary.text || 'No daily note has been written for this day yet.'];
 }
 function renderHero() {
@@ -149,7 +149,7 @@ function renderHero() {
   $('hero-title').textContent = title; $('summary-text').textContent = lede;
   $('info-button').hidden = !lastData;
   $('info-footnote').hidden = /not confirm/i.test(lede); // the backend's note may already say it
-  $('hero-place').textContent = demo ? "Anna's home · example" : 'At home';
+  $('hero-place').textContent = demo ? "Anna's home · example" : 'Recorded observations';
   const t = lastData?.timeline;
   $('stat-alerts').textContent = t ? t.alerts.length : '–';
   $('stat-events').textContent = t ? t.events.length : '–';
@@ -176,7 +176,7 @@ function renderRhythm(timeline) {
 }
 function renderAlerts(timeline) {
   $('alert-count').textContent = timeline.alerts.length || '';
-  if (!timeline.alerts.length) { empty('alerts', 'All calm'); return; }
+  if (!timeline.alerts.length) { empty('alerts', 'No alerts recorded'); return; }
   $('alerts').replaceChildren(...timeline.alerts.map(alert => {
     const row = node('article', undefined, 'alert'); row.dataset.type = alert.type;
     const night = ['door_open_night', 'night_door_open'].includes(alert.type);
