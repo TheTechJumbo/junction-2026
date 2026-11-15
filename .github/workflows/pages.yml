@@ -3,6 +3,9 @@ name: site
 # The public site (GitHub Pages): the landing page (site/), the family app's example day (dashboard/?demo),
 # the glasses display's sample room (ml/recon_change/live/hud.html?demo=1), the splat demo, and both
 # Android apps as debug APKs. Nothing private: example data only, and no relay key.
+# Seb's Beacon demo for the Ray-Ban Display (branch feat/rescue-ping-hud) was the repo's Pages site; its
+# files are copied in at the same addresses (demo/index.html, demo/live-splat.html, demo/shared/), so the
+# glasses keep loading it. After a change on that branch, run this workflow by hand (or push to main).
 on:
   push:
     branches: [main]
@@ -24,6 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/rescue-ping-hud
+          path: beacon
           persist-credentials: false
       - uses: actions/setup-java@v4
         with:
@@ -51,6 +60,8 @@ jobs:
         run: |
           mkdir -p _site/downloads _site/glasses _site/demo
           cp site/*.html _site/
+          cp -r beacon/demo/. _site/demo/            # Beacon (Seb): demo/index.html, live-splat.html, shared/
+          cp beacon/README.md _site/beacon-README.md
           touch _site/.nojekyll
           cp -r dashboard _site/dashboard
           rm -rf _site/dashboard/tests _site/dashboard/package.json
