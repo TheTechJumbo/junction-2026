@@ -18,7 +18,10 @@ It prints the link to open. The link carries an access key, and every request ne
                                   (add &view=1 to also get the room as a 3D file with them marked)
     GET  /where?zone=kitchen      the latest position fix for that zone (what the glasses display polls)
                                   (both replies carry "stable": the steady position made from the stream of
-                                  fixes, with "confidence_pct" and "show", see track.py)
+                                  fixes, with "confidence_pct" and "show", see track.py. In a zone with a trained
+                                  splat every photo is also placed against the splat's keyframes on this laptop,
+                                  splat_locate.py; while that pose is fresh it is "position" and "stable", with
+                                  "radius95_m", "pitch_deg", "splat_pose" and "stable.source" = "splat")
     GET  /waypoints?zone=kitchen  the zone's named places
     POST /waypoint?zone=kitchen&name=pill+box&frame=3&u=0.4&v=0.6   name a spot in baseline picture 3
     POST /waypoint?zone=kitchen&name=pill+box&delete=1
@@ -238,6 +241,14 @@ try:
     import care_space
 except ImportError:  # no NumPy here: the page shows the room map, where the wearer is drawn as before
     care_space = None
+
+# ---- the wearer in the trained splat (splat_locate.py): every photo placed against the splat's own keyframes on this
+# laptop's CPU (SIFT + PnP, ~0.3 s), in the splat's axes, so no room-map-to-splat fit error. BEACON_SPLAT_POSE=0: off.
+try:
+    import splat_locate
+except ImportError:  # no OpenCV or NumPy: the instant and the model's fixes as before
+    splat_locate = None
+SPLAT_POSE = os.environ.get("BEACON_SPLAT_POSE", "1") != "0"
 
 
 class Link:
@@ -656,9 +667,10 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                         track_file.write_text(json.dumps({z: t.dump() for z, t in trackers.items()}))
                     except OSError:
                         pass
-                return trackers[zone].current(time.time()) if zone in trackers else None
+                answer = trackers[zone].current(time.time()) if zone in trackers else None
         except Exception:  # the steady position is an extra: it must never cost the wearer a fix
-            return None
+            answer = None
+        return splat_steady(zone, answer)  # in a zone with a trained splat, its own steady pose while it is fresh
 
     # ---- day log (JUN-26): one file per day in the evidence folder, no pictures in it. See day.py. ----
     try:  # BEACON_NEAR_M: how close to a place counts as a visit, in the fix's metres (see eval/DAY_RESULTS.md)
@@ -1012,6 +1024,114 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             sys.stderr.write(f"care places: {type(err).__name__}: {err}\n")
             return []
     # ---- end caretaker's page ----
+
+    # ---- the wearer in the trained splat (splat_locate.py) ----
+    splat_live = splat_locate.Live(evidence_dir / "splat_track.json", log=lambda text: sys.stderr.write(text + "\n")) \
+        if splat_locate is not None and cv2 is not None and SPLAT_POSE else None
+
+    def splat_space(zone):
+        """(the trained splat's folder, the matrix into map axes) when the caretaker's page shows a trained splat
+        for this zone (care_view), else None."""
+        if splat_live is None:
+            return None
+        code, space = care_view(zone)
+        if code != 200 or space.get("kind") != "trained" or not space.get("matrix"):
+            return None
+        return evidence_dir / space["splat"].split("/")[2], space["matrix"]
+
+    def splat_waypoints(zone, pose, places=None):
+        """The zone's places measured from a splat pose (distance, bearing: 0 ahead, + to the right)."""
+        last = where.get(zone) or {}
+        places = places or [w for w in last.get("waypoints") or [] if w.get("position")] or (rooms.get(zone) or {}).get("places") or []
+        out = []
+        for w in places:
+            if w.get("position") is None:
+                continue
+            distance, bearing = from_here(w["position"], pose)
+            out.append({"name": w["name"], "distance_m": distance, "bearing_deg": bearing, "position": w["position"]})
+        return out
+
+    def splat_photo(zone, photo):
+        """Place a photo in the zone's trained splat and take it into its steady pose. Returns a fix to answer with (in
+        map axes: the splat's pose through the same matrix the caretaker's page draws the splat with), or None when the
+        zone has no trained splat, its index is still being built, or the steady pose is lost."""
+        got_space = splat_space(zone)
+        if got_space is None:
+            return None
+        folder, matrix = got_space
+        t0 = time.time()
+        frame = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            return None
+        try:
+            got = splat_live.photo(zone, folder, matrix, frame, t0)
+            pose = splat_live.pose(zone, time.time()) if got is not None else None
+        except Exception as err:  # noqa: BLE001  an extra: the instant and the model's fixes still answer
+            sys.stderr.write(f"splat pose: {type(err).__name__}: {err}\n")
+            return None
+        if not pose:
+            return None
+        here = {"position": pose["position"], "heading_deg": pose["heading_deg"]}
+        last = where.get(zone) or {}
+        kf = got.get("keyframe")
+        state = "found" if got["placed"] and pose["state"] == "found" else "unsure"
+        fix = {"ok": True, "zone": zone, "job": None, "state": state, "confidence": round(splat_locate.chance_within(pose["sigma_m"]), 2),
+               "position": pose["position"], "heading_deg": int(round(pose["heading_deg"])), "pitch_deg": pose["pitch_deg"],
+               "radius95_m": pose["radius95_m"], "waypoints": splat_waypoints(zone, here), "map": last.get("map"),
+               "items": [], "items_looked_for": last.get("items_looked_for") or [],
+               "splat_pose": {**{k: v for k, v in got.items() if k != "fix"}, "raw": got.get("fix"), "sigma_m": pose["sigma_m"],
+                              "radius95_m": pose["radius95_m"], "trail": pose["trail"],
+                              "keyframe_photo": f"/evidence/{folder.name}/kf{kf:03d}.jpg" if kf is not None else None},
+               "at": time.time(), "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               "seconds": {"total": round(time.time() - t0, 3)}}
+        fix["headline"], fix["detail"] = where_in_plain_words(fix)
+        return fix
+
+    def splat_steady(zone, answer):
+        """The splat's steady pose in the shape of track.Tracker.current() while it is fresh, else `answer` unchanged.
+        confidence_pct: the chance the wearer is within 0.5 m of it, from its uncertainty."""
+        if splat_live is None or splat_space(zone) is None:
+            return answer
+        try:
+            pose = splat_live.pose(zone, time.time())
+        except Exception:  # noqa: BLE001
+            return answer
+        if not pose:
+            return answer
+        here = {"position": pose["position"], "heading_deg": pose["heading_deg"]}
+        found = pose["state"] == "found"
+        pct = int(round(100 * splat_locate.chance_within(pose["sigma_m"])))
+        recent = [p for p in pose["trail"] if p[0] >= time.time() - 30]
+        return {"state": "steady" if found else "settling", "position": [round(float(v), 2) for v in pose["position"]],
+                "heading_deg": int(round(pose["heading_deg"])), "pitch_deg": pose["pitch_deg"], "confidence_pct": pct, "next_pct": pct,
+                "show": found, "agree": len(recent), "of": len(recent), "age_s": pose["age_s"], "waiting": pose["held"] > 0,
+                "waypoints": splat_waypoints(zone, here, (answer or {}).get("waypoints")), "source": "splat",
+                "sigma_m": pose["sigma_m"], "radius95_m": pose["radius95_m"], "speed_m_s": pose["speed_m_s"],
+                "trail": [[p[0], p[1], p[2], p[3]] for p in pose["trail"]]}
+
+    def splat_status(zone):
+        """For /care/space: is the splat pose on for this zone, and how far along."""
+        got = splat_space(zone)
+        if got is None:
+            return {"on": False}
+        z = splat_live.zones.get(zone) or {}
+        state = splat_live.state(got[0])
+        if state == "not asked":
+            splat_live.index(got[0])  # start building it now, so it is ready when the photos come
+            state = "building"
+        return {"on": True, "index": state, "focal": z.get("focal")}
+
+    if splat_live is not None:  # build the trained splats' indexes now (~30 s each), so the first photos are placed
+        def warm_splats():
+            for z in list(rooms):
+                try:
+                    got = splat_space(z)
+                except Exception:  # noqa: BLE001
+                    got = None
+                if got:
+                    splat_live.index(got[0])
+        threading.Thread(target=warm_splats, daemon=True).start()
+    # ---- end trained splat ----
     quick_keys, full_at = {}, {}  # --quick: {zone: the room pictures as small prints}, {zone: when the model last placed a photo}
     recent = {}  # --quick: {zone: {"model": (print, pose) of the newest model fix's photo, "quick": (print, pose) of the newest instant one}}
 
@@ -1589,7 +1709,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200, {"ok": True, **got, "age_s": round(time.time() - got["at"]), "building": bool(building.get(zone))})
             if url.path == "/care/space":  # the splat the caretaker's page shows, and the matrix into the room map's axes
                 code, reply = care_view(zone)
-                return self.send_json(code, {**reply, "named": care_named(zone, reply)} if code == 200 else reply)
+                return self.send_json(code, {**reply, "named": care_named(zone, reply), "splat_pose": splat_status(zone)}
+                                      if code == 200 else reply)
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:
@@ -1995,6 +2116,13 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             shot = clip if op == "locate" and is_photo(clip) else None  # the photo as it came, for the cheap gate
             if shot is not None:
                 received[zone] = {"at": time.time(), "photo": shot}
+            # ---- the wearer in the trained splat: every photo, on this laptop; between the model's fixes it is the answer ----
+            placed = splat_photo(zone, shot) if shot is not None and op == "locate" else None
+            if placed is not None and quick and not query.get("fresh", [""])[0] and not query.get("view", [""])[0] \
+                    and query.get("quick", [""])[0] != "0" and time.time() - full_at.get(zone, 0) < FULL_EVERY_S:
+                where[zone] = placed
+                stable = steady(zone)
+                return self.send_json(200, {**routed(placed, stable), "age_s": 0.0, "seen": seen_list(zone, placed), "stable": stable})
             # ---- --quick: an instant fix from cosine similarity, unless it is time for the model again ----
             if quick and shot is not None and not query.get("fresh", [""])[0] and not query.get("view", [""])[0] \
                     and query.get("quick", [""])[0] != "0" and time.time() - full_at.get(zone, 0) < FULL_EVERY_S:
@@ -2105,6 +2233,16 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     grow_room(zone)
                 # t0: when the photo reached the relay. The steady position ages from the photo, not from the answer.
                 stable = steady(zone, result, t0)
+                if isinstance(stable, dict) and stable.get("source") == "splat":
+                    # The trained splat placed this photo too (above), far closer than the model's pass does in its own
+                    # map axes (eval/POSITION_RESULTS.md): its pose is the position; the model's is kept beside it.
+                    here = {"position": stable["position"], "heading_deg": stable["heading_deg"]}
+                    fix.update(model_pose={"position": fix.get("position"), "heading_deg": fix.get("heading_deg"), "state": fix.get("state")},
+                               position=stable["position"], heading_deg=stable["heading_deg"], pitch_deg=stable.get("pitch_deg"),
+                               radius95_m=stable["radius95_m"], waypoints=splat_waypoints(zone, here),
+                               state="found" if stable["state"] == "steady" else "unsure",
+                               **({"splat_pose": placed["splat_pose"]} if placed else {}))
+                    fix["headline"], fix["detail"] = where_in_plain_words(fix)
                 # The day log gets the fix itself, not the steady answer. A found fix is right at the moment of its
                 # photo, which is what a diary needs; the steady answer is cautious about the seconds after it and is
                 # rarely "steady" at one photo every 6 s, so visits would go missing. The two were measured apart.
