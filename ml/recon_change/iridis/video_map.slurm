@@ -25,7 +25,8 @@ if [ -d "$GS/pkgs" ]; then
     export CC=gcc CXX=g++
     export PYTHONPATH="$GS/pkgs${PYTHONPATH:+:$PYTHONPATH}" PATH="$GS/pkgs/bin:$PATH" TORCH_CUDA_ARCH_LIST="8.9" MAX_JOBS=4
 fi
-# Labels (OWLv2, the workers' item finder): its packages and weights, as worker.slurm finds them.
+# Labels (OWLv2, the workers' item finder, proposes; CLIP ViT-L/14 checks): packages and weights as worker.slurm finds them.
+# Label a finished map again: sbatch iridis/video_map.slurm FRAMES --labels-only OUT
 ITEMS_ENV="$(realpath -m "${RECON_ITEMS_ENV:-items}")"
 if [ -d "$ITEMS_ENV/pkgs" ]; then
     export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$ITEMS_ENV/pkgs" RECON_ITEMS_CACHE="${RECON_ITEMS_CACHE:-$ITEMS_ENV/hf/hub}"

@@ -18,12 +18,18 @@
   #playStart { position: fixed; right: 12px; bottom: 34px; display: none; font: inherit; color: #e8eef5; background: #12202d;
     border: 1px solid #4fc3ff; border-radius: 8px; padding: 7px 14px; cursor: pointer; }
   #key b.g { color: #3cdc78; } #key b.r { color: #ff6b5b; }
+  #bird { position: fixed; left: 10px; top: 8px; width: 240px; display: none; background: rgba(5,7,10,.88);
+    border: 1px solid #223040; border-radius: 10px; padding: 6px; cursor: zoom-in; }
+  #bird.big { width: min(60vw, 640px); cursor: zoom-out; }
+  #bird canvas { width: 100%; height: auto; border-radius: 6px; }
+  #bird div { color: #93a1b2; font-size: 12px; margin: 0 2px 4px; }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
 <div id="note">Loading…</div>
 <div id="key"><b class="g">green</b> appeared · <b class="r">red</b> gone · <b style="color:#4aa3ff">blue</b> wearer · drag to orbit</div>
+<div id="bird" title="The splat from straight above"><div>From above · click to enlarge</div><canvas></canvas></div>
 <button id="playStart">▶ Play the recording</button>
 <div id="play">
   <button id="playPause">⏸</button>
@@ -79,7 +85,7 @@ renderer.setAnimationLoop((now) => { onFrame.forEach(f => f(now)); controls.upda
 // from each keyframe's surface to the next; paused, it is a 3D space to orbit, with every surface or the trained splat.
 let playing = null;
 // ---- labels (video_map.py labels.json): the named things found in the keyframes, as name tags at their place in 3D ----
-let labelGroup = null;
+let labelGroup = null, labelsSeen = '';  // the labels file last drawn: drawn again only when it changes
 function labelSprite(text, size) {
   const c = document.createElement('canvas'), g = c.getContext('2d'), px = 44;
   g.font = `600 ${px}px system-ui, sans-serif`;
@@ -94,14 +100,72 @@ function labelSprite(text, size) {
   sprite.scale.set(size * c.width / c.height, size, 1);
   return sprite;
 }
+// ---- from above (video_map.py --birdseye: birdseye.jpg and .json next to the trained splat): the splat seen from
+// straight above with its ceiling left out, as a map in the top left corner, with the labels, the recorded path and
+// where the view is and looks. Click it to make it bigger.
+const bird = { info: null, image: null, labels: [], drawn: 0 };
+const birdBox = document.getElementById('bird'), birdCanvas = birdBox.querySelector('canvas');
+birdBox.onclick = () => { birdBox.classList.toggle('big'); bird.drawn = 0; };
+// A file next to another, in the same folder and with the same ?k=: the results of one training sit together.
+const besides = (url, name) => url.split('?')[0].replace(/[^/]*$/, name) + (url.includes('?') ? url.slice(url.indexOf('?')) : '');
+async function showBird(splatUrl) {  // the bird's-eye files next to this splat
+  const sibling = (name) => besides(splatUrl, name);
+  bird.info = null;
+  birdBox.style.display = 'none';
+  try {
+    const reply = await fetch(sibling('birdseye.json'), { cache: 'no-store' });
+    if (!reply.ok) return;
+    const info = await reply.json();
+    const image = new Image();
+    image.onload = () => { bird.image = image; bird.info = info; bird.drawn = 0; birdBox.style.display = 'block'; };
+    image.src = sibling(info.image || 'birdseye.jpg');
+  } catch (err) { /* no bird's-eye view: the 3D view alone */ }
+}
+function hideBird() { bird.info = null; birdBox.style.display = 'none'; }
+onFrame.push((now) => {
+  const b = bird.info;
+  if (!b || now - bird.drawn < 100) return;
+  bird.drawn = now;
+  const W = birdCanvas.clientWidth, s = W / b.size[0], H = Math.round(b.size[1] * s), r = devicePixelRatio || 1;
+  if (birdCanvas.width !== Math.round(W * r) || birdCanvas.height !== Math.round(H * r)) {
+    birdCanvas.width = Math.round(W * r); birdCanvas.height = Math.round(H * r); birdCanvas.style.height = `${H}px`;
+  }
+  const g = birdCanvas.getContext('2d'), dot = (a, c) => a[0] * c[0] + a[1] * c[1] + a[2] * c[2];
+  const at = (p) => [(dot(p, b.right) - b.x0) * b.px_per_unit * s, (b.y1 - dot(p, b.ahead)) * b.px_per_unit * s];
+  g.setTransform(r, 0, 0, r, 0, 0);
+  g.drawImage(bird.image, 0, 0, W, H);
+  if (b.path && b.path.length > 1) {  // the recorded path
+    g.strokeStyle = 'rgba(147,161,178,.7)'; g.lineWidth = 1; g.beginPath();
+    b.path.forEach(([u, v], i) => (i ? g.lineTo : g.moveTo).call(g, u * s, v * s));
+    g.stroke();
+  }
+  g.font = '600 11px system-ui, sans-serif';
+  for (const o of bird.labels) {
+    const [u, v] = at(o.position);
+    g.fillStyle = '#ffd228'; g.beginPath(); g.arc(u, v, 3, 0, 2 * Math.PI); g.fill();
+    g.fillStyle = 'rgba(5,7,10,.75)'; const w = g.measureText(o.name).width; g.fillRect(u + 5, v - 8, w + 6, 14);
+    g.fillStyle = '#ffd228'; g.fillText(o.name, u + 8, v + 3);
+  }
+  // the view: the camera in the splat's axes (the scene is turned as the splats are: y and z flipped) and where it looks
+  const c = [camera.position.x, -camera.position.y, -camera.position.z];
+  const f3 = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion), f = [f3.x, -f3.y, -f3.z];
+  const [u, v] = at(c), du = dot(f, b.right), dv = -dot(f, b.ahead), n = Math.hypot(du, dv) || 1, a = Math.atan2(dv / n, du / n);
+  g.fillStyle = 'rgba(74,163,255,.35)'; g.beginPath(); g.moveTo(u, v); g.arc(u, v, 28, a - 0.5, a + 0.5); g.closePath(); g.fill();
+  g.fillStyle = '#4aa3ff'; g.beginPath(); g.arc(u, v, 4, 0, 2 * Math.PI); g.fill();
+});
+
 async function showLabels(url, depth) {
   const reply = await fetch(url, { cache: 'no-store' });
   if (!reply.ok) return;
-  const found = await reply.json();
+  const text = await reply.text();
+  if (text === labelsSeen) return;
+  labelsSeen = text;
+  const found = JSON.parse(text);
+  bird.labels = found.objects || [];
   if (labelGroup) scene.remove(labelGroup);
   labelGroup = new THREE.Group();
   for (const o of found.objects || []) {
-    const tag = labelSprite(`${o.name}${o.views > 1 ? ` ×${o.views}` : ''}`, 0.05 * (depth || 1));
+    const tag = labelSprite(o.name, 0.05 * (depth || 1));  // the name alone: how often it was seen is in labels.json
     tag.position.set(o.position[0], -o.position[1], -o.position[2]);  // the splat's axes turned as the splats are
     labelGroup.add(tag);
   }
@@ -217,13 +281,15 @@ const live = q.get('live');  // ?live=ZONE&k=KEY: follow the newest position fix
 if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=...labels.json]: a result opened by its files
   (async () => {
     let splat = null;
-    if (q.get('src')) splat = (await load(q.get('src'))).mesh;
+    if (q.get('src')) { splat = (await load(q.get('src'))).mesh; showBird(q.get('src')); }
     if (q.get('labels')) showLabels(q.get('labels'), 1);
     startPlayback(q.get('views'), splat);
   })();
 } else if (!live) {
   try {
     const { mesh, count } = await load(q.get('src'));
+    showBird(q.get('src'));
+    if (q.get('labels')) showLabels(q.get('labels'), depth);  // ?labels=...labels.json: name tags, as in the playback
     note.textContent = `${count.toLocaleString('en-US')} Gaussians` + (/trained/.test(q.get('src')) ? ', trained on Iridis' : ', built on a CPU with no training');
     window.__viewer = { mesh, camera, controls, count };
   } catch (err) {
@@ -250,7 +316,7 @@ if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=.
   const places = new THREE.Group();
   scene.add(marker, trail, places);
   const path = [];
-  let roomJob = '', roomMesh = null, room = null, asked = false, fixAt = 0, added = '', busy = false;
+  let roomJob = '', roomMesh = null, room = null, asked = false, fixAt = 0, added = '', busy = false, labelsAt = 0;
   let shown = '', current = null, placed = false;  // the fallback: each fix's own 3D file
 
   async function loadRoom() {
@@ -268,7 +334,13 @@ if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=.
     const trained = info.trained && info.trained.splat;
     if (trained) {  // a splat trained on Iridis from a recording: it looks like the pictures. Its axes are the recording's
       // first camera (as each fix's own file), not the room map's, so the wearer's cone is not drawn on it.
-      if (trained === roomJob) return true;
+      if (trained === roomJob) {  // the same splat: its labels may have been made again (video_map.py --labels-only)
+        if (Date.now() - labelsAt > 10000) {
+          labelsAt = Date.now();
+          showLabels(info.trained.labels ? api(info.trained.labels) : besides(api(trained), 'labels.json'), info.trained.median_depth);
+        }
+        return true;
+      }
       const { mesh } = await load(api(trained));
       if (roomMesh) { scene.remove(roomMesh); roomMesh.dispose && roomMesh.dispose(); }
       if (current) { scene.remove(current); current.dispose && current.dispose(); current = null; shown = ''; }
@@ -278,16 +350,23 @@ if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=.
       camera.fov = info.trained.fov_deg || 58;
       camera.position.set(0, 0, 0); controls.target.set(0, 0, -d);
       camera.near = d * 0.005; camera.far = d * 200; camera.updateProjectionMatrix(); controls.update();
-      roomMesh = mesh; roomJob = trained;
-      if (info.trained.labels) showLabels(api(info.trained.labels), info.trained.median_depth);
-      if (info.trained.views) {
+      roomMesh = mesh; roomJob = trained; labelsSeen = ''; bird.labels = [];
+      showBird(api(trained));
+      // labels and the playback's views: as the room lists them, or else next to the splat (labelled afterwards:
+      // video_map.py --labels-only); a missing file just shows nothing
+      labelsAt = Date.now();
+      showLabels(info.trained.labels ? api(info.trained.labels) : besides(api(trained), 'labels.json'), info.trained.median_depth);
+      const views = info.trained.views ? api(info.trained.views) : besides(api(trained), 'views.json');
+      fetch(views, { cache: 'no-store' }).then((reply) => {
+        if (!reply.ok) return;
         const start = document.getElementById('playStart');
         start.style.display = 'block';
-        start.onclick = () => startPlayback(api(info.trained.views), roomMesh);
-      }
+        start.onclick = () => startPlayback(views, roomMesh);
+      }).catch(() => {});
       return true;
     }
     if (info.job === roomJob) return true;
+    hideBird();  // the room map has its own axes: the bird's-eye view belongs to a trained splat
     const { mesh } = await load(api(info.splat));
     mesh.quaternion.set(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);  // map axes -> three.js axes, as toThree
     if (roomMesh) { scene.remove(roomMesh); roomMesh.dispose && roomMesh.dispose(); }

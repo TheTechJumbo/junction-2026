@@ -27,7 +27,8 @@ import zipfile
 from pathlib import Path
 
 DEFAULT_ROOT = "/scratch/$USER/junction-recon"
-BRING = ["summary.json", "trained.splat", "untrained.splat", "cameras.npz", "flythrough.mp4", "views.json", "depths.bin", "labels.json"]
+BRING = ["summary.json", "trained.splat", "untrained.splat", "cameras.npz", "flythrough.mp4", "views.json", "depths.bin", "labels.json",
+         "birdseye.jpg", "birdseye.json"]
 WAIT_S = 75 * 60  # the job's own limit is an hour
 
 
