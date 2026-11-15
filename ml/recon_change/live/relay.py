@@ -53,6 +53,10 @@ small part changed is reported under "view" with the place of the change; &fresh
                                   /where carry the same under "route", from the wearer's own position
     GET  /day?date=YYYY-MM-DD     what the wearer did that day (no date: today): timeline and two summaries
     GET  /dayview                 the carer's page for one day
+    GET  /care?zone=kitchen       the caretaker's page: the room as a Gaussian splat with the wearer moving in it,
+                                  the named places as labels in 3D, and what the wearer is doing (W A S D to move)
+    GET  /care/space?zone=kitchen the splat that page shows, and the matrix that puts a trained splat into the room
+                                  map's axes, where the fixes and places are (care_space.py)
 
 What the carer sets once, on /places (the gateway keeps it next to the baseline pictures):
 
@@ -156,6 +160,12 @@ try:
 except ImportError:  # route.py is missing: fixes go out without a route, the display points straight
     route_finder = None
 # --- end route finding --------------------------------------------------------------------------
+
+# ---- caretaker's page (/care): the trained splat put into the room map's axes (care_space.py, needs NumPy) ----
+try:
+    import care_space
+except ImportError:  # no NumPy here: the page shows the room map, where the wearer is drawn as before
+    care_space = None
 
 
 class Link:
@@ -858,6 +868,43 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         return images, splat_url
 
     building = {}  # {zone: "running" or "again"}: one room map build at a time per zone, one more if asked meanwhile
+    # ---- caretaker's page (/care) ----
+    space_made, space_lock = {}, threading.Lock()  # {zone: ((room map job, trained splat), the reply)}: worked out once
+
+    def care_view(zone):
+        """The splat the caretaker's page shows for a zone, and the matrix that takes it into the room map's axes,
+        where the wearer, the named places and the day's path are. The trained splat when its cameras line up with
+        the room map's (care_space.py), else the room map itself. Returns (HTTP status, reply)."""
+        got = rooms.get(zone)
+        if not got or not got.get("splat"):
+            return 404, {"ok": False, "error": f"No room map for '{zone}' yet: POST /map?zone={zone}."}
+        trained = got.get("trained") or {}
+        plain = {"ok": True, "zone": zone, "kind": "map", "splat": got["splat"], "matrix": None, "fit": None,
+                 "room_splat": got["splat"], "trained": trained or None, "median_depth_m": got.get("median_depth_m"),
+                 "fov_deg": got.get("fov_deg"), "cameras": got.get("cameras") or [], "places": got.get("places") or []}
+        match = re.fullmatch(r"/evidence/([\w-]+)/trained\.splat", trained.get("splat") or "")
+        if not match:
+            return 200, {**plain, "why": "No trained splat for this room yet: the room map is shown."}
+        made_for = (got.get("job"), trained["splat"])
+        with space_lock:
+            if zone in space_made and space_made[zone][0] == made_for:
+                return 200, space_made[zone][1]
+            fit, why = None, None
+            if care_space is None:
+                why = "NumPy is missing on this laptop: the room map is shown."
+            else:
+                hint = (got.get("median_depth_m") or 0) / trained["median_depth"] if trained.get("median_depth") else None
+                try:
+                    fit = care_space.space(care_space.load_cameras(evidence_dir / match[1] / "cameras.npz"),
+                                           got.get("cameras") or [], hint)
+                    why = fit.get("why")
+                except (OSError, KeyError, ValueError) as err:
+                    why = f"The trained splat's cameras could not be read ({type(err).__name__}): the room map is shown."
+            reply = {**plain, "kind": "trained", "splat": trained["splat"], "matrix": fit["matrix"], "fit": fit} \
+                if fit and fit.get("ok") else {**plain, "fit": fit, "why": why}
+            space_made[zone] = (made_for, reply)
+            return 200, reply
+    # ---- end caretaker's page ----
     quick_keys, full_at = {}, {}  # --quick: {zone: the room pictures as small prints}, {zone: when the model last placed a photo}
     recent = {}  # --quick: {zone: {"model": (print, pose) of the newest model fix's photo, "quick": (print, pose) of the newest instant one}}
 
@@ -1134,7 +1181,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if not self.allowed(parse_qs(url.query)):
                 return
             pages = {"/": "phone.html", "/dashboard": "dashboard.html", "/viewer": "viewer.html",
-                     "/hud": "hud.html", "/places": "places.html"}
+                     "/hud": "hud.html", "/places": "places.html", "/care": "care.html"}
             if url.path in pages:
                 return self.send_bytes(200, (HERE / pages[url.path]).read_bytes(), "text/html; charset=utf-8")
             if url.path == "/history":
@@ -1177,6 +1224,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 if not got or not got.get("splat") or not (evidence_dir / got["job"] / "room.splat").exists():
                     return self.send_json(404, {"ok": False, "error": f"No room map for '{zone}' yet: POST /map?zone={zone}."})
                 return self.send_json(200, {"ok": True, **got, "age_s": round(time.time() - got["at"]), "building": bool(building.get(zone))})
+            if url.path == "/care/space":  # the splat the caretaker's page shows, and the matrix into the room map's axes
+                return self.send_json(*care_view(zone))
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:
