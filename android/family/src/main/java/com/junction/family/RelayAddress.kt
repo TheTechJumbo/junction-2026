@@ -43,6 +43,9 @@ object RelayAddress {
     /** The relay's access key as the relay prints it: letters, digits and `-_.~`, nothing else. */
     fun key(input: String): String? = input.trim().takeIf { KEY.matches(it) }
 
+    /** The key typed in the settings, or the saved one when the field was left empty; null when neither will do. */
+    fun keyOrSaved(input: String, saved: String?): String? = if (input.isBlank()) saved?.let { key(it) } else key(input)
+
     /** A room name as the relay uses it (`kitchen`, `living-room`); blank means `kitchen`. */
     fun zone(input: String): String? = input.trim().lowercase().ifEmpty { "kitchen" }.takeIf { ZONE.matches(it) }
 }

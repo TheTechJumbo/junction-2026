@@ -29,6 +29,14 @@ class RelayAddressTest {
         assertNull(RelayAddress.parse("", false))
     }
 
+    @Test fun anEmptyKeyFieldKeepsTheSavedKey() {
+        assertEquals("saved-key-1234", RelayAddress.keyOrSaved("", "saved-key-1234"))
+        assertEquals("saved-key-1234", RelayAddress.keyOrSaved("   ", "saved-key-1234"))
+        assertEquals("new-key-56789", RelayAddress.keyOrSaved("new-key-56789", "saved-key-1234"))
+        assertNull(RelayAddress.keyOrSaved("", null))
+        assertNull(RelayAddress.keyOrSaved("bad key", "saved-key-1234"))
+    }
+
     @Test fun keysAndRooms() {
         assertEquals("abc-DEF_123.x~", RelayAddress.key("  abc-DEF_123.x~ "))
         assertNull(RelayAddress.key("short"))
