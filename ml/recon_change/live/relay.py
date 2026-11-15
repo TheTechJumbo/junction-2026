@@ -240,6 +240,34 @@ except ImportError:  # route.py is missing: fixes go out without a route, the di
 
 # ---- find me X (live/finder.py): where watched things were put, from the fixes' item finder. Pure Python. ----
 FIND_ALIASES = {"orange box": ["orange object", "orange block"]}  # also asked of the item finder, which scores these higher
+
+
+def orange_patch(photo):
+    """The largest strongly orange patch in a JPEG, as a live box {"name": "orange box", "score", "box" [u0, v0, u1, v1],
+    "colour", "source": "colour"}, or None. A few ms on the laptop: the outline shows even when the item finder misses
+    it. Only a compact patch of 0.4-40% of the picture counts (a drinks can's rim or a sleeve does not)."""
+    try:
+        import cv2
+        img = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        small = cv2.resize(img, (160, max(1, int(160 * h / w))))
+        mask = cv2.inRange(cv2.cvtColor(small, cv2.COLOR_BGR2HSV), (3, 140, 90), (18, 255, 255))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+        if n < 2:
+            return None
+        best = max(range(1, n), key=lambda i: stats[i, cv2.CC_STAT_AREA])
+        x, y, bw, bh, area = (int(v) for v in stats[best])
+        H, W = mask.shape
+        share, fill = area / (H * W), area / max(1, bw * bh)
+        if not (0.004 <= share <= 0.4) or fill < 0.45:
+            return None
+        return {"name": "orange box", "score": round(min(0.6, 0.3 + share * 5), 3), "colour": round(fill, 2), "source": "colour",
+                "box": [round(x / W, 4), round(y / H, 4), round((x + bw) / W, 4), round((y + bh) / H, 4)]}
+    except Exception:  # noqa: BLE001  an extra: never in the way of the fix
+        return None
 sys.path.insert(0, str(HERE))
 import finder as finds  # noqa: E402
 FIND_RECENT = 3  # a newly asked thing is also looked for in this many of the zone's latest photos (and its pictures)
@@ -754,6 +782,11 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         def run():
             try:
                 watched = found_things.watched(zone)
+                tint = orange_patch(photo) if "orange box" in watched else None  # at once, before the item finder's second
+                held = live_finds.get(zone) or {}
+                if tint and (not held.get("boxes") or held.get("at", 0) <= taken):
+                    live_finds[zone] = {"at": taken, "done_at": time.time(), "boxes": [tint], "image": None, "job": None,
+                                        "latency_s": round(time.time() - taken, 2), "seconds": 0}
                 asked = list(dict.fromkeys(watched + [a for w in watched for a in LIVE_ALIASES.get(w, [])]))[:8]
                 header, _ = (bg_link or link).call({"op": "detect", "zone": zone, "device": "gpu",
                                                     "look_for": asked}, one_photo(photo))
@@ -766,7 +799,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 boxes = [b for b in raw if found_things.check_live(b)]  # these may confirm a sighting
                 shown = [b for b in raw if (b.get("score") or 0) >= LIVE_SHOW_SCORE and  # these are only outlined live
                          (b.get("colour") is None or b["colour"] >= finds.COLOUR_LEAST)]
-                sys.stderr.write(f"find live: {len(raw)} raw " + str([(b.get("name"), round(b.get("score") or 0, 3), b.get("colour"))
+                if not any(b.get("name") == "orange box" for b in shown) and tint:
+                    shown.append(tint)  # the item finder missed it; the colour did not
+                sys.stderr.write(f"find live: colour {tint['box'] if tint else None} | {len(raw)} raw " + str([(b.get("name"), round(b.get("score") or 0, 3), b.get("colour"))
                                  for b in raw][:6]) + f" kept {len(boxes)} in {round(time.time() - taken, 1)} s" + chr(10))
                 image = None
                 if shown:
