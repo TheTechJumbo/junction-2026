@@ -907,6 +907,28 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 if fit and fit.get("ok") else {**plain, "fit": fit, "why": why}
             space_made[zone] = (made_for, reply)
             return 200, reply
+
+    views_kept = {}  # {trained splat folder: (views.json's modification time, care_space.load_views)}
+
+    def care_named(zone, reply):
+        """The zone's named places (/waypoints) in map axes from the trained splat's depth (care_space.place_points),
+        so /care shows a place as soon as it is named, before a position fix or a new room map places it. Asked
+        every time: places can be named at any moment. [] when the room has no trained splat with exported views."""
+        paired = (reply.get("fit") or {}).get("paired")
+        if reply.get("kind") != "trained" or not paired or care_space is None:
+            return []
+        folder = evidence_dir / reply["splat"].split("/")[2]
+        try:
+            stamp = (folder / "views.json").stat().st_mtime
+            with space_lock:
+                if views_kept.get(folder, (None,))[0] != stamp:
+                    views_kept[folder] = (stamp, care_space.load_views(folder))
+                views = views_kept[folder][1]
+            header, _ = link.call({"op": "waypoints", "zone": zone})
+            return care_space.place_points(header.get("waypoints") or [], paired, views, reply["matrix"]) if header.get("ok") else []
+        except Exception as err:  # noqa: BLE001  the page still shows the places the fixes carry
+            sys.stderr.write(f"care places: {type(err).__name__}: {err}\n")
+            return []
     # ---- end caretaker's page ----
     quick_keys, full_at = {}, {}  # --quick: {zone: the room pictures as small prints}, {zone: when the model last placed a photo}
     recent = {}  # --quick: {zone: {"model": (print, pose) of the newest model fix's photo, "quick": (print, pose) of the newest instant one}}
@@ -1228,7 +1250,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     return self.send_json(404, {"ok": False, "error": f"No room map for '{zone}' yet: POST /map?zone={zone}."})
                 return self.send_json(200, {"ok": True, **got, "age_s": round(time.time() - got["at"]), "building": bool(building.get(zone))})
             if url.path == "/care/space":  # the splat the caretaker's page shows, and the matrix into the room map's axes
-                return self.send_json(*care_view(zone))
+                code, reply = care_view(zone)
+                return self.send_json(code, {**reply, "named": care_named(zone, reply)} if code == 200 else reply)
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:

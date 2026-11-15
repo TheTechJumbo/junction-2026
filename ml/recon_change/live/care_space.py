@@ -19,7 +19,7 @@ import sys
 
 import numpy as np
 
-GAP_DEG = 20.0  # leaving a view unpaired costs as much as a pair this far apart in heading
+GAP_DEG = 12.0  # leaving a view unpaired costs as much as a pair this far apart in heading (20 let a run slip by one)
 PAIR_DEG = 25.0  # pairs further apart than this are not used
 MIN_PAIRS = 4
 TRY_EVERY_DEG = 10  # the turn between the two first cameras is searched in steps this size, then refined
@@ -127,7 +127,55 @@ def space(E, cameras, scale_hint=None):
             "matrix": [[round(float(v), 6) for v in row] for row in matrix],
             "scale": round(scale, 4), "scale_from": scale_from, "turn_deg": round(turn, 1),
             "pairs": len(kept), "of": [len(cameras), len(E)], "rms_m": round(rms, 3),
-            "heading_rms_deg": round(float(np.sqrt((wrap(diffs - turn) ** 2).mean())), 1)}
+            "heading_rms_deg": round(float(np.sqrt((wrap(diffs - turn) ** 2).mean())), 1),
+            # [baseline picture number, trained keyframe]: the same photo (see place_points)
+            "paired": [[int(cameras[i].get("frame", i)), int(j)] for i, j in kept]}
+
+
+def load_views(folder):
+    """A trained splat's keyframes as video_map.py exports them next to it (views.json, depths.bin; also made by
+    --labels-only): trusted depth (S, h, w, 0 where not trusted), K (S, 3, 3), E (S, 3, 4), picture size (w, h)."""
+    v = json.loads((folder / "views.json").read_text())
+    w, h = v["depth_size"]
+    depth = np.fromfile(folder / v["depths"], np.float16).reshape(-1, h, w).astype(np.float32)
+    return depth, np.asarray(v["K"], float).reshape(-1, 3, 3), np.asarray(v["E"], float).reshape(-1, 3, 4), tuple(v["size"])
+
+
+def place_points(waypoints, paired, views, matrix, reach=(2, 5)):
+    """Named places in map axes without a position fix or a new room map. A place is a spot clicked in a baseline
+    picture (GET /waypoints: frame, u, v). When the baseline was recorded (Record room), that picture is a keyframe of
+    the trained splat (paired, from space(); the same 518 px photo), so its depth there is known: the median trusted
+    depth around the spot (a few depth pixels, more if none), along the camera's ray, through `matrix` into map axes.
+    Returns [{"name", "position": [east, north, up], "from": "trained depth"}] for the places that can be placed."""
+    depth, K, E, size = views
+    keyframe = {int(f): int(j) for f, j in paired}
+    m = np.asarray(matrix, float)
+    out = []
+    for w in waypoints:
+        try:
+            j = keyframe.get(int(w["frame"]))
+            u, v = float(w["u"]), float(w["v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if j is None or j >= len(depth) or not (0 <= u <= 1 and 0 <= v <= 1):
+            continue
+        rows, cols = depth[j].shape
+        cx, cy = round(u * (cols - 1)), round(v * (rows - 1))
+        z = None
+        for r in reach:
+            patch = depth[j][max(0, cy - r):cy + r + 1, max(0, cx - r):cx + r + 1]
+            good = patch[np.isfinite(patch) & (patch > 0)]
+            if good.size:
+                z = float(np.median(good))
+                break
+        if z is None:
+            continue
+        ray = np.linalg.inv(K[j]) @ np.array([u * size[0], v * size[1], 1.0])
+        R, t = E[j][:, :3], E[j][:, 3]
+        point = R.T @ (ray * z - t)  # depth is along the camera's axis: ray has 1 there
+        placed = m[:3, :3] @ point + m[:3, 3]
+        out.append({"name": w["name"], "position": [round(float(c), 2) for c in placed], "from": "trained depth"})
+    return out
 
 
 if __name__ == "__main__":

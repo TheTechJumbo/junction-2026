@@ -10,7 +10,7 @@
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
     font: 14px/1.45 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
   [hidden] { display: none !important; }
-  canvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+  #view { position: fixed; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
   #tags { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
   .tag { position: absolute; left: 0; top: 0; white-space: nowrap; padding: 2px 9px; border-radius: 999px; font-size: 12.5px;
     font-weight: 600; background: rgba(8, 12, 18, .8); border: 1px solid; pointer-events: auto; cursor: pointer; will-change: transform;
@@ -52,6 +52,16 @@
   #see img { width: 100%; border-radius: 10px; display: block; background: #0b1118; aspect-ratio: 4 / 3; object-fit: cover; }
   #see figcaption { margin-top: 4px; }
   ul, ol { list-style: none; margin: 0; padding: 0; }
+  .tag.time { color: #bfe0ff; border-color: rgba(74, 163, 255, .5); font-weight: 500; font-size: 11px; padding: 1px 7px; }
+  .tag.goal { color: #05070a; background: var(--yellow); border-color: #fff3b0; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(255, 210, 40, .25); } }
+  #goal { margin: 6px 0 0; padding: 7px 10px; border-radius: 9px; background: rgba(255, 210, 40, .12); border: 1px solid rgba(255, 210, 40, .6);
+    color: var(--yellow); font-weight: 600; }
+  #above { width: 100%; display: block; border-radius: 10px; background: #0b1118; touch-action: manipulation; }
+  .visit { display: grid; grid-template-columns: 46px 1fr auto; gap: 8px; padding: 6px 0; border-top: 1px solid #172230; align-items: baseline; }
+  .visit time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  .visit .name { color: var(--yellow); font-weight: 600; }
+  .visit .now { font-size: 10.5px; font-weight: 700; color: var(--green); text-transform: uppercase; letter-spacing: .05em; margin-left: 6px; }
   #check { margin-top: 8px; padding: 7px 10px; border-radius: 9px; background: #101924; border: 1px solid var(--line); font-size: 13px; }
   #check.local { border-color: rgba(255, 184, 77, .7); background: rgba(255, 184, 77, .1); }
   #check.moved { border-color: rgba(74, 163, 255, .5); }
@@ -119,9 +129,16 @@
   <section>
     <h2>Now</h2>
     <p id="nowLine">…</p>
+    <p id="goal" hidden></p>
     <div id="doing" class="muted"></div>
     <div id="check" hidden></div>
     <figure id="see" style="margin:10px 0 0"><img id="seeImg" alt="What the glasses saw last"><figcaption class="muted small" id="seeWhen"></figcaption></figure>
+  </section>
+  <section>
+    <h2>Where they went today</h2>
+    <canvas id="above" width="330" height="240" aria-label="Today's path seen from above, with times"></canvas>
+    <div class="muted small" id="aboveNote" style="margin-top:4px"></div>
+    <ul id="visits" style="margin-top:6px"><li class="muted small">No visits to a named place yet today.</li></ul>
   </section>
   <section id="changesSection">
     <h2>Changes in view</h2>
@@ -212,7 +229,7 @@ function resize() {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
-addEventListener('resize', resize);
+addEventListener('resize', () => { resize(); if (typeof renderWent === 'function') renderWent(); });
 resize();
 
 // The wearer: a head with a cone where they look, a line down to about the floor, and today's path.
@@ -363,7 +380,8 @@ function lookAtPoint(target, fromDistance = 1.3, lift = 0.35) {  // stand a litt
 }
 
 // ---- data: the room and its splat (/care/space), the wearer (/where), the day (/day), reminders, places ----
-let room = null, roomKey = '', mesh = null, fix = null, places = [], dayPath = [], live = [];
+let room = null, roomKey = '', mesh = null, fix = null, places = [], dayPath = [], live = [];  // path points: [t, east, north]
+let named = [];  // /care/space: the named places placed from the trained splat's depth, asked again every few seconds
 let startPose = null;
 function goStart() {
   if (!startPose) return;
@@ -482,7 +500,7 @@ async function objectLabels(info) {
   } catch { /* no labels: nothing to draw */ }
 }
 $('showObjects').onchange = () => { objectAnchors.visible = $('showObjects').checked && !!(room && room.kind === 'trained'); };
-$('showPath').onchange = () => { pathLine.visible = $('showPath').checked; };
+$('showPath').onchange = () => { pathLine.visible = timeAnchors.visible = $('showPath').checked; };
 
 async function tickSpace() {
   let info;
@@ -492,6 +510,8 @@ async function tickSpace() {
     $('loadText').textContent = err.status === 404 ? `No 3D room for "${nice(zone)}" yet. Record the room first.` : `Could not reach the laptop: ${err.message}`;
     return;
   }
+  named = info.named || [];
+  mergePlaces(fix && fix.waypoints);
   const next = JSON.stringify([info.kind, info.splat, info.matrix, info.room_splat]);
   if (next === roomKey) return;
   const first = !roomKey;
@@ -510,6 +530,7 @@ async function tickSpace() {
   }
   await showSplat(info, info.kind);
   objectLabels(info);
+  loadAbove(info);
   drawPlaces();
 }
 
@@ -544,10 +565,34 @@ function updateWearer() {
   t.hidden = () => mode === 'eyes';
 }
 
+function trackPoints() {  // today's positions in this room, oldest first: [t, east, north]
+  return [...dayPath, ...live].sort((a, b) => a[0] - b[0]);
+}
+const timeAnchors = new THREE.Group();
+space.add(timeAnchors);
 function drawPath() {
-  const pts = [...dayPath, ...live].map((p) => new THREE.Vector3(p[0], p[1], -1.42));
+  const track = trackPoints();
+  const pts = track.map((p) => new THREE.Vector3(p[1], p[2], -1.42));
   pathLine.geometry.dispose();
   pathLine.geometry = new THREE.BufferGeometry().setFromPoints(pts.length > 1 ? pts : []);
+  // times along the path: one every two minutes or more, at least 40 cm apart, the newest dozen
+  const marks = [];
+  for (const p of track) {
+    const last = marks[marks.length - 1];
+    if (!last || (p[0] - last[0] >= 120 && Math.hypot(p[1] - last[1], p[2] - last[2]) >= 0.4)) marks.push(p);
+  }
+  if (track.length && marks[marks.length - 1] !== track[track.length - 1]) marks.push(track[track.length - 1]);
+  timeAnchors.clear();
+  const keep = new Set();
+  marks.slice(-12).forEach((p, i) => {
+    const a = new THREE.Object3D();
+    a.position.set(p[1], p[2], -1.42);
+    timeAnchors.add(a);
+    keep.add(`t:${i}`);
+    tag(`t:${i}`, clock(p[0]), 'time', a, () => lookAtPoint(a.getWorldPosition(new THREE.Vector3()), 1.4, 0.9));
+  });
+  dropTags('t:', keep);
+  renderWent();
 }
 
 function drawPlaces() {
@@ -585,12 +630,166 @@ function renderPlaces() {
     b.onclick = () => { const p = places[Number(b.dataset.i)]; lookAtPoint(toWorld(p.position)); };
   });
 }
-function mergePlaces(list) {  // the fix's places (they move with the map) win over the room map's
+function mergePlaces(list) {  // the room map's places, then the fix's, then those placed on the trained splat's depth
   const byName = new Map();
   for (const p of (room && room.places) || []) if (p.position) byName.set(p.name, p);
   for (const p of list || []) if (p.position) byName.set(p.name, p);
+  for (const p of named) if (p.position) byName.set(p.name, p);
   const next = [...byName.values()].map((p) => ({ name: p.name, position: p.position }));
-  if (JSON.stringify(next) !== JSON.stringify(places)) { places = next; drawPlaces(); }
+  if (JSON.stringify(next) !== JSON.stringify(places)) { places = next; drawPlaces(); renderWent(); }
+}
+
+// ---- where they went: visits to the named places, the path from above with times, where they are going ----
+const VISIT_IN_M = 1.0, VISIT_OUT_M = 1.5, VISIT_GAP_S = 180;  // within 1 m is a visit; it ends past 1.5 m or after 3 min unseen
+function visitsOf(track) {
+  const out = [];
+  for (const place of places) {
+    let open = null;
+    for (const [t, e, n] of track) {
+      if (open && t - open.last > VISIT_GAP_S) { out.push(open); open = null; }
+      const d = Math.hypot(e - place.position[0], n - place.position[1]);
+      if (d <= VISIT_IN_M) { if (open) open.last = t; else open = { name: place.name, start: t, last: t }; }
+      else if (open && d > VISIT_OUT_M) { out.push(open); open = null; }
+      else if (open) open.last = t;
+    }
+    if (open) out.push({ ...open, open: true });
+  }
+  return out.sort((a, b) => b.start - a.start);
+}
+const stay = (s) => s < 60 ? 'under a minute' : `${Math.round(s / 60)} min`;
+function currentVisit() {
+  if (!fix || !fresh(fix)) return null;
+  return visitsOf(trackPoints()).find((v) => v.open && fix.at - v.last < 30) || null;
+}
+function goal() {  // where the wearer is being guided (the app's "take me to", relay /navigate), as /where reports it
+  const f = fix || {};
+  const g = f.navigate || f.navigation || f.going_to || f.goal || (f.stable && (f.stable.navigate || f.stable.goal)) || null;
+  if (!g || (typeof g === 'object' && (g.active === false || g.done))) return null;
+  const name = typeof g === 'string' ? g : (g.name || g.place || g.target || g.to);
+  if (!name) return null;
+  const place = places.find((p) => p.name.toLowerCase() === String(name).toLowerCase());
+  const pose = wearerPose(f);
+  let d = typeof g === 'object' && Number.isFinite(g.distance_m) ? g.distance_m : null;
+  if (place && pose) d = Math.hypot(place.position[0] - pose.position[0], place.position[1] - pose.position[1]);
+  return { name: String(name), d, place };
+}
+const goalLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: 0xffd228, dashSize: 0.12, gapSize: 0.08 }));
+space.add(goalLine);
+function renderGoal() {
+  const g = goal();
+  $('goal').hidden = !g;
+  for (const [id, t] of tags) if (id.startsWith('p:')) t.el.classList.toggle('goal', !!g && id === `p:${g.place && g.place.name}`);
+  goalLine.visible = !!(g && g.place && wearer.visible);
+  if (!g) return;
+  $('goal').textContent = `Going to: ${g.name}${g.d != null ? `, ${metres(g.d)} away` : ''}`;
+  if (g.place) {
+    const p = g.place.position;
+    goalLine.geometry.dispose();
+    goalLine.geometry = new THREE.BufferGeometry().setFromPoints([target.pos.clone(), new THREE.Vector3(p[0], p[1], p[2] || 0)]);
+    goalLine.computeLineDistances();
+  }
+}
+
+let above = null;  // {b: birdseye.json, img, inv: map axes -> the trained splat's}: video_map.py's picture from above
+async function loadAbove(info) {
+  above = null;
+  if (info.kind === 'trained' && info.matrix) {
+    const folder = info.splat.replace(/[^/]*$/, '');
+    try {
+      const b = await getJson(`${folder}birdseye.json`);
+      const img = new Image();
+      img.src = api(folder + (b.image || 'birdseye.jpg'));
+      await img.decode();
+      above = { b, img, inv: new THREE.Matrix4().set(...info.matrix.flat()).invert(),
+        right: new THREE.Vector3(...b.right), ahead: new THREE.Vector3(...b.ahead) };
+    } catch { above = null; }
+  }
+  renderWent();
+}
+function renderWent() {
+  const track = trackPoints();
+  const visits = visitsOf(track);
+  $('visits').innerHTML = visits.length ? visits.slice(0, 12).map((v) => {
+    const now = v.open && fix && fresh(fix) && fix.at - v.last < 30;
+    return `<li class="visit"><time>${clock(v.start)}</time><span><span class="name">${esc(v.name)}</span>${now ? '<span class="now">now</span>' : ''}</span>
+      <span class="muted small">${now ? `${stay(fix.at - v.start)} so far` : stay(v.last - v.start)}</span></li>`;
+  }).join('') : `<li class="muted small">${places.length ? 'No visits to a named place yet today (within 1 m).' : 'Name places to see the visits to them.'}</li>`;
+  drawAbove(track);
+}
+function drawAbove(track) {
+  const canvas = $('above');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.clientWidth || 330, dpr = Math.min(devicePixelRatio || 1, 2);
+  let H, at;
+  const pose = wearerPose(fix);
+  if (above) {  // on the trained splat's picture from above: map axes -> splat axes -> its pixels
+    const { b, inv, right, ahead } = above;
+    const s = W / b.size[0];
+    H = Math.round(b.size[1] * s);
+    at = (p) => { const v = new THREE.Vector3(p[0], p[1], p[2] || 0).applyMatrix4(inv); return [(v.dot(right) - b.x0) * b.px_per_unit * s, (b.y1 - v.dot(ahead)) * b.px_per_unit * s]; };
+  } else {  // no picture: the path, places and cameras fitted in, north up
+    const pts = [...track.map((p) => [p[1], p[2]]), ...places.map((p) => p.position), ...((room && room.cameras) || []).map((c) => c.position)];
+    if (pose) pts.push(pose.position);
+    if (!pts.length) pts.push([0, 0]);
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const [x0, x1, y0, y1] = [Math.min(...xs) - 0.5, Math.max(...xs) + 0.5, Math.min(...ys) - 0.5, Math.max(...ys) + 0.5];
+    const k = Math.min(W / (x1 - x0), 260 / (y1 - y0));
+    H = Math.round((y1 - y0) * k);
+    at = (p) => [(p[0] - x0) * k, (y1 - p[1]) * k];
+  }
+  canvas.width = W * dpr; canvas.height = H * dpr; canvas.style.height = `${H}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#0b1118'; ctx.fillRect(0, 0, W, H);
+  if (above) { ctx.globalAlpha = 0.85; ctx.drawImage(above.img, 0, 0, W, H); ctx.globalAlpha = 1; }
+  // the path, older fainter
+  for (let i = 1; i < track.length; i++) {
+    const [a, b] = [at([track[i - 1][1], track[i - 1][2]]), at([track[i][1], track[i][2]])];
+    ctx.strokeStyle = `rgba(74, 163, 255, ${0.35 + 0.65 * i / track.length})`; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+  }
+  // times along it: every two minutes or more, 34 px apart
+  ctx.font = '600 10.5px ui-sans-serif, system-ui, sans-serif';
+  let lastT = -1e9, lastXY = null;
+  track.forEach((p, i) => {
+    const xy = at([p[1], p[2]]);
+    const end = i === track.length - 1;
+    if (!end && (p[0] - lastT < 120 || (lastXY && Math.hypot(xy[0] - lastXY[0], xy[1] - lastXY[1]) < 34))) return;
+    lastT = p[0]; lastXY = xy;
+    ctx.fillStyle = '#4aa3ff'; ctx.beginPath(); ctx.arc(xy[0], xy[1], 3, 0, 7); ctx.fill();
+    const label = clock(p[0]);
+    const w = ctx.measureText(label).width + 8;
+    ctx.fillStyle = 'rgba(8, 12, 18, .85)'; ctx.fillRect(xy[0] + 5, xy[1] - 16, w, 14);
+    ctx.fillStyle = '#cfe6ff'; ctx.fillText(label, xy[0] + 9, xy[1] - 5);
+  });
+  // the named places
+  const g = goal();
+  for (const p of places) {
+    const xy = at(p.position).map((v, i) => Math.max(4, Math.min(v, (i ? H : W) - 4)));  // a place off the picture sits at its edge
+    const isGoal = g && g.place && g.place.name === p.name;
+    ctx.fillStyle = isGoal ? '#fff3b0' : '#ffd228'; ctx.beginPath(); ctx.arc(xy[0], xy[1], isGoal ? 6 : 4.5, 0, 7); ctx.fill();
+    ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
+    const tw = ctx.measureText(p.name).width;  // the name on the side that keeps it inside the picture
+    const tx = Math.max(2, Math.min(xy[0] + 7 + tw > W - 2 ? xy[0] - 7 - tw : xy[0] + 7, W - tw - 2));
+    const ty = Math.max(11, Math.min(xy[1] + 4, H - 3));
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.strokeText(p.name, tx, ty);
+    ctx.fillStyle = '#ffd228'; ctx.fillText(p.name, tx, ty);
+  }
+  // the wearer, and the way to where they are going
+  if (pose) {
+    const xy = at(pose.position);
+    if (g && g.place) {
+      const to = at(g.place.position);
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = '#ffd228'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(...xy); ctx.lineTo(...to); ctx.stroke(); ctx.setLineDash([]);
+    }
+    const h = (pose.heading || 0) * Math.PI / 180;
+    const tip = at([pose.position[0] + 0.5 * Math.sin(h), pose.position[1] + 0.5 * Math.cos(h)]);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(...xy); ctx.lineTo(...tip); ctx.stroke();
+    ctx.fillStyle = fresh(fix) ? '#4aa3ff' : '#6f7d8c'; ctx.strokeStyle = '#fff';
+    ctx.beginPath(); ctx.arc(xy[0], xy[1], 6, 0, 7); ctx.fill(); ctx.stroke();
+  }
+  $('aboveNote').textContent = (above ? 'The room from above (trained splat). ' : '') +
+    (track.length ? `Today's path from ${clock(track[0][0])} to ${clock(track[track.length - 1][0])}.` : 'No path yet today.');
 }
 
 let lastDay = null;
@@ -623,12 +822,15 @@ function renderNow() {
     $('seen').textContent = 'Waiting for the glasses to send a picture.';
   } else {
     const near = pose && nearestPlace(pose);
+    const here = currentVisit();
     const where = !pose ? 'Not sure where they are.'
-      : `In the ${nice(fix.zone || zone)}` + (near ? (near.d < 1.5 ? `, by the ${near.name}.` : `, ${metres(near.d)} from the ${near.name}.`) : '.');
+      : here ? `At the ${here.name}, ${stay(fix.at - here.start)} so far.`
+      : `In the ${nice(fix.zone || zone)}` + (near ? (near.d <= VISIT_IN_M ? `, at the ${near.name}.` : `, ${metres(near.d)} from the ${near.name}.`) : '.');
     $('nowLine').textContent = where;
     $('seen').textContent = fresh(fix) ? `Live · position from ${ago(fix.age_s)}` : `Last seen at ${clock(fix.at)}, ${ago(fix.age_s)}`;
   }
   $('doing').innerHTML = doingWords().map((w) => `<div>${esc(w)}</div>`).join('');
+  renderGoal();
 }
 
 function renderCheck() {  // the relay's cheap check of the newest photo against the one before (relay view_verdict)
@@ -685,8 +887,8 @@ async function tickWhere() {
     }
     if (pose && fresh(fix)) {
       const lastPt = live[live.length - 1];
-      if (!lastPt || Math.hypot(lastPt[0] - pose.position[0], lastPt[1] - pose.position[1]) > 0.05) {
-        live.push([pose.position[0], pose.position[1]]);
+      if (!lastPt || Math.hypot(lastPt[1] - pose.position[0], lastPt[2] - pose.position[1]) > 0.05 || fix.at - lastPt[0] > 20) {
+        live.push([fix.at, pose.position[0], pose.position[1]]);
         live.splice(0, Math.max(0, live.length - 400));
         drawPath();
       }
@@ -723,7 +925,8 @@ function renderDay() {
 async function tickDay() {
   try {
     lastDay = await getJson('/day');
-    dayPath = (lastDay.path || []).filter((p) => p[3] === zone).map((p) => [p[1], p[2]]);
+    dayPath = (lastDay.path || []).filter((p) => p[3] === zone).map((p) => [p[0], p[1], p[2]]);
+    live = live.filter((p) => !dayPath.length || p[0] > dayPath[dayPath.length - 1][0]);  // the day log has the older ones
     drawPath();
     renderDay();
     renderNow();
@@ -814,7 +1017,7 @@ function every(ms, fn) {  // the first run happens even in a background tab, so 
   return setInterval(run, ms);
 }
 await tickWhere();
-every(20000, tickSpace);
+every(8000, tickSpace);  // a place named at any time shows within seconds
 every(1000, tickWhere);
 every(15000, tickDay);
 every(10000, tickReminders);

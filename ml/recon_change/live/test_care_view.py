@@ -70,6 +70,8 @@ def check_space():
     assert err < 0.03, f"cameras land {err:.3f} m from where the room map has them"
     assert abs(np.linalg.det(M[:3, :3]) ** (1 / 3) - 2.4) < 0.02, fit["scale"]
     print(f"  lined up: {fit['pairs']} pairs, worst camera {err * 100:.1f} cm off, scale {fit['scale']}")
+    same = sum(keep_map[f] == keep_trained[j] for f, j in fit["paired"])
+    assert same >= len(fit["paired"]) - 1, f"only {same} of {len(fit['paired'])} pairs are the same photo"
 
     # Other pictures: headings that do not follow the same walk are refused, not forced into place.
     rng = np.random.default_rng(3)
@@ -78,6 +80,17 @@ def check_space():
     assert not refused["ok"] and refused["why"], refused
     assert not care_space.space(E[:2], cameras)["ok"]
     print(f"  other pictures refused: {refused['why']}")
+
+
+class Gateway:
+    """Stands in for the SSH link: the zone's named places, as the gateway lists them."""
+    waypoints = [{"name": "pill box", "frame": 0, "u": 0.5, "v": 0.5}, {"name": "door", "frame": 3, "u": 0.2, "v": 0.6},
+                 {"name": "nowhere", "frame": 999, "u": 0.5, "v": 0.5}]
+
+    def call(self, header, blob=b""):
+        if header["op"] == "waypoints":
+            return {"ok": True, "zone": header["zone"], "waypoints": self.waypoints}, b""
+        return {"ok": False, "error": "not in this test"}, b""
 
 
 def get(base, path, key=KEY):
@@ -100,12 +113,17 @@ def check_relay():
             for f in files:
                 (evidence / name / f).write_bytes(bytes(32))
         (evidence / "train-kitchen-x-1" / "labels.json").write_text('{"objects": [{"name": "cup", "position": [0, 0, 1]}]}')
+        # views.json and depths.bin as video_map.py exports them: every keyframe sees a wall 1 unit ahead (2 m)
+        K = np.array([[400.0, 0, 259], [0, 400.0, 259], [0, 0, 1]])
+        (evidence / "train-kitchen-x-1" / "views.json").write_text(json.dumps(
+            {"size": [518, 518], "depth_size": [130, 130], "K": [K.tolist()] * len(E), "E": E.tolist(), "depths": "depths.bin"}))
+        np.full((len(E), 130, 130), 1.0, np.float16).tofile(evidence / "train-kitchen-x-1" / "depths.bin")
         np.savez(evidence / "train-kitchen-x-1" / "cameras.npz", E=E.astype(np.float32), K=np.zeros((len(E), 3, 3)), keyframes=np.arange(len(E)))
         room = {"job": "job1", "splat": "/evidence/job1/room.splat", "cameras": cameras, "places": [{"name": "pill box", "position": [1.0, 2.0, 0.0]}],
                 "at": time.time(), "median_depth_m": 2.0, "fov_deg": 55,
                 "trained": {"splat": "/evidence/train-kitchen-x-1/trained.splat", "median_depth": 1.0, "gaussians": 10, "psnr": 24.0}}
         (evidence / "rooms.json").write_text(json.dumps({"kitchen": room, "hall": {**room, "job": "job2", "splat": "/evidence/job2/room.splat", "trained": None}}))
-        handler = relay.make_handler(None, evidence, KEY, None, pick=None)
+        handler = relay.make_handler(Gateway(), evidence, KEY, None, pick=None)
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{server.server_address[1]}"
@@ -124,15 +142,24 @@ def check_relay():
             # labels made again after training sit next to the splat and are found there (rooms.json has none)
             assert space["trained"]["labels"] == "/evidence/train-kitchen-x-1/labels.json", space["trained"]
             assert json.loads(get(base, "/care/space?zone=kitchen")[2]) == space  # worked out once, then the same reply
+            # Named places get a position from the trained depth: 2 m straight ahead of the camera they were named in.
+            named = {p["name"]: p["position"] for p in space["named"]}
+            assert set(named) == {"pill box", "door"}, space["named"]
+            h = np.radians(headings[0])
+            ahead = positions[0] + 2.0 * np.array([np.sin(h), np.cos(h), 0])
+            assert np.linalg.norm(np.array(named["pill box"]) - ahead) < 0.05, (named["pill box"], ahead.round(2))
+            d = np.linalg.norm(np.array(named["door"][:2]) - positions[3][:2])
+            assert 1.9 < d < 2.4, d  # off to the left of camera 3, a little further than straight ahead
 
             code, _, body = get(base, "/care/space?zone=hall")
             hall = json.loads(body)
             assert code == 200 and hall["kind"] == "map" and hall["matrix"] is None and hall["why"], hall
+            assert hall["named"] == []
 
             assert get(base, "/care/space?zone=nowhere")[0] == 404
             # The splat itself comes through the relay's evidence route, as on the page.
             assert get(base, space["splat"])[0] == 200
-            print("  relay: /care page, /care/space trained and room-map replies, key required")
+            print("  relay: /care page, /care/space trained and room-map replies, named places from depth, key required")
         finally:
             server.shutdown()
 
