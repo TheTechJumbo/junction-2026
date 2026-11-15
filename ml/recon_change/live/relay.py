@@ -35,6 +35,11 @@ It prints the link to open. The link carries an access key, and every request ne
     POST /ask?zone=kitchen        body = {"question": "Did I take my pills?"} -> the answer in words
                                   ("Where are my keys?" is answered here: where a position fix last saw them)
     POST /forget?zone=kitchen&name=keys   forget where an item was seen (no name: every item in the zone)
+                                  "Find me the orange box", "where did I put my orange box" (any thing): answered from
+                                  where the glasses saw it (live/finder.py); the name joins every fix's look_for
+    GET  /find?zone=kitchen       the things watched for, where each was seen (2 agreeing fixes), its moves, and the
+                                  last box not taken and why; POST /find?zone=kitchen&name=red+cup watches for one more
+                                  (&forget=1: stop; no name: the zone's whole list)
     POST /speak                   body = {"text": "..."} -> the sentence as MP3 speech
     GET  /changes?zone=kitchen    what was moved in view while the camera stood still, with before and now pictures
     GET  /viewer?live=kitchen     the room in 3D with the wearer moving in it, live (needs the room map below)
