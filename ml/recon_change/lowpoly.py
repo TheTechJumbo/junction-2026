@@ -5,9 +5,11 @@ splat_mesh.py follows every surface (hundreds of thousands of triangles, and eve
 of the splat). This rebuilds the room from a few shapes instead, in the room map's frame (z up):
 
     floor   one quad at the floor height, in the floor's own colour
-    walls   the room's outline (where the points stop), cut to WALL_M high, facing into the room
+    walls   the room's outline (where the points stop), as high as the room (or cut to `wall` metres,
+            a doll's-house cut), facing into the room
     blocks  the floor is cut into squares; each square with enough in it between the floor and below
-            the ceiling becomes a column as tall as what stands there, in its colour. Neighbouring
+            the ceiling becomes a column as tall as what stands there (up to the first gap: a lamp or a
+            truss hanging above is not a pillar), in its colour. Neighbouring
             squares of the same height and about the same colour are merged into one box (greedily,
             row by row), so a sofa is a few boxes and a pair of slippers one small one.
 
@@ -42,13 +44,15 @@ QUALITY = {  # square size, height step, colour tolerance for merging (0-255), G
     "medium": {"cell": 0.12, "step": 0.08, "merge_dc": 60, "min_points": 12},
     "low": {"cell": 0.30, "step": 0.15, "merge_dc": 90, "min_points": 25},
 }
-WALL_M = 1.0        # walls are cut to this height
+WALL_M = None       # walls as high as the room; a number cuts them (and everything taller) to it
 MIN_TOP_M = 0.05    # a square needs something at least this high
-TALL_M = 1.5        # a square standing taller is wall, a curtain or a tall cupboard: shown as wall
+TALL_M = 1.5        # with walls cut: a square standing taller is wall, a curtain or a tall cupboard, cut like the walls
 OUTLINE_PCT = 3     # the room's outline: where all but this percent of the points are inside, each side
 CEILING_GAP_M = 0.3  # ignore the top of the room (ceiling, lamps)
 EDGE_M = 0.35       # squares this close to the outline are wall, not furniture
 SIDE_SHADE = 0.82   # block sides a touch darker than their tops
+STANDS_M = 1.6      # a column is something standing on the floor: its lowest part is below eye height (its foot may be hidden behind a desk) ...
+GAP_M = 0.6         # ... and it goes up without a gap bigger than this (lamps and trusses above are not columns)
 
 
 def _quad(v, c, t, corners, colour):
@@ -56,6 +60,18 @@ def _quad(v, c, t, corners, colour):
     base = len(v)
     v.extend(corners); c.extend([colour] * 4)
     t.extend([(base, base + 1, base + 2), (base, base + 2, base + 3)])
+
+
+def stack_top(heights):
+    """How high the thing standing on this square goes: from its lowest part up to the first gap of
+    GAP_M or more (what hangs above, like a lamp or a truss, is not part of it). None when nothing
+    here starts below STANDS_M."""
+    h = np.sort(heights)
+    if h[0] > STANDS_M:
+        return None
+    gaps = np.flatnonzero(np.diff(h) > GAP_M)
+    run = h[: gaps[0] + 1] if len(gaps) else h
+    return float(np.percentile(run, 90))
 
 
 def _boxes(grid, merge_dc):
@@ -80,16 +96,21 @@ def _boxes(grid, merge_dc):
     return boxes
 
 
-def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hide=True):
+def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hide=True, floor=None, min_points=None):
     """Gaussians (positions, 0-255 colours) -> (vertices, normals, colours, triangles) on the given up
-    axis. `cell` overrides the quality's square size; hide=False keeps hidden faces (for comparison)."""
+    axis. `cell` overrides the quality's square size; hide=False keeps hidden faces (for comparison).
+    `floor` is the floor's height on the up axis when known: in a room full of desks the busiest low
+    band (what is found otherwise) can be the desk tops rather than the floor."""
     q = dict(QUALITY[quality])
     if cell is not None:
         q["cell"] = cell
+    if min_points is not None:  # a known sparse splat (a synthetic one) needs fewer Gaussians per square
+        q["min_points"] = min_points
+    need = q["min_points"]
     cell = q["cell"]
     flat, height = hz.split_up(np.asarray(positions, float), up)
     rgb = np.asarray(colours, float)
-    floor = hz.floor_height(height, np.ones(len(height), bool))
+    floor = hz.floor_height(height, np.ones(len(height), bool)) if floor is None else float(floor)
     h = height - floor
     top_of_room = float(np.percentile(h, 99))
     (x0, y0), (x1, y1) = np.percentile(flat, OUTLINE_PCT, axis=0), np.percentile(flat, 100 - OUTLINE_PCT, axis=0)
@@ -100,7 +121,8 @@ def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hi
     near_edge = (flat[:, 0] < x0 + EDGE_M) | (flat[:, 0] > x1 - EDGE_M) | (flat[:, 1] < y0 + EDGE_M) | (flat[:, 1] > y1 - EDGE_M)
     walls = near_edge & (h > 0.5)
     wall_rgb = tuple(np.median(rgb[walls], 0).astype(int)) if walls.any() else (220, 218, 210)
-    wall = min(wall, max(0.3, top_of_room))
+    wall = max(0.3, top_of_room) if wall is None else min(wall, max(0.3, top_of_room))
+    cut = WALL_M is not None or wall < top_of_room - 1e-6  # a doll's-house cut was asked for
     # Walls go clockwise round the room seen from above, so each faces into the room.
     for a, b in (((x0, y0), (x0, y1)), ((x0, y1), (x1, y1)), ((x1, y1), (x1, y0)), ((x1, y0), (x0, y0))):
         _quad(v, c, t, [(a[0], a[1], 0), (b[0], b[1], 0), (b[0], b[1], wall), (a[0], a[1], wall)], wall_rgb)
@@ -115,10 +137,10 @@ def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hi
         bounds = list(starts[1:]) + [len(order)]
         hs, cs = h[inside][order], rgb[inside][order]
         for key, s, e in zip(map(tuple, keys), starts, bounds):
-            if e - s >= q["min_points"]:
-                top = float(np.percentile(hs[s:e], 90))
-                if top >= MIN_TOP_M:
-                    if top > TALL_M:  # walls inside the outline, curtains, tall cupboards: wall, like the outer ones
+            if e - s >= need:
+                top = stack_top(hs[s:e])
+                if top is not None and top >= MIN_TOP_M:
+                    if cut and top > TALL_M:  # cut walls: pillars, curtains, tall cupboards are cut like them
                         grid[key] = (wall, np.array(wall_rgb, float), e - s)
                     else:
                         grid[key] = (max(q["step"], round(top / q["step"]) * q["step"]), np.median(cs[s:e], 0), e - s)
@@ -131,7 +153,7 @@ def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hi
             top = max(set(tops), key=tops.count)  # the most common neighbouring height
             grid[k] = (top, np.mean([g[1] for g in around if g[0] == top], 0), 2 * q["min_points"])
     # Lone specks (no neighbour, few Gaussians) are noise.
-    grid = {k: g for k, g in grid.items() if g[2] >= 2 * q["min_points"] or any((k[0] + di, k[1] + dj) in grid for di, dj in near)}
+    grid = {k: g for k, g in grid.items() if g[2] >= 2 * need or any((k[0] + di, k[1] + dj) in grid for di, dj in near)}
 
     boxes = _boxes(grid, q["merge_dc"])
     top_of = {}
@@ -188,7 +210,7 @@ def _normals(verts, tris):
     return (n / (np.linalg.norm(n, axis=1, keepdims=True) + 1e-9)).astype(np.float32)
 
 
-def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M):
+def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M, floor=None, min_points=None):
     """A trained .splat file -> the room as blocks (faint and huge Gaussians left out, as splat_mesh.from_splat)."""
     rec = np.frombuffer(bytes(data), sr.RECORD)
     keep = rec["rgba"][:, 3] >= 64
@@ -199,7 +221,7 @@ def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M
     pos = rec["pos"].astype(np.float64)
     if frame is not None:
         pos, up = room_frame.to_room(pos, frame), "z"
-    return build(pos, rec["rgba"][:, :3], up, quality, cell, wall), up
+    return build(pos, rec["rgba"][:, :3], up, quality, cell, wall, floor=floor, min_points=min_points), up
 
 
 def write(v, n, c, t, path, up, extra=()):
@@ -213,7 +235,7 @@ def main():
     ap.add_argument("--frame"), ap.add_argument("--up", default="-y")
     ap.add_argument("--quality", choices=list(QUALITY), default="high")
     ap.add_argument("--cell", type=float, help="square size in metres, instead of the quality's")
-    ap.add_argument("--wall", type=float, default=WALL_M)
+    ap.add_argument("--wall", type=float, default=WALL_M, help="cut walls (and anything taller) to this many metres, like a doll's house")
     a = ap.parse_args()
     (v, n, c, t), up = from_splat(open(a.splat, "rb").read(), room_frame.load(a.frame) if a.frame else None, a.up, a.quality, a.cell, a.wall)
     write(v, n, c, t, a.out, up)

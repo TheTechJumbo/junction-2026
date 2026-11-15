@@ -1,5 +1,5 @@
 import {ApiClient, ApiError, TIMEZONE, localDay, timeLabel, sortedEvents, medicationOpenings} from './client.js';
-import {Home3D, homeSummary} from './home3d.js';
+import {homeSummary} from './home-data.js';
 import {DAYPARTS, dayFraction, dayState, daypart, mood, shiftDay, sunPosition, sunTimes} from './day.js';
 
 const $ = id => document.getElementById(id);
@@ -359,9 +359,14 @@ $('close-info').addEventListener('click', () => $('info-dialog').close());
 
 // ---------- The home in 3D ----------
 // home3d.js: the mesh, trip hazards to clear up (Now) and last night's walk (Last night).
-const home3d = new Home3D({$, api, plain});
+// The viewer (home3d.js and space.js) is fetched the first time it is opened, not on every visit.
+let home3d;
+async function viewer() {
+  if (!home3d) { const {Home3D} = await import('./home3d.js'); home3d = new Home3D({$, api, plain}); }
+  return home3d;
+}
 const live = () => !demo && Boolean(api.token);
-const openHome = (tab, focusFirst = false) => home3d.open({tab, live: live(), day: $('day').value || localDay(), focusFirst});
+const openHome = async (tab, focusFirst = false) => (await viewer()).open({tab, live: live(), day: $('day').value || localDay(), focusFirst});
 $('space-button').addEventListener('click', () => openHome('now'));
 $('tidy-button').addEventListener('click', () => openHome('now', true));
 $('night-button').addEventListener('click', () => openHome('night'));

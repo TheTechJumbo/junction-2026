@@ -1,0 +1,5 @@
+# The splats are large: fetch them (see README.md), never commit them.
+*.splat
+room/
+# ... except the small synthetic one the default view needs (3.7 MB, made by home.py)
+!home/home.splat
