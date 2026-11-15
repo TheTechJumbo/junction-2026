@@ -42,6 +42,6 @@ test('the example room parses: every index valid, up is z', () => {
   const buffer = readFileSync(new URL('../fixtures/home.ply', import.meta.url));
   const mesh = parsePly(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
   assert.equal(mesh.up, 'z');
-  assert.ok(mesh.indices.length > 100000);
+  assert.ok(mesh.indices.length > 300 && mesh.cull); // the example home as blocks, wound for back-face culling
   assert.ok(mesh.indices.every(i => i < mesh.positions.length / 3));
 });
