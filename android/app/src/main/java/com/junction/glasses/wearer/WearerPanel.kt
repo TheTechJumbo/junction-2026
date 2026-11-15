@@ -40,6 +40,8 @@ class WearerPanel(context: Context) : LinearLayout(context) {
         contentDescription = "Glasses preview"
     }
     private val status = text("", 15f, SOFT)
+    private val micPulse = MicPulse(context)
+    private lateinit var mic: GlyphView
     private var last: Card? = null
 
     init {
@@ -64,15 +66,36 @@ class WearerPanel(context: Context) : LinearLayout(context) {
             addView(askTile(Glyph.DOOR, "Door?", "Did I lock the door?"), tileParams())
             addView(askTile(Glyph.KEY, "Keys?", "Where are my keys?"), tileParams())
         }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(112)).apply { topMargin = dp(12) })
+        // The microphone, with rings behind it: a burst when pressed, ripples while the phone listens.
         addView(FrameLayout(context).apply {
-            addView(GlyphView(context).apply {
+            addView(micPulse.apply { micRadius = dp(44).toFloat() }, FrameLayout.LayoutParams(dp(176), dp(176), Gravity.CENTER))
+            mic = GlyphView(context).apply {
                 data = Glyphs.MIC; color = NIGHT; stroke = 2.2f
                 background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(AMBER) }
                 setPadding(dp(22), dp(22), dp(22), dp(22))
-                contentDescription = "Ask with your voice"; isClickable = true; setOnClickListener { onMic() }
-            }, FrameLayout.LayoutParams(dp(88), dp(88), Gravity.CENTER))
-        }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(104)).apply { topMargin = dp(12) })
+                contentDescription = "Ask with your voice"; isClickable = true
+                setOnClickListener { pressed(); onMic() }
+            }
+            addView(mic, FrameLayout.LayoutParams(dp(88), dp(88), Gravity.CENTER))
+        }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(176)))
     }
+
+    /** The press: the button squashes and springs back, and a ring bursts out. */
+    private fun pressed() {
+        micPulse.burst()
+        mic.animate().cancel()
+        mic.animate().scaleX(0.84f).scaleY(0.84f).setDuration(90).withEndAction {
+            mic.animate().scaleX(1f).scaleY(1f).setDuration(380).setInterpolator(android.view.animation.OvershootInterpolator(3f)).start()
+        }.start()
+    }
+
+    /** While the phone listens, rings ripple out from the microphone; [setMicLevel] swells its glow. */
+    fun setListening(on: Boolean) {
+        micPulse.setListening(on)
+        mic.contentDescription = if (on) "Listening. Ask your question" else "Ask with your voice"
+    }
+    val isListening get() = micPulse.listening
+    fun setMicLevel(rmsDb: Float) = micPulse.setLevel(rmsDb)
 
     fun setClock(now: LocalTime) { clock.text = "%02d:%02d".format(now.hour, now.minute) }
     fun setStatus(message: String) { status.text = message }
