@@ -3,6 +3,7 @@
 machine later. Uses video_map.py from the code deployed there with the workers (iridis/deploy_from_laptop.sh).
 
     python live/remote_train.py FRAMES_OR_VIDEO NAME OUT [--host iridis] [--root DIR] [--launch slurm|direct]
+    python live/remote_train.py - NAME OUT --fetch      (the results of training NAME, already ended)
 
 Where it runs, as settings (the relay passes its own):
   BEACON_TRAIN_HOST    SSH host alias (default iridis)
@@ -119,6 +120,17 @@ def train(source, name, out, host=None, root=None, launch=None, steps=7000, keyf
     log(f"{launch} job {job} started on {host}")
     while time.time() - t0 < WAIT_S and running():
         time.sleep(20)
+    got = bring_back(host, data, out, log)
+    log(f"job {job} {got['state']} in {time.time() - t0:.0f} s")
+    return {**got, "job": job, "seconds": round(time.time() - t0), "log": f"{host}:{job_log}",
+            "error": got["error"] if got["state"] == "done" or got["error"] != "no trained splat" else f"no trained splat: see {host}:{job_log}"}
+
+
+def bring_back(host, data, out, log=print):
+    """A finished training's results from host:DATA/out into OUT (BRING, the renders, the keyframes as kfNNN.jpg, the
+    fly-through also as WebM). Returns {"state": "done" or "failed", "summary", "error"}."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
     for f in BRING:
         _fetch(host, f"{data}/out/{f}", cwd=out)
     (out / "renders").mkdir(exist_ok=True)
@@ -136,10 +148,28 @@ def train(source, name, out, host=None, root=None, launch=None, steps=7000, keyf
     except (OSError, ValueError):
         summary = {}
     ok = (out / "trained.splat").exists()
-    error = None if ok else (summary.get("trained") or f"no trained splat: see {host}:{job_log}")
-    log(f"job {job} {'done' if ok else 'failed'} in {time.time() - t0:.0f} s")
-    return {"state": "done" if ok else "failed", "job": job, "seconds": round(time.time() - t0), "summary": summary,
-            "error": error, "log": f"{host}:{job_log}"}
+    return {"state": "done" if ok else "failed", "summary": summary, "error": None if ok else (summary.get("trained") or "no trained splat")}
+
+
+def remote_data(name, host=None, root=None):
+    """(host, the folder of training NAME on it): where train() put it."""
+    host = host or os.environ.get("BEACON_TRAIN_HOST") or "iridis"
+    root = _ssh(host, f"cd {root or os.environ.get('BEACON_REMOTE_ROOT') or DEFAULT_ROOT} && pwd").strip()
+    return host, f"{root}/trained/{name}"
+
+
+def finished(name, host=None, root=None):
+    """Has training NAME ended on the GPU machine? video_map.py writes summary.json last."""
+    host, data = remote_data(name, host, root)
+    return _ssh(host, f"test -f {data}/out/summary.json && echo yes || true").strip() == "yes"
+
+
+def fetch(name, out, host=None, root=None, log=print):
+    """The results of a training that already ended (a relay restarted while it ran, say) into OUT: bring_back."""
+    host, data = remote_data(name, host, root)
+    got = bring_back(host, data, out, log)
+    log(f"{name}: {got['state']} ({out})")
+    return got
 
 
 if __name__ == "__main__":
@@ -153,6 +183,10 @@ if __name__ == "__main__":
     ap.add_argument("--steps", type=int, default=7000)
     ap.add_argument("--keyframes", type=int, default=96)
     ap.add_argument("--remote-frames", help="the frames are already on the GPU machine, in this folder there (source is ignored)")
+    ap.add_argument("--fetch", action="store_true", help="only bring back the results of training NAME, already ended, into OUT (source is ignored)")
     args = ap.parse_args()
+    if args.fetch:
+        print(json.dumps(fetch(args.name, args.out, args.host, args.root), indent=1, default=str))
+        raise SystemExit(0)
     print(json.dumps(train(args.source, args.name, args.out, args.host, args.root, args.launch, args.steps, args.keyframes,
                            remote_frames=args.remote_frames), indent=1))

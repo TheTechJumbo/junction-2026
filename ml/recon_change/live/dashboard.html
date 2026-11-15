@@ -59,7 +59,7 @@
   .livegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; align-items: start; }
   .livegrid .wide { grid-column: 1 / -1; }
   .frame { position: relative; line-height: 0; }
-  .frame img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); background: #000; min-height: 120px; }
+  .frame img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); background: #000; min-height: 120px; cursor: crosshair; }
   .box { position: absolute; border: 2px solid var(--violet); border-radius: 3px; pointer-events: none; }
   .box.weak { border-style: dashed; border-color: var(--dim); }
   .box span { position: absolute; left: -2px; top: -20px; font: 11px/18px ui-sans-serif, system-ui, sans-serif; background: var(--violet); color: #000; padding: 0 5px; border-radius: 3px; white-space: nowrap; }
@@ -136,6 +136,7 @@
       <h2>Camera</h2>
       <div class="frame" id="frameBox"><img id="frameImg" alt="The newest photo that reached the relay"></div>
       <div class="meta" id="frameNote">No photo yet.</div>
+      <div class="meta" id="nameNote">Tap a spot on the photo to name it as a place: the glasses then point to it.</div>
       <div class="strip" id="frameStrip" aria-label="Earlier photos"></div>
     </div>
     <div class="card">
@@ -441,6 +442,7 @@ async function newFrame(fix) {  // the photo behind the newest fix, and a strip 
       for (const f of live.frames.splice(8)) URL.revokeObjectURL(f.url);
       $('frameStrip').replaceChildren(...live.frames.map(f => el('figure', {}, el('img', { src: f.url, alt: 'An earlier photo' }), el('figcaption', { textContent: f.note }))));
     }
+    live.frameZone = fix.zone;
     const items = fix.items || [], looked = fix.items_looked_for || [];
     const when = clock(fix.ts);
     $('frameNote').dataset.short = `${when} ${fix.state}`;
@@ -448,6 +450,30 @@ async function newFrame(fix) {  // the photo behind the newest fix, and a strip 
       ' · item finder: ' + (!looked.length ? (fix.items_note || 'off on this worker') : items.length ? `found ${items.map(i => i.name).join(', ')}` : `looked for ${looked.join(', ')}, none seen`);
   } catch { /* keep what is on screen */ }
 }
+
+// Name a spot on the photo shown: a place the glasses point to. The relay places it from this photo's own fix (POST
+// /waypoint?live=1 with this very photo, so a newer one cannot take its place); no picture is added to the room.
+$('frameImg').addEventListener('click', async (e) => {
+  const img = $('frameImg');
+  if (!img.src || !live.frameZone || !img.naturalWidth) return;
+  const r = img.getBoundingClientRect();
+  const u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
+  if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return;
+  const name = (prompt('Name this spot (the glasses will point to it):') || '').trim();
+  if (!name) return;
+  const zone = live.frameZone;
+  $('nameNote').textContent = `Placing "${name}" in room "${zone}"…`;
+  try {
+    const photo = await (await fetch(img.src)).blob();
+    const reply = await fetch(withKey(`/waypoint?zone=${encodeURIComponent(zone)}&name=${encodeURIComponent(name)}&live=1&u=${u.toFixed(4)}&v=${v.toFixed(4)}`),
+                              { method: 'POST', body: photo });
+    const got = await reply.json();
+    $('nameNote').textContent = got.ok ? `"${name}" named at ${got.position.map(c => c.toFixed(1)).join(', ')} m: the glasses point to it from their next photo.`
+                                       : `Could not name "${name}": ${got.error}`;
+  } catch (err) {
+    $('nameNote').textContent = `Could not name "${name}": ${err.message || err}`;
+  }
+});
 
 async function refreshBaseline(zone) {  // the baseline pictures, with the named places on them, every 30 s or on a new room
   if (live.strip === zone && Date.now() - live.stripAt < 30000) return;

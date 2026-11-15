@@ -237,6 +237,16 @@ def pick_keyframes(frames, most, change=0.9):
     return picked
 
 
+def zone_places(zone, count):
+    """The zone's named places: those named in one of its `count` pictures (frame, u, v), and those with a map position
+    of their own (position: named on a live photo, or found by the item finder)."""
+    try:
+        places = json.loads((zone / "waypoints.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return [p for p in places if ("frame" in p and p["frame"] < count) or ("frame" not in p and p.get("position"))]
+
+
 def recording_map(model, job, req):
     """A room recorded as a stream of frames (relay POST /recording, stored under recordings/<zone>/<session>/frames):
     the keyframes of everything so far become the zone's pictures (square, see square_up), then its room map is built
@@ -269,22 +279,22 @@ def recording_map(model, job, req):
 def room_map(model, job, req):
     """The zone's baseline pictures in one pass (up to MAP_FRAMES, plus every picture a place was named in), as one
     splat in map axes: x east, y north, z up, in metres from the first baseline camera, the same axes the position
-    fixes report in (locate.build_frame). Written to out/room.splat. Returns the map's facts for the page."""
+    fixes report in (locate.build_frame). Written to out/room.splat. Returns the map's facts for the page.
+    op "spots": the same pass and axes without the splat: the named places' positions, and req["spots"] (picture
+    spots {frame, u, v}) placed in the map, None where the pass has no depth there. Nothing is added or rebuilt."""
     zone = BASELINES / req["zone"]
     files = sorted(zone.glob("*.jpg"))
     if len(files) < 3:
         raise RuntimeError(f"No baseline for '{req['zone']}' yet. Record the baseline clip first.")
-    try:
-        places = [p for p in json.loads((zone / "waypoints.json").read_text()) if p["frame"] < len(files)]
-    except (OSError, ValueError):
-        places = []
+    places = zone_places(zone, len(files))
+    asked = [s for s in req.get("spots") or [] if 0 <= int(s["frame"]) < len(files)] if req["op"] == "spots" else []
     try:
         known = json.loads((zone / "scale.json").read_text())
     except (OSError, ValueError):
         known = None
     seconds = {}
     spread = np.linspace(0, len(files) - 1, min(MAP_FRAMES, len(files))).round().astype(int)
-    pick = sorted({int(i) for i in spread} | {p["frame"] for p in places})
+    pick = sorted({int(i) for i in spread} | {p["frame"] for p in places if "frame" in p} | {int(s["frame"]) for s in asked})
     frames = [cv2.imread(str(files[i])) for i in pick]
     t0 = time.time()
     recon = rc.reconstruct(model, frames, long_side=LONG_SIDE)
@@ -300,12 +310,22 @@ def room_map(model, job, req):
         shown = valid & (agree >= 1)
     seconds["agree"] = round(time.time() - t0, 2)
     slot = {f: i for i, f in enumerate(pick)}
-    spots = {p["name"]: locate.spot(recon, {**p, "frame": slot[p["frame"]]}) for p in places}
+    spots = {p["name"]: locate.spot(recon, {**p, "frame": slot[p["frame"]]}) for p in places if "frame" in p}
     spots = {name: x for name, x in spots.items() if x is not None}
     room = locate.build_frame(recon, base, valid, TYPICAL_M, "surface", known, spots)
     if not (np.isfinite(room["metres"]) and np.all(np.isfinite(room["origin"]))):
         raise RuntimeError("The room could not be rebuilt from these pictures: record the baseline again, slower and "
                            "with more of the same things in neighbouring pictures.")
+    named = [{"name": n, "position": [round(float(v), 3) for v in locate.to_map(room, x)[0]]} for n, x in spots.items()]
+    named += [{"name": p["name"], "position": p["position"], **({"source": p["source"]} if p.get("source") else {})}
+              for p in places if "frame" not in p]
+    if req["op"] == "spots":
+        placed = []
+        for s in asked:
+            x = locate.spot(recon, {"frame": slot[int(s["frame"])], "u": float(s["u"]), "v": float(s["v"])})
+            placed.append(None if x is None else [round(float(v), 4) for v in locate.to_map(room, x)[0]])
+        return {"frames": len(frames), "of": len(files), "places": named, "spots": placed, "metres_from": room["metres_from"],
+                "seconds": seconds, **INFO}
     nothing = {"points": np.zeros((0, 3)), "frames": np.zeros(0, int), "pixels": np.zeros(0, int), "member": np.zeros(0, int)}
     detail = {"after": base, "valid": shown, "appeared": nothing, "gone": nothing}
     pos, scale, rgba, quat = splat.gaussians(recon, detail, MAP_GAUSSIANS, max_frames=len(base))
@@ -325,7 +345,7 @@ def room_map(model, job, req):
     looks = [(recon.E[q][2, :3] @ room["east"], recon.E[q][2, :3] @ room["north"]) for q in base]
     return {"frames": len(frames), "of": len(files), "gaussians": int(keep.sum()), "metres_from": room["metres_from"],
             "metres_note": room["metres_note"], "up_from": room["up_how"]["from"],
-            "places": [{"name": n, "position": [round(float(v), 2) for v in locate.to_map(room, x)[0]]} for n, x in spots.items()],
+            "places": named,
             "cameras": [{"frame": int(f), "position": [round(float(v), 2) for v in c],
                          "heading_deg": round(float(np.degrees(np.arctan2(*l))), 1)} for f, c, l in zip(pick, cameras, looks)],
             "fov_deg": round(float(np.degrees(2 * np.arctan(recon.depth.shape[2] / 2 / np.median(recon.K[:, 0, 0])))), 1),
@@ -463,10 +483,7 @@ def where(model, job, req):
     files = sorted(zone.glob("*.jpg"))
     if not files:
         raise RuntimeError(f"No baseline for '{req['zone']}' yet. Record the baseline clip first.")
-    try:
-        places = [p for p in json.loads((zone / "waypoints.json").read_text()) if p["frame"] < len(files)]
-    except (OSError, ValueError):
-        places = []
+    places = zone_places(zone, len(files))
     try:  # one known distance between two named places, written by the carer's page
         known = json.loads((zone / "scale.json").read_text())
     except (OSError, ValueError):
@@ -496,7 +513,7 @@ def where(model, job, req):
         if PICK == "similar" and per_picture is not None:  # the origin, and the pictures that show most of this view
             spread = [0] + [int(i) for i in np.argsort(-per_picture) if i != 0][:max(0, n - 1)]
         # a place or a watched spot needs the picture it was picked in
-        pick = sorted({int(i) for i in spread} | {p["frame"] for p in places} | {s["frame"] for s in spots})
+        pick = sorted({int(i) for i in spread} | {p["frame"] for p in places if "frame" in p} | {s["frame"] for s in spots})
         base = [cv2.imread(str(files[i])) for i in pick]
         new = [crop_like(f, base[0]) for f in seen]
         took = {"frames": round(time.time() - t0, 2)}
@@ -507,7 +524,7 @@ def where(model, job, req):
         slot = {f: i for i, f in enumerate(pick)}
         result, marks, valid = locate.locate(
             recon, list(range(len(base))), list(range(len(base), len(base) + len(new))),
-            [{**p, "frame": slot[p["frame"]]} for p in places], typical_m=TYPICAL_M, known=known)
+            [{**p, "frame": slot[p["frame"]]} if "frame" in p else p for p in places], typical_m=TYPICAL_M, known=known)
         took["locate"] = round(time.time() - t0, 2)
         return base, new, recon, result, marks, valid, took, pick
 
@@ -528,15 +545,25 @@ def where(model, job, req):
     out.mkdir(exist_ok=True)
     cv2.imwrite(str(out / "view.jpg"), new[-1], [cv2.IMWRITE_JPEG_QUALITY, 88])
     seconds["locate"] = round(seconds["locate"] + time.time() - t0, 2)
-    result.update({"items": [], "items_looked_for": ITEMS, "items_checked": [], "items_candidates": []})
-    if ITEMS:  # lost items: found in the newest picture, placed with this fix's depth (items.py)
+    point = req.get("point")  # a spot picked on this photo (relay POST /waypoint?live=1): where it is on the map
+    if point and result["state"] != "lost" and getattr(recon, "room", None) is not None:
+        h, w = seen[-1].shape[:2]  # u, v are in the photo as sent; the model saw its middle cropped like the pictures
+        ch, cw = new[-1].shape[:2]
+        u, v = (point["u"] * w - (w - cw) / 2) / cw, (point["v"] * h - (h - ch) / 2) / ch
+        x = locate.spot(recon, {"frame": len(base) + len(new) - 1, "u": u, "v": v}) if 0 <= u <= 1 and 0 <= v <= 1 else None
+        result["point"] = None if x is None else [round(float(c), 3) for c in locate.to_map(recon.room, x)[0]]
+        if x is None:
+            result["point_note"] = "outside the part of the photo the model sees" if not (0 <= u <= 1 and 0 <= v <= 1) else "no depth there"
+    looking = ITEMS + [n for n in req.get("look_for") or [] if n not in ITEMS]  # the relay's own (BEACON_AUTO_PLACES)
+    result.update({"items": [], "items_looked_for": looking, "items_checked": [], "items_candidates": []})
+    if looking:  # lost items: found in the newest picture, placed with this fix's depth (items.py)
         t0 = time.time()
         if GPU.get("small"):  # hand VGGT's spare working memory back first: the detector needs its own on a 6 GB card
             GPU["torch"].cuda.empty_cache()
         try:
             if "model" not in ITEM_DETECTOR:
                 raise RuntimeError(ITEM_DETECTOR.get("error", "not loaded"))
-            found, item_marks = items.look(ITEM_DETECTOR["model"], ITEMS, job / req["file"], seen[-1], base[0], recon,
+            found, item_marks = items.look(ITEM_DETECTOR["model"], looking, job / req["file"], seen[-1], base[0], recon,
                                            list(range(len(base))), len(base) + len(new) - 1, valid, result["state"], out,
                                            remembered=req.get("remembered"))
             result.update(found)
@@ -570,13 +597,15 @@ def where(model, job, req):
         # room map includes it (the relay asks for one), and the next fix can pick it.
         unplaced = result["state"] == "lost" and float(per_picture.max()) < 0.9
         coverage["unplaced"] = bool(unplaced)
-        if NEW_VIEW > 0 and (coverage["mapped_share"] < NEW_VIEW or unplaced) and usable and len(files) < MAX_PICTURES:
+        grows = req.get("grow", True)  # the relay: not for a zone with a trained splat, unless asked (?grow=1)
+        if NEW_VIEW > 0 and (coverage["mapped_share"] < NEW_VIEW or unplaced) and grows and usable and len(files) < MAX_PICTURES:
             name = f"{len(files):02d}.jpg"
             h, w = first.shape[:2]
             cv2.imwrite(str(zone / name), cv2.resize(view, (w, h), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 92])
             result["picture_added"] = {"name": name, "frame": len(files), "pictures": len(files) + 1}
         elif NEW_VIEW > 0 and (coverage["mapped_share"] < NEW_VIEW or unplaced):
-            result["picture_not_added"] = "too dark or blurred" if not usable else f"the zone has {MAX_PICTURES} pictures"
+            result["picture_not_added"] = ("growth is off for this zone (it has a trained splat; ?grow=1 grows it)" if not grows
+                                           else "too dark or blurred" if not usable else f"the zone has {MAX_PICTURES} pictures")
     result["seconds"] = seconds
     result["frames"] = {"baseline": len(base), "new": len(new)}
     result["median_depth"] = round(float(np.median(recon.depth)), 4)
@@ -640,7 +669,8 @@ def main():
             try:
                 req = json.loads((job / "request.json").read_text())
                 run = {"baseline": lambda: set_baseline(job, req), "locate": lambda: where(model, job, req),
-                       "map": lambda: room_map(model, job, req), "recording_map": lambda: recording_map(model, job, req)}
+                       "map": lambda: room_map(model, job, req), "spots": lambda: room_map(model, job, req),
+                       "recording_map": lambda: recording_map(model, job, req)}
                 result = run.get(req["op"], lambda: check(model, job, req))()
                 memory = ""
                 if on_gpu:  # the most this job held at once (the model's weights included), for the dashboard

@@ -85,6 +85,33 @@ def worker_state(device):
     return {"running": running, "age_s": age, "info": info}
 
 
+def job_options(req):
+    """What else a job may ask, checked: grow (may a fix add its photo to the zone's pictures), point (a spot picked on
+    the photo, u and v from 0 to 1), look_for (up to 8 more names for the item finder) and spots (picture spots
+    {frame, u, v} to place, op "spots")."""
+    told = {"grow": req.get("grow") is not False}
+    point = req.get("point")
+    if isinstance(point, dict):
+        try:
+            u, v = float(point["u"]), float(point["v"])
+            if 0 <= u <= 1 and 0 <= v <= 1:
+                told["point"] = {"u": u, "v": v}
+        except (KeyError, TypeError, ValueError):
+            pass
+    names = [" ".join(str(n).split())[:40] for n in req.get("look_for") or [] if isinstance(n, str)]
+    told["look_for"] = [n for n in names if re.fullmatch(r"[\w '-]{1,40}", n)][:8]
+    spots = []
+    for s in (req.get("spots") or [])[:600] if isinstance(req.get("spots"), list) else []:
+        try:
+            frame, u, v = int(s["frame"]), float(s["u"]), float(s["v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= frame < 1000 and 0 <= u <= 1 and 0 <= v <= 1:
+            spots.append({"frame": frame, "u": u, "v": v})
+    told["spots"] = spots
+    return told
+
+
 def places_of(zone):
     try:
         return json.loads((BASELINES / zone / "waypoints.json").read_text())
@@ -109,7 +136,20 @@ def handle_places(op, zone, req):
     if not name:
         return {"ok": False, "error": "a place needs a name"}, b""
     places = [p for p in places_of(zone) if p["name"] != name]
-    if not req.get("delete"):
+    if not req.get("delete") and req.get("position") is not None:  # a map position of its own: named live, or found
+        try:
+            position = [float(c) for c in req["position"]][:3]
+        except (TypeError, ValueError):
+            position = []
+        if len(position) != 3 or not all(math.isfinite(c) and abs(c) < 1000 for c in position):
+            return {"ok": False, "error": "position must be three numbers (east, north, up in map metres)"}, b""
+        place = {"name": name, "position": [round(c, 3) for c in position],
+                 "source": "auto" if req.get("auto") else "map" if req.get("source") == "map" else "live"}
+        for key in ("views", "score"):
+            if isinstance(req.get(key), (int, float)) and math.isfinite(req[key]):
+                place[key] = round(float(req[key]), 3)
+        places.append(place)
+    elif not req.get("delete"):
         frame, u, v = int(req["frame"]), float(req["u"]), float(req["v"])
         if not (0 <= frame < frames and 0 <= u <= 1 and 0 <= v <= 1):
             return {"ok": False, "error": "frame must be a baseline picture, u and v between 0 and 1"}, b""
@@ -491,9 +531,9 @@ def handle(req, blob):
         return handle_recording(op, req, blob)
     if op == "recording_map" and not re.fullmatch(SESSION_NAME, str(req.get("session", ""))):
         return {"ok": False, "error": "bad request: session"}, b""
-    if op not in ("baseline", "check", "locate", "map", "recording_map"):
+    if op not in ("baseline", "check", "locate", "map", "spots", "recording_map"):
         return {"ok": False, "error": "bad request: unknown op"}, b""
-    if not blob and op not in ("map", "recording_map"):  # made from the zone's own pictures or recording: nothing is sent
+    if not blob and op not in ("map", "spots", "recording_map"):  # made from the zone's own pictures or recording: nothing is sent
         return {"ok": False, "error": "empty clip"}, b""
     if age is None or age > STALE_S:
         if LOCAL:
@@ -508,7 +548,8 @@ def handle(req, blob):
     if blob:
         (job / clip).write_bytes(blob)
     (job / "request.json").write_text(json.dumps({"op": op, "zone": req["zone"], "file": clip, "view": bool(req.get("view")),
-                                                  "remembered": remembered(req), "session": str(req.get("session", ""))}))
+                                                  "remembered": remembered(req), "session": str(req.get("session", "")),
+                                                  **job_options(req)}))
     (job / "READY").touch()  # last, so the worker never sees a half-written job
 
     deadline = time.time() + WAIT_S
