@@ -26,9 +26,9 @@ def check(name, ok):
         failures.append(name)
 
 
-def top_at(v, x, y, r=0.0):
+def top_at(v, x, y, r=0.0, tris=None):
     """The highest flat top face that covers (x, y): blocks only have vertices at their corners."""
-    tri = v[t_global]
+    tri = v[t_global if tris is None else tris]
     flat = np.ptp(tri[:, :, 2], axis=1) < 1e-6
     lo, hi = tri[:, :, :2].min(1) - r, tri[:, :, :2].max(1) + r
     over = flat & (lo[:, 0] <= x) & (x <= hi[:, 0]) & (lo[:, 1] <= y) & (y <= hi[:, 1])
@@ -48,6 +48,23 @@ check("no hole in the bed's flat top", all(top_at(v, x, y) >= 0.4 for x in np.ar
 vy = np.stack([pos[:, 0], -pos[:, 2], pos[:, 1]], 1)  # the same room with y down
 v2, _, _, t2 = lowpoly.build(vy, rgb, up="-y", cell=0.1)
 check("a y-down room gives the same blocks on its own axis", len(t2) == len(t) and np.allclose(np.sort(-v2[:, 1]), np.sort(v[:, 2]), atol=1e-4))
+
+# Detail is a quality level, not a triangle budget: the same room twice over gets about twice the triangles.
+two = np.concatenate([pos, pos + np.array([5.5, 0, 0])])
+_, _, _, t_two = lowpoly.build(two, np.concatenate([rgb, rgb]), up="z", cell=0.1)
+check("twice the room, about twice the triangles (quality, not a budget)", 1.6 <= len(t_two) / len(t) <= 2.4)
+check("named quality levels go from fine to coarse", len(lowpoly.build(pos, rgb, "z", "high")[3]) > len(lowpoly.build(pos, rgb, "z", "medium")[3]) > len(lowpoly.build(pos, rgb, "z", "low")[3]))
+# Hidden faces are never made, and what can be seen is the same.
+vk, _, _, tk = lowpoly.build(pos, rgb, up="z", cell=0.1, hide=False)
+check("hidden faces removed: fewer triangles", len(t) < len(tk))
+check("... and the same tops", all(abs(top_at(v, x, y) - top_at(vk, x, y, tris=tk)) < 1e-6 for x in np.arange(0.5, 4.6, 0.25) for y in np.arange(0.5, 3.6, 0.25)))
+# Wound for back-face culling: tops face up, walls face into the room.
+fnorm = np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]])
+flat_faces = np.ptp(v[t][:, :, 2], axis=1) < 1e-6
+check("every flat face (floor, tops) faces up", (fnorm[flat_faces][:, 2] > 0).all())
+centre = v.mean(0)
+walls = ~flat_faces & (np.abs(v[t][:, :, 0] - v[:, 0].min()).max(1) < 1e-6)  # the wall along the room's west edge
+check("walls face into the room", walls.any() and (fnorm[walls][:, 0] > 0).all())
 
 fv, fn, fc, ft = smesh.mesh(m)[:4]
 sv, _, sc, st = smesh.simplify(fv, fc, ft, 3000)
