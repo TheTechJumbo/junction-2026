@@ -148,6 +148,100 @@ def from_splat(data, voxel=0.05, min_alpha=64, drop_largest=0.01, frame=None):
     return surface_nets(pos, rec["rgba"][:, :3], normals, voxel)
 
 
+def _cluster(v, c, t, size):
+    """One pass of quadric clustering at cell `size`: (vertices, colours, triangles)."""
+    key = np.floor(v / size).astype(np.int64)
+    _, cluster = np.unique(key, axis=0, return_inverse=True)
+    cluster = cluster.ravel()
+    k = int(cluster.max()) + 1
+    a, b, d3 = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+    cross = np.cross(b - a, d3 - a)
+    area = np.linalg.norm(cross, axis=1, keepdims=True) / 2
+    n = cross / (2 * area + 1e-12)
+    off = -(n * a).sum(1, keepdims=True)
+    A = area[:, :, None] * n[:, :, None] * n[:, None, :]        # each face's plane quadric, area weighted
+    B = area * n * off
+    QA, QB = np.zeros((k, 3, 3)), np.zeros((k, 3))
+    for corner in range(3):
+        np.add.at(QA, cluster[t[:, corner]], A)
+        np.add.at(QB, cluster[t[:, corner]], B)
+    count = np.bincount(cluster, minlength=k)[:, None]
+    mean = np.zeros((k, 3)); np.add.at(mean, cluster, v); mean /= count
+    # The point that best fits the planes around the cell (keeps edges and corners), found next to the
+    # cell's mean with a pseudo-inverse so flat or straight cells stay where their vertices were.
+    rhs = -(QB + np.einsum("kij,kj->ki", QA, mean))
+    step = np.einsum("kij,kj->ki", np.linalg.pinv(QA, rcond=1e-3), rhs)
+    pos = mean + np.clip(step, -size, size)
+    col = np.zeros((k, 3)); np.add.at(col, cluster, c.astype(np.float64)); col = (col / count).round().astype(np.uint8)
+    tri = cluster[t]
+    tri = tri[(tri[:, 0] != tri[:, 1]) & (tri[:, 1] != tri[:, 2]) & (tri[:, 0] != tri[:, 2])]
+    _, first = np.unique(np.sort(tri, 1), axis=0, return_index=True)  # the same triangle twice: keep one
+    tri = tri[np.sort(first)]
+    return pos.astype(np.float32), col, tri
+
+
+def parts(t, n_vertices):
+    """Connected part of each vertex (label propagation over the triangles)."""
+    label = np.arange(n_vertices)
+    while True:
+        low = label[t].min(1)
+        before = label.copy()
+        for k in range(3):
+            np.minimum.at(label, t[:, k], low)
+        label = label[label]  # jump to the representative
+        if np.array_equal(label, before):
+            return label
+
+
+def tidy(v, c, t, keep_share=0.01, smooth=3):
+    """A splat's mesh, tidied before simplifying: parts with fewer than keep_share of the triangles
+    (floaters, stray flakes) are dropped, then `smooth` rounds of gentle Laplacian smoothing pull the
+    noisy, doubled sheets of a splat into one calm surface."""
+    v, t = np.asarray(v, np.float64), np.asarray(t, np.int64)
+    label = parts(t, len(v))
+    per_tri = label[t[:, 0]]
+    ids, counts = np.unique(per_tri, return_counts=True)
+    big = set(ids[counts >= keep_share * len(t)].tolist())
+    t = t[np.isin(per_tri, list(big))]
+    used = np.unique(t)
+    remap = np.full(len(v), -1); remap[used] = np.arange(len(used))
+    v, c, t = v[used], np.asarray(c)[used], remap[t]
+    edges = np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]])
+    edges = np.concatenate([edges, edges[:, ::-1]])
+    degree = np.bincount(edges[:, 0], minlength=len(v))[:, None]
+    for _ in range(smooth):
+        total = np.zeros_like(v); np.add.at(total, edges[:, 0], v[edges[:, 1]])
+        v = 0.5 * v + 0.5 * total / np.maximum(degree, 1)
+    return v.astype(np.float32), c, t
+
+
+def simplify(v, c, t, target=10_000, rounds=12):
+    """Fewer triangles, same room: quadric clustering (vertices merged per grid cell and placed where
+    the surrounding planes meet), with the cell size searched until about `target` triangles remain.
+    Returns (vertices, normals, colours, triangles); normals are left for the viewer to work out."""
+    v, t = np.asarray(v, np.float64), np.asarray(t, np.int64)
+    if len(t) <= target:
+        return v.astype(np.float32), np.zeros_like(v, np.float32), c, t
+    span = float(np.max(v.max(0) - v.min(0)))
+    lo, hi = span / 2000, span / 4
+    best = None
+    for _ in range(rounds):
+        size = (lo * hi) ** 0.5
+        pv, pc, pt = _cluster(v, c, t, size)
+        if best is None or abs(len(pt) - target) < abs(len(best[2]) - target):
+            best = (pv, pc, pt)
+        if len(pt) > target:
+            lo = size
+        else:
+            hi = size
+        if abs(len(pt) - target) < 0.08 * target:
+            break
+    pv, pc, pt = best
+    used = np.unique(pt)
+    remap = np.full(len(pv), -1); remap[used] = np.arange(len(used))
+    return pv[used], np.zeros((len(used), 3), np.float32), pc[used], remap[pt]
+
+
 def write_mesh(v, nrm, c, t, path, comments=()):
     """Write a mesh as a binary PLY with vertex normals and colours (the format the dashboard reads).
     comments go in the header; "up z" tells the dashboard's viewer which way is up (default -y, VGGT's)."""
@@ -178,7 +272,7 @@ def write_ply(m, path, include_movable=True, comments=()):
 
 if __name__ == "__main__":
     # A trained splat to the dashboard's mesh:
-    #   python splat_mesh.py trained.splat home.ply [voxel] [up] [--frame room.json]
+    #   python splat_mesh.py trained.splat home.ply [voxel] [up] [--frame room.json] [--triangles 10000]
     # up is the splat's up axis: "-y" for VGGT's coordinates (the default), "z" for z-up scenes. With
     # --frame the mesh is moved into the room map's frame (up z), so the captured walk lines up with it.
     import sys
@@ -191,8 +285,15 @@ if __name__ == "__main__":
         del args[i:i + 2]
     src, out = args[0], args[1]
     voxel = float(args[2]) if len(args) > 2 else 0.05
+    target = None
+    if "--triangles" in args:
+        i = args.index("--triangles")
+        target = int(args[i + 1])
+        del args[i:i + 2]
     up = "z" if frame is not None else (args[3] if len(args) > 3 else "-y")
     v, nrm, c, t = from_splat(open(src, "rb").read(), voxel, frame=frame)
+    if target:
+        v, nrm, c, t = simplify(v, c, t, target)
     write_mesh(v, nrm, c, t, out, comments=[f"up {up}", f"from {src.split('/')[-1]}"])
     print(out, len(v), "vertices", len(t), "triangles")
 

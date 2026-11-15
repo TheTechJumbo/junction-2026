@@ -135,7 +135,10 @@ if __name__ == "__main__":
     out = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     out.mkdir(parents=True, exist_ok=True)
     m = make_map()
-    summary = smesh.write_ply(m, out / "home.ply", comments=["up z", "example home, not a real recording"])
+    import lowpoly
+    v, n, c, t = lowpoly.build(m.splats["pos"], m.splats["rgba"][:, :3], up="z", cell=0.1)  # the family app shows it in blocks
+    smesh.write_mesh(v, n, c, t, out / "home.ply", comments=["up z", "example home, not a real recording", "low-poly"])
+    summary = {"total": {"vertices": len(v), "triangles": len(t)}}
     found = hazards.find(m, PLACES, [tuple(w) for w in WALKS], up="z")
     found.update(generated_at="2026-11-15T07:30:00+02:00", places=PLACES, example=True)
     json.dump(found, open(out / "hazards.json", "w"), indent=1)
