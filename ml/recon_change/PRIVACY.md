@@ -1,18 +1,18 @@
-# Privacy when Iridis is not trusted (JUN-26)
+# Privacy when the GPU server is not trusted (JUN-26)
 
 Seb's requirement: no plain images leave the trusted side. The data must be garbled so it is not easily undone,
-faces must be blurred, and the learnt model (the splat) must come back encrypted too, as if Iridis were a server in a
-country without strict laws. This file covers what Iridis sees, what each measure protects, what was measured, and
+faces must be blurred, and the learnt model (the splat) must come back encrypted too, as if the GPU server were a machine in a
+country without strict laws. This file covers what the GPU server sees, what each measure protects, what was measured, and
 what is still exposed.
 
-## 1. What Iridis sees today
+## 1. What the GPU server sees today
 
 All of it travels over SSH (encrypted in transit). At rest it sits in plain files under
 `/scratch/ase1g23/junction-recon`. That folder is mode 0700, so other cluster users cannot read it. The cluster's
 admins, anyone with root on a login or GPU node, the storage and backup systems, and anyone who later gets the account
 can read all of it.
 
-| What | Where on Iridis | What it shows |
+| What | Where on the GPU server | What it shows |
 |---|---|---|
 | Recording frames (`POST /recording`) | `recordings/<zone>/<session>/frames/*.jpg`, full size (glasses: 1376×1840) | Every person in view. The venue session has 9–22 people a frame (OWLv2). Plus screens, papers, the room |
 | Video uploads (baseline, check, recordings as video) | `queue/<job>/`, `trained/<name>/video.*` | The same, at video frame rate |
@@ -21,7 +21,7 @@ can read all of it.
 | Enrolled item photos | `enrolled/<item>/*.jpg` | Close-ups of the wearer's things |
 | File names and logs | everywhere | Times (`NNNNNN_<ms>.jpg`), zone and item names, the worker's log |
 
-The live position fix also gets its answer (position, heading, distances) computed on Iridis.
+The live position fix also gets its answer (position, heading, distances) computed on the GPU server.
 
 ## 2. The measures, and what each protects
 
@@ -34,20 +34,20 @@ The live position fix also gets its answer (position, heading, distances) comput
 | **Results encrypted** | the job seals; the trusted side decodes | The trained splat and renders lying around in a usable form | As above, while the job runs |
 
 How the key is handled, concretely. The trusted side makes a session master key K and keeps it (a hex file next to
-the results on the laptop). Iridis only ever gets `vault key = HMAC(K, "derive|vault")`. The garbling key
+the results on the laptop). The GPU server only ever gets `vault key = HMAC(K, "derive|vault")`. The garbling key
 `HMAC(K, "derive|garble")` never leaves the trusted side, so even root, holding the vault key, sees garbled frames.
-The vault key is pushed by `ssh iridis srun --jobid=J --overlap ... 'cat > fifo'` with the key on stdin, into a FIFO
+The vault key is pushed by `ssh cluster srun --jobid=J --overlap ... 'cat > fifo'` with the key on stdin, into a FIFO
 in `/dev/shm` (RAM) that the job opened with mode 0600. Tested: srun forwards stdin into a running job, and the FIFO
 holds nothing on disk. Sealed files carry a key id, never the key. Every file has its own derived key, so nonces never
 repeat. A changed, reordered, cut or swapped chunk is refused (`test_vault.py`, which passes on the laptop and on
-Iridis).
+the GPU server).
 
 ### Honest limits
 
 * **Root on the GPU node reads the job's memory**: the vault key, the garbled frames, VGGT's depths and cameras, and
   the splat's geometry. Encryption at rest does nothing against the machine that does the computing. Only
   confidential computing would: an H100 in CC mode inside an AMD SEV-SNP or Intel TDX VM. L4s do not have it, and
-  Iridis does not offer it. The other way out is not to send the data: the laptop's RTX 2060 already runs position
+  the GPU server does not offer it. The other way out is not to send the data: the laptop's RTX 2060 already runs position
   fixes locally (local mode: 6.3 s a fix, 3.8 GB).
 * **A per-pixel transform keeps shapes and edges.** It is obfuscation of appearance, not encryption. A garbled frame
   is far from the photo (median 8 dB PSNR over random keys), and no 3×3 colour matrix brings it back (25–30 dB even
@@ -70,7 +70,7 @@ is DINOv2 ViT-L/14: 24 blocks, 0.3 B parameters. Measured with `eval/split_eval.
 | Inverting the tokens (attacker with the public VGGT weights) | after 0 blocks: exact (59 dB), since the patch embedding is linear. After 4 blocks: 23 dB from 400 Adam steps (85 s on the RTX 2060). After 12 and 24 blocks: not measured (on the laptop's 6 GB GPU, 12 blocks had not finished after 50 min; stopped to free the GPU for the demo) |
 
 Verdict: tokens from a few blocks are about as revealing as pixels. Tokens from the full backbone cost 5–40 s a frame
-on the laptop CPU. A keyed rotation of the tokens does not help either: Iridis would need weights rotated the same
+on the laptop CPU. A keyed rotation of the tokens does not help either: the GPU server would need weights rotated the same
 way, and with the public weights the rotation can be solved for (orthogonal Procrustes). gsplat needs photometric
 images anyway. So split computing is not worth it here. For the splat the garbled-colour route is the realistic one:
 the splat's colours live in the keyed space, and only the trusted side decodes them (`decode_colours`). That is how
@@ -78,7 +78,7 @@ the splat's colours live in the keyed space, and only the trusted side decodes t
 
 ## 4. Measurements (on Seb's existing recordings; nothing new recorded)
 
-`eval/privacy_eval.py` on Iridis (`iridis/privacy_eval.slurm`, one L4). The same keyframes are fed to VGGT plain and
+`eval/privacy_eval.py` on the GPU server (`cluster/privacy_eval.slurm`, one L4). The same keyframes are fed to VGGT plain and
 garbled (sent as JPEG q95 4:4:4), and the plain pass is the reference. `tone` is the tone curves, channel order and
 reversals only. `garbled` is the default (4 keyed coupling layers). `strong` mixes more.
 
@@ -168,15 +168,15 @@ Built and tested (new files only; `relay.py`, `gateway.py`, `worker.py`, `video_
 unchanged):
 * `live/garble.py` + `live/test_garble.py`: the colour code; `live/garble_reference.txt` holds values for other
   implementations.
-* `live/vault.py` + `live/test_vault.py`: sealing (`cryptography` on the laptop, OpenSSL via ctypes on Iridis, which
+* `live/vault.py` + `live/test_vault.py`: sealing (`cryptography` on the laptop, OpenSSL via ctypes on the GPU server, which
   needs nothing installed), the key inbox and `push_key`.
-* `live/private_train.py` (laptop) + `live/private_job.py` + `iridis/private_train.slurm` (Iridis): the whole private
+* `live/private_train.py` (laptop) + `live/private_job.py` + `cluster/private_train.slurm` (GPU server): the whole private
   training path, with the same call as `remote_train.train`. Result: see section 7.
 * `eval/privacy_eval.py`, `eval/split_eval.py`, `eval/venue_anon.py` (+ slurm files): the measurements above, and the
   venue splat.
 
 Not wired in (needs the parent session, since others edit these files):
-* `relay.py`: in private mode, keep recordings on the laptop instead of `recordings/` on Iridis, and call
+* `relay.py`: in private mode, keep recordings on the laptop instead of `recordings/` on the GPU server, and call
   `private_train.train` instead of `remote_train.train`. A one-line switch, e.g. `BEACON_PRIVATE=1`. Then the
   `/recording` chunks must stop going to the gateway in plain.
 * Live fixes (`/locate`, `/map`): the relay garbles and seals each zip. The worker opens a `KeyInbox` at start, and
@@ -193,7 +193,7 @@ to the laptop. The `--resume JOB` mode was added on the way, after the login nod
 connection while polling.
 * Laptop: 120 frames blurred, cropped, garbled and sealed in 9.2 s (77 ms a frame, 4 threads), 22.9 MB uploaded as
   one `frames.zip.jv`. This run's key predates key screening.
-* Iridis, job 2226733 on ecsai06: the inbox was ready at 01:56:32 and the key arrived through srun 3 s later. The
+* GPU server, one GPU job: the inbox was ready at 01:56:32 and the key arrived through srun 3 s later. The
   frames opened into RAM in 0.1 s. VGGT took 7.3 s (23 keyframes, 60% of pixels confirmed) and gsplat 148 s
   (752,080 Gaussians). 14 results were sealed.
   `private/privtest-hall` on scratch now holds only `*.jv` files, and the job's log shows the key id, never the key.
@@ -212,7 +212,7 @@ connection while polling.
 ## 8. The venue splat in the public repo (published with Seb's OK, 74d70bd)
 
 The hacking hall from the glasses session `glasses-20261115-001625` (50 frames), retrained from anonymised frames
-with `eval/venue_anon.py` + `video_map.py` (`iridis/venue_anon.slurm`). This ran on Iridis, where those frames
+with `eval/venue_anon.py` + `video_map.py` (`cluster/venue_anon.slurm`). This ran on the GPU server, where those frames
 already were.
 
 * `anonymise.py` alone is not enough for a crowded hall. HOG found 4 person boxes in 50 frames, one of them a wall,

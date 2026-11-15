@@ -334,7 +334,7 @@ if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=.
     const { mesh, count } = await load(q.get('src'));
     showBird(q.get('src'));
     if (q.get('labels')) showLabels(q.get('labels'), depth);  // ?labels=...labels.json: name tags, as in the playback
-    note.textContent = `${count.toLocaleString('en-US')} Gaussians` + (/trained/.test(q.get('src')) ? ', trained on Iridis' : ', built on a CPU with no training');
+    note.textContent = `${count.toLocaleString('en-US')} Gaussians` + (/trained/.test(q.get('src')) ? ', trained on the GPU' : ', built on a CPU with no training');
     window.__viewer = { mesh, camera, controls, count };
   } catch (err) {
     note.textContent = `Could not load the 3D view: ${err.message || err}`;
@@ -413,7 +413,7 @@ if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=.
     const info = await reply.json();
     room = info;
     const trained = info.trained && info.trained.splat;
-    if (trained) {  // a splat trained on Iridis from a recording: it looks like the pictures. Its axes are the recording's
+    if (trained) {  // a splat trained on the GPU from a recording: it looks like the pictures. Its axes are the recording's
       // first camera (as each fix's own file), not the room map's, so the wearer's cone is not drawn on it.
       if (trained === roomJob) {  // the same splat: its labels may have been made again (video_map.py --labels-only)
         if (Date.now() - labelsAt > 10000) {
@@ -532,7 +532,7 @@ if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=.
       if (fix && fix.picture_added && fix.picture_added.name !== added) added = fix.picture_added.name;
       const growing = room && room.building ? ' · map growing…' : '';
       const map = !haveRoom ? '' : room.trained && room.trained.splat
-        ? `trained splat (Iridis): ${(room.trained.gaussians || 0).toLocaleString('en-US')} Gaussians from ${room.trained.keyframes} keyframes, `
+        ? `trained splat (GPU): ${(room.trained.gaussians || 0).toLocaleString('en-US')} Gaussians from ${room.trained.keyframes} keyframes, `
           + `${room.trained.psnr} dB on its pictures, ${new Date(room.trained.at * 1000).toLocaleTimeString()}`
           + (space ? '' : ' (wearer not drawn: no matrix into the room map yet, /care/space)')
         : `room map: ${room.frames} of ${room.of} pictures, ${(room.gaussians || 0).toLocaleString('en-US')} Gaussians`;

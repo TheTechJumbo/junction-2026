@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Do VGGT and gsplat still work when the frames are garbled with a key (live/garble.py, PRIVACY.md)? On a GPU (Iridis:
-iridis/privacy_eval.slurm), on a recording that is already there; nothing new is recorded.
+"""Do VGGT and gsplat still work when the frames are garbled with a key (live/garble.py, PRIVACY.md)? On a GPU (the cluster:
+cluster/privacy_eval.slurm), on a recording that is already there; nothing new is recorded.
 
     python eval/privacy_eval.py FRAMES_OR_VIDEO OUT [--keyframes 64] [--fixes 10] [--steps 7000]
                                 [--variants plain,tone,garbled,strong] [--train plain,garbled]

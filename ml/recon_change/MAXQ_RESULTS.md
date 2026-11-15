@@ -1,7 +1,7 @@
 # Best-quality configuration: what was tried and what it bought (JUN-22)
 
 Goal: no false changes on hard video (the second clip looks from new viewpoints), cost no
-object. Measured on Iridis (NVIDIA L4, 24 GB) on 14 Nov 2026. The five video cases are the
+object. Measured on one NVIDIA L4 (24 GB) on 14 Nov 2026. The five video cases are the
 aerial clips from the VGGT examples, before = first 60% of the clip, after = last 40%, nothing
 changed; "crop" is an upright 9:16 centre crop. The kitchen set is 24 + 12 interleaved photos.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# One-off setup on an Iridis login node (compute nodes have no internet).
+# One-off setup on a cluster login node (compute nodes have no internet).
 # Builds .venv-recon in this folder's parent and downloads the VGGT weights (5 GB) to scratch.
-#   bash iridis/setup_env.sh
+#   bash cluster/setup_env.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/bin:$PATH"

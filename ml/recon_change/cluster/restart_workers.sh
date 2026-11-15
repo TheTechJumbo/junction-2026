@@ -4,7 +4,7 @@
 # live worker gets its GPU back first, and are released again at the end.
 source /etc/profile
 cd /scratch/$USER/junction-recon || exit 1
-source iridis/worker_env.sh
+source cluster/worker_env.sh
 
 running_workers() { squeue -u "$USER" -h -n jun-worker,jun-worker-cpu -t RUNNING -o '%i'; }
 
@@ -25,14 +25,14 @@ left=$(running_workers | tr '\n' ' ')
 rm -f STOP STOP-cpu
 
 # 4. Start new workers with the item finder, and queue their replacements.
-gpu=$(sbatch --parsable iridis/worker.slurm)
-cpu=$(sbatch --parsable iridis/worker_cpu.slurm)
+gpu=$(sbatch --parsable cluster/worker.slurm)
+cpu=$(sbatch --parsable cluster/worker_cpu.slurm)
 echo "new workers: GPU $gpu, CPU $cpu"
 for i in $(seq 1 30); do [ "$(squeue -h -j "$gpu" -o '%T')" = "RUNNING" ] && break; sleep 2; done
 echo "GPU worker state: $(squeue -h -j "$gpu" -o '%T %N')"
 
 # 5. Let the other jobs go again, then queue the replacements.
 [ -n "$held" ] && scontrol release $held && echo "released: $held"
-sbatch --dependency=afterany:"$gpu" iridis/worker.slurm
-sbatch --dependency=afterany:"$cpu" iridis/worker_cpu.slurm
+sbatch --dependency=afterany:"$gpu" cluster/worker.slurm
+sbatch --dependency=afterany:"$cpu" cluster/worker_cpu.slurm
 squeue -u "$USER" -h -o '%i %j %T %M %L' | grep -E 'jun-worker'

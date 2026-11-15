@@ -10,7 +10,7 @@ This covers every frame of a recording chunk (`POST /recording`), every `/locate
 item photos (`/enroll`) and video chunks. The order:
 
 1. **Crop and shrink.** For a portrait frame, keep the middle square (`h > 1.05 w`: rows `(h-w)/2 ... (h-w)/2 + w`).
-   Then shrink so the long side is at most 768 px (area averaging). Iridis only ever uses 518 px.
+   Then shrink so the long side is at most 768 px (area averaging). The GPU server only ever uses 518 px.
 2. **Blur faces and people.** Faces get a flat fill of their mean colour, after growing the box by 40% on each side.
    People get pixelation to about 8 blocks along the box's longer side. A detector is a new dependency, and Seb approves
    any download first. Options: ML Kit face detection (bundled model, about 2–3 MB in the APK), or MediaPipe BlazeFace
@@ -29,13 +29,13 @@ item photos (`/enroll`) and video chunks. The order:
    | JPEG q95 4:2:0 (`Bitmap.compress`) | 27.8 dB | 79 kB |
    | the plain photo, JPEG q90 (no garbling) | 49.8 dB | 40 kB |
 
-   Keep the file names the app uses now (`NNNNNN_<ms>.jpg`). OpenCV on the relay and on Iridis reads the format from
+   Keep the file names the app uses now (`NNNNNN_<ms>.jpg`). OpenCV on the relay and on the GPU server reads the format from
    the bytes, not the name.
 5. **Strip metadata.** Write a new file from pixels, with no EXIF and no GPS. Both encoders above already do that.
 6. Mark the upload with a header: `X-Garbled: v1; kid=<16 hex digits>`, where `kid` is the first 8 bytes of
    HMAC-SHA256(garbling key, "key-id"). Without this header the relay garbles the frame itself (the laptop path).
 
-The relay then seals each zip with the vault key (`vault.py`, AES-256-GCM) before anything goes to Iridis. The phone
+The relay then seals each zip with the vault key (`vault.py`, AES-256-GCM) before anything goes to the GPU server. The phone
 does not need to seal: its link to the relay is local (adb reverse over USB, or the LAN with the relay key).
 
 ## The key
@@ -45,7 +45,7 @@ does not need to seal: its link to the relay is local (adb reverse over USB, or 
   them with the exact G and compute |Pearson correlation| between the grey garbled picture and the grey original.
   Grey = 0.299 R + 0.587 G + 0.114 B. Take the median over the 4. If it is 0.8 or more, draw a new K. Usually it takes
   a few draws: most keys leave the brightness pattern nearly intact (PRIVACY.md section 4).
-* The phone garbles with `derive(K, "garble")` = HMAC-SHA256(K, "derive|garble"). Iridis gets only
+* The phone garbles with `derive(K, "garble")` = HMAC-SHA256(K, "derive|garble"). The GPU server gets only
   `derive(K, "vault")` = HMAC-SHA256(K, "derive|vault"). Neither can compute the other's key.
 * Handover: `POST /privacy/session?zone=Z` on the relay, with `X-Key`, over adb reverse (localhost) only, body
   `{"key": hex of K}`. The relay needs K to seal (the vault key) and to decode the splat for the carer's page (the

@@ -1,6 +1,6 @@
 # Gaussian splats, NOT anonymised
 
-Trained on Iridis from Seb's recordings on 14–15 Nov 2026 (gsplat, video_map.py). Published as-is at Seb's request
+Trained on the GPU cluster from Seb's recordings on 14–15 Nov 2026 (gsplat, video_map.py). Published as-is at Seb's request
 (15 Nov, ~04:00 local): unlike ../venue-kitchen-glasses-anon.splat, these were NOT blurred, so people at the venue may be
 recognisable. Stored with Git LFS. Open one in the relay's viewer (live/viewer.html?src=...) or any .splat viewer.
 

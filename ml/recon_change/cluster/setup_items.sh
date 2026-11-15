@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# One-off setup for the lost-items detector (items.py), on an Iridis login node (compute nodes
+# One-off setup for the lost-items detector (items.py), on a cluster login node (compute nodes
 # have no internet). It does NOT touch .venv-recon: `transformers` and the few packages it needs
 # go into their own folder, which a worker adds with PYTHONPATH, and the OWLv2 weights (about
 # 0.6 GB) go into a Hugging Face cache.
-#   bash iridis/setup_items.sh                 # into ./items-env next to .venv-recon
-#   bash iridis/setup_items.sh /some/folder    # somewhere else
+#   bash cluster/setup_items.sh                 # into ./items-env next to .venv-recon
+#   bash cluster/setup_items.sh /some/folder    # somewhere else
 # The worker scripts pick the default folder (./items-env) up by themselves. For another folder:
-#   RECON_ITEMS_ENV=/some/folder sbatch iridis/worker.slurm
+#   RECON_ITEMS_ENV=/some/folder sbatch cluster/worker.slurm
 # which is the same as setting PYTHONPATH=<folder>/pkgs RECON_ITEMS_CACHE=<folder>/hf/hub yourself
 # (HF_HOME stays where VGGT is; the detector has its own cache).
 # RECON_ITEMS="keys, glasses" changes the list; RECON_ITEMS="" turns the feature off.

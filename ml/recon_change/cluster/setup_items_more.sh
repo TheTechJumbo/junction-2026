@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Optional extras for the lost-items detector, on an Iridis login node (compute nodes have no
+# Optional extras for the lost-items detector, on a cluster login node (compute nodes have no
 # internet): the weights of the models that eval/ITEMS_RESULTS.md ("Finding more") compares.
 # Only the ones a worker is told to use have to be there. Nothing goes into .venv-recon.
-#   bash iridis/setup_items_more.sh [folder]         # the folder iridis/setup_items.sh filled; default ./items-env
-#   bash iridis/setup_items_more.sh [folder] openai/clip-vit-large-patch14     # only this one
+#   bash cluster/setup_items_more.sh [folder]         # the folder cluster/setup_items.sh filled; default ./items-env
+#   bash cluster/setup_items_more.sh [folder] openai/clip-vit-large-patch14     # only this one
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DIR="$(realpath -m "${1:-items-env}")"

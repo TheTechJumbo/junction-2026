@@ -66,16 +66,16 @@ assert not recon_rust.enabled()
         self.assertEqual(off.returncode, 0, off.stderr)
 
     def test_preflight_fails_before_any_restart(self):
-        result = subprocess.run([sys.executable, str(ROOT/'iridis/preflight.py')], cwd=ROOT,
+        result = subprocess.run([sys.executable, str(ROOT/'cluster/preflight.py')], cwd=ROOT,
                                 env={'PATH': os.environ['PATH'], 'HF_HOME': '/nonexistent'}, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('missing setting:', result.stderr)
 
     def test_preflight_missing_source_and_rust(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp) / 'iridis'
+            directory = Path(tmp) / 'cluster'
             directory.mkdir()
-            shutil.copy(ROOT / 'iridis/preflight.py', directory)
+            shutil.copy(ROOT / 'cluster/preflight.py', directory)
             result = subprocess.run([sys.executable, str(directory / 'preflight.py')], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('missing source: recon_change.py', result.stderr)
@@ -85,7 +85,7 @@ def fake(name, *a, **kw):
     if name == 'recon_fast': raise ModuleNotFoundError('missing', name='recon_fast')
     return real(name, *a, **kw)
 builtins.__import__ = fake
-runpy.run_path('iridis/preflight.py', run_name='__main__')
+runpy.run_path('cluster/preflight.py', run_name='__main__')
 """
         result = self.python(code)
         self.assertNotEqual(result.returncode, 0)

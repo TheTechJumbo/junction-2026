@@ -1,5 +1,5 @@
 #!/bin/bash
-# Score recon_change.py on PASLCD on one Iridis L4 GPU. Copy run_bench.py, this file and the
+# Score recon_change.py on PASLCD on one L4 GPU. Copy run_bench.py, this file and the
 # recon_change.py under test into <work folder>/bench/, fetch the data on the login node
 # (python bench/fetch_paslcd.py --out bench/data/PASLCD), then submit from the work folder:
 #   sbatch bench/bench.slurm --out bench/out/paslcd --pairs changed

@@ -262,13 +262,13 @@ within 0.5 m of the spot will keep a sighting alive.
   the 23 GB L4 without trouble).
 - `transformers` newer than 4.46.3, and other OWLv2 sizes (the large one may find more, slower).
 - 2 rows of tiles on the report half and on item-free photos.
-- A worker started by `iridis/worker.slurm` with the detector: the runs here call
+- A worker started by `cluster/worker.slurm` with the detector: the runs here call
   `worker.where()` from a test script, not through the queue.
 
 ## Run it again
 
 ```
-bash iridis/setup_items.sh /scratch/$USER/junction-recon/items      # packages and weights, next to .venv-recon
+bash cluster/setup_items.sh /scratch/$USER/junction-recon/items      # packages and weights, next to .venv-recon
 python eval/test_items.py                                           # offline checks, no model
 python eval/items_fetch.py --lvis lvis_v1_val.json --out items/data/lvis
 cd items && sbatch code/eval/items_eval.slurm                       # boxes for every photo (GPU)
@@ -543,7 +543,7 @@ Others: `RECON_ITEMS_LOOK_LIMITS` (the zoomed second look, rule 2: `keys=0.225,g
 wallet=0.225,phone=0.525,remote control=0.6`), `RECON_ITEMS_LOOK_MAX` (6 second looks per
 picture), `RECON_ITEMS_ENROLLED` (folder, default `<project root>/enrolled`),
 `RECON_ITEMS_ENROLLED_SCORE`. No new package: CLIP is in the `transformers` already in
-`items/pkgs`. Weights are in `items/hf` (`iridis/setup_items_more.sh` fetches them elsewhere).
+`items/pkgs`. Weights are in `items/hf` (`cluster/setup_items_more.sh` fetches them elsewhere).
 
 Seconds added per fix:
 

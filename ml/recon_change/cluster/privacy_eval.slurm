@@ -1,6 +1,6 @@
 #!/bin/bash
 # Does VGGT and gsplat still work on garbled frames (eval/privacy_eval.py, PRIVACY.md)? On one L4, on a recording that is
-# already on the cluster:   sbatch iridis/privacy_eval.slurm FRAMES OUT [--keyframes 64] [--fixes 10] [--steps 7000]
+# already on the cluster:   sbatch cluster/privacy_eval.slurm FRAMES OUT [--keyframes 64] [--fixes 10] [--steps 7000]
 # The environment is video_map.slurm's (gsplat from GSPLAT_ENV).
 #SBATCH --job-name=privacy-eval
 #SBATCH --account=ecsstudents

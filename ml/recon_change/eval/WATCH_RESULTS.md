@@ -6,7 +6,7 @@
 - **Data:** the PASLCD benchmark of `RESULTS.md`: 10 real scenes, hand-drawn change masks, 24
   baseline photos against 12 query photos, everything at the 518 x 294 the live system stores
   unless a table says otherwise.
-- **Hardware:** Iridis, CPU cores only (`amd_student`). No GPU job was run: every number comes
+- **Hardware:** the cluster, CPU cores only. No GPU job was run: every number comes
   from the reconstructions the recall work saved (`recall/out/base`, `recall/out/base_inst2`).
   Final measurement: array jobs 2220659 (same lighting) and 2220660 (other lighting); close-up
   features: 2220652; contact sheets: 2220740 to 2220742; main-surface control: 2220761.
@@ -287,7 +287,7 @@ in; no choice was changed by it.
 
 ## Seen on the contact sheets
 
-`watch/out/sheets/<scene>.jpg` on Iridis: every spot of the scene after merging the regions of
+`watch/out/sheets/<scene>.jpg` on the cluster: every spot of the scene after merging the regions of
 one object (first one met in a shuffled order), each with a control box, checked in the live
 mode (12 new photos, 518 pixels, limit 1.0). Nothing left out.
 
@@ -347,14 +347,14 @@ missed. I did not look at its sheet.
 - **Baseline photos:** storing them (and the new frames) at 1036 pixels is worth it if small
   spots matter, not more than that. The larger step is the close-up feature, which needs no
   bigger photos but one backbone pass per spot.
-- **To try it live:** `watch/out/live_Lounge/` on Iridis has the 24 baseline and 12 new frames of
+- **To try it live:** `watch/out/live_Lounge/` on the cluster has the 24 baseline and 12 new frames of
   Lounge as `000.jpg` to `035.jpg` (long side 518), `spots.json` (name, baseline frame, box,
   labelled truth) and `expected.json` (what `watch.check` answered offline on the saved
   reconstruction; a fresh reconstruction of the JPEGs can differ slightly).
 
 ## How to re-run
 
-On Iridis, in `/scratch/$USER/junction-recon`, with the saved reconstructions in `recall/out/`:
+On the cluster, in `/scratch/$USER/junction-recon`, with the saved reconstructions in `recall/out/`:
 
 ```bash
 mkdir -p watch/code watch/logs

@@ -1,6 +1,6 @@
 # VGGT on a CPU: how fast, which settings, what they cost
 
-Measured on 14 November 2026 with `bench_cpu.py` on the Iridis cluster. No run had a GPU.
+Measured on 14 November 2026 with `bench_cpu.py` on the cluster's CPU nodes. No run had a GPU.
 
 ## Short answer
 
@@ -263,7 +263,7 @@ int8 and bfloat16 both need more memory, not less, when applied after loading in
 
 ## Run it again
 
-On Iridis, from the folder that holds `recon_change.py`, with this folder as `cpu/` and the three
+On the cluster, from the folder that holds `recon_change.py`, with this folder as `cpu/` and the three
 clips in `cpu/clips/`:
 
 ```bash

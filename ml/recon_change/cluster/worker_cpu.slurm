@@ -4,7 +4,7 @@
 # quick and reliable: the CPU benchmark measured 8+4 frames at long side 518 at 34 s per check on
 # 32 EPYC cores with the GPU's answer, while smaller frames made the depth too noisy.
 # Override with RECON_FRAMES="baseline,new" and RECON_LONG_SIDE.
-#   sbatch iridis/worker_cpu.slurm            # start
+#   sbatch cluster/worker_cpu.slurm            # start
 #   touch STOP-cpu   or   scancel <job id>     # stop
 #SBATCH --job-name=jun-worker-cpu
 #SBATCH --account=student
@@ -18,7 +18,7 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 export HF_HOME="${HF_HOME:-/scratch/$USER/.cache/huggingface}" HF_HUB_OFFLINE=1
-# Lost items (items.py): the packages and weights that iridis/setup_items.sh put in a folder, if it is there.
+# Lost items (items.py): the packages and weights that cluster/setup_items.sh put in a folder, if it is there.
 ITEMS_ENV="$(realpath -m "${RECON_ITEMS_ENV:-items-env}")"
 if [ -d "$ITEMS_ENV/pkgs" ]; then
     export PYTHONPATH="$ITEMS_ENV/pkgs${PYTHONPATH:+:$PYTHONPATH}" RECON_ITEMS_CACHE="${RECON_ITEMS_CACHE:-$ITEMS_ENV/hf/hub}"

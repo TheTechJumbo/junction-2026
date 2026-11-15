@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A room as a Gaussian splat from one ordinary video: record normally (the phone or the glasses, no app running), then
-this goes through every frame afterwards. Heavy: run it on a GPU with room to spare (iridis/video_map.slurm).
+this goes through every frame afterwards. Heavy: run it on a GPU with room to spare (cluster/video_map.slurm).
 
     python video_map.py VIDEO OUT [--keyframes 96] [--change 0.9] [--steps 7000] [--no-train]
     python video_map.py FRAMES_FOLDER OUT ...    (a recording: frames NNNNNN_<ms>.jpg, relay POST /recording)
@@ -12,7 +12,7 @@ this goes through every frame afterwards. Heavy: run it on a GPU with room to sp
    (worker.square_up: VGGT reads a tall picture far worse).
 3. Points that two other keyframes confirm (same point, same depth within 3%; worker.agreeing) start the splat:
    OUT/untrained.splat, the training-free kind the room map shows.
-4. With gsplat installed (iridis: gsplat-env), the splat is trained against the keyframes for --steps steps
+4. With gsplat installed (on the cluster: gsplat-env), the splat is trained against the keyframes for --steps steps
    (L1 + D-SSIM, gsplat's default densify and prune): OUT/trained.splat, which looks like the pictures.
 5. Labels (--labels): OWLv2 proposes boxes for the names in each keyframe, CLIP checks each box against the names and
    their usual look-alikes, and what both agree on is placed in 3D: OUT/labels.json, name tags on the 3D page.

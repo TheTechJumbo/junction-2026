@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Train a room's splat on Iridis without Iridis seeing the room (PRIVACY.md). The same call as remote_train.train, for
+"""Train a room's splat on the GPU server without the GPU server seeing the room (PRIVACY.md). The same call as remote_train.train, for
 frames that are on this laptop (the trusted side):
 
-    python live/private_train.py FRAMES NAME OUT [--host iridis] [--root DIR] [--side 768] [--steps 7000]
+    python live/private_train.py FRAMES NAME OUT [--host cluster] [--root DIR] [--side 768] [--steps 7000]
 
 On the laptop, before anything leaves it:
   1. a session key K (32 random bytes), kept in OUT/private.key (hex, this laptop only) and nowhere else;
   2. every frame: faces and people blurred (anonymise.py), cut to its middle square and shrunk to --side pixels,
      colours garbled with derive(K, "garble") (garble.py), JPEG 4:4:4;
   3. the frames zipped and sealed with derive(K, "vault") (vault.py) and copied to ROOT/private/NAME/frames.zip.jv.
-On Iridis: iridis/private_train.slurm runs live/private_job.py, which waits for the vault key. Once the job runs, the key
+On the GPU server: cluster/private_train.slurm runs live/private_job.py, which waits for the vault key. Once the job runs, the key
 goes into its memory through `srun --jobid --overlap` (vault.push_key); the job opens the frames in RAM, trains, and
 seals its results. The job never gets the garbling key: its splat's colours are garbled too.
 Back here: the sealed results are fetched and opened, the splats' colours decoded with the garbling key (trained.splat
 is then an ordinary splat), the renders, bird's-eye view and fly-through un-garbled, and the keyframes written from this
-laptop's own anonymised frames (kfNNN.jpg, for views.json), so no picture needs to come back from Iridis.
+laptop's own anonymised frames (kfNNN.jpg, for views.json), so no picture needs to come back from the GPU server.
 OUT then looks like remote_train's: trained.splat, untrained.splat, summary.json, cameras.npz, views.json, depths.bin,
 flythrough.webm, birdseye.jpg, renders/, kf000.jpg ...; OUT/private.json has the timings.
 """
@@ -117,7 +117,7 @@ def train(source, name, out, host=None, root=None, steps=7000, keyframes=96, log
     """Returns {"state": "done" or "failed", "job", "seconds", "summary", "error", "timing"} like remote_train.train.
     resume=JOB: that job was submitted before (with OUT/private.key): only push the key into it and bring the results back."""
     t_start = time.time()
-    host = host or os.environ.get("BEACON_TRAIN_HOST") or "iridis"
+    host = host or os.environ.get("BEACON_TRAIN_HOST") or "cluster"
     root = _patient(host, f"cd {root or os.environ.get('BEACON_REMOTE_ROOT') or DEFAULT_ROOT} && pwd", log=log).strip()
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -168,7 +168,7 @@ def train(source, name, out, host=None, root=None, steps=7000, keyframes=96, log
             _scp(host, ["frames.zip.jv"], f"{data_dir}/frames.zip.jv", cwd=tmp)
             timing["upload_s"] = round(time.time() - t0, 1)
         options = f"--steps {steps} --keyframes {keyframes}" + (f" --labels {shlex.quote(labels)}" if labels is not None else "")
-        job = _patient(host, f"cd {root} && sbatch --parsable iridis/private_train.slurm {data_dir} {options}", log=log).strip()
+        job = _patient(host, f"cd {root} && sbatch --parsable cluster/private_train.slurm {data_dir} {options}", log=log).strip()
         log(f"private training job {job} submitted")
 
     def state():

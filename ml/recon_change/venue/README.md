@@ -13,7 +13,7 @@ Published with Seb's approval on 15 Nov 2026. Only the splat is published. No ph
 | Anonymised before training | 619 person boxes found by OWLv2 ("a person", whole frame and 2 × 2 tiles, score ≥ 0.15), each pixelated to about 8 blocks along its longer side. 321 head and face boxes (OWLv2 "a human head" / "a human face", plus YuNet and Haar), each grown by 35% and filled with one flat colour |
 | Faces left afterwards | 0 by OWLv2 "a human face" (score ≥ 0.3). YuNet/Haar flagged 3 patches in 3 frames; looked at by eye, they are flat-filled or pixelated areas, not faces |
 | Splat | 1,022,521 Gaussians, 32.7 MB, sha256 `13f637d4…5ff1d` |
-| Training | VGGT-1B cameras and depth (18 s), gsplat 7000 steps (105 s), one NVIDIA L4 on Iridis |
+| Training | VGGT-1B cameras and depth (18 s), gsplat 7000 steps (105 s), one NVIDIA L4 GPU |
 | Fit to its (anonymised) keyframes | 25.6 dB PSNR, median |
 
 Limits. People are still there as coarse blocks of colour, and some far-away people (a few pixels in a 518 px frame)

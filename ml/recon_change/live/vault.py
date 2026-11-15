@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Files at rest on Iridis encrypted with a key that only the trusted side keeps (PRIVACY.md). AES-256-GCM in 1 MiB
+"""Files at rest on the GPU server encrypted with a key that only the trusted side keeps (PRIVACY.md). AES-256-GCM in 1 MiB
 chunks, so a 4 GB video goes through in constant memory, and a changed, reordered, cut or swapped file is refused.
 
     from vault import new_key, seal, unseal, seal_file, unseal_file, key_id
@@ -11,7 +11,7 @@ chunks, so a 4 GB video goes through in constant memory, and a changed, reordere
 On the GPU node the key lives in the job's memory only. It arrives through Slurm, not through any file on scratch:
     the job:     inbox = KeyInbox()              # a FIFO in /dev/shm (RAM), mode 0600, named after the Slurm job
                  key = inbox.get(kid, wait=60)   # kid = key_id(key), read from a sealed file's header
-    the laptop:  push_key(key, job_id)           # ssh iridis srun --jobid=J --overlap ... with the key on stdin
+    the laptop:  push_key(key, job_id)           # ssh cluster srun --jobid=J --overlap ... with the key on stdin
                                                  # (stdin, never argv: argv shows in `ps` to every user)
 
 The file: b"JVAULT1\\0" | key id (8 bytes, HMAC-SHA256(key, "key-id")) | salt (16 random bytes) | chunk size (4, big-endian),
@@ -20,7 +20,7 @@ last-chunk flag (1)) with their 16-byte tags. file key = HMAC-SHA256(key, "file"
 nonces never repeat under one key. Only the last chunk is sealed with the flag set: a file cut at a chunk boundary fails.
 
 Backends: the `cryptography` package where it is installed (the laptop's Python), otherwise the OpenSSL library this
-Python already links for `ssl`, through ctypes (Iridis's .venv-recon has no `cryptography`; nothing is installed).
+Python already links for `ssl`, through ctypes (the GPU server's .venv-recon has no `cryptography`; nothing is installed).
 VAULT_BACKEND=ctypes forces the second, for tests. Both write the same format.
 
 Honest limits: root on the GPU node can read the job's memory and so the key and every decrypted frame while a job
@@ -350,7 +350,7 @@ class KeyInbox:
             pass
 
 
-def push_key(key, job_id, host="iridis", uid=None, timeout=60):
+def push_key(key, job_id, host="cluster", uid=None, timeout=60):
     """Send the key to Slurm job `job_id`'s KeyInbox: ssh to the login node, then `srun --jobid --overlap` onto the job's
     node, where `cat` writes stdin into the FIFO. The key travels on stdin only (SSH-encrypted to the login node, then
     Slurm's own I/O forwarding inside the cluster). Refuses unless the FIFO exists, so it never lands in a plain file."""

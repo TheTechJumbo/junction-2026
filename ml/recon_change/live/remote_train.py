@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Train a Gaussian splat of a recording (or a video) on the GPU machine the workers run on: Iridis now, a Verda
-machine later. Uses video_map.py from the code deployed there with the workers (iridis/deploy_from_laptop.sh).
+"""Train a Gaussian splat of a recording (or a video) on the GPU machine the workers run on: the Slurm cluster now, a single Verda
+machine later. Uses video_map.py from the code deployed there with the workers (cluster/deploy_from_laptop.sh).
 
-    python live/remote_train.py FRAMES_OR_VIDEO NAME OUT [--host iridis] [--root DIR] [--launch slurm|direct]
+    python live/remote_train.py FRAMES_OR_VIDEO NAME OUT [--host cluster] [--root DIR] [--launch slurm|direct]
     python live/remote_train.py - NAME OUT --fetch      (the results of training NAME, already ended)
 
 Where it runs, as settings (the relay passes its own):
-  BEACON_TRAIN_HOST    SSH host alias (default iridis)
+  BEACON_TRAIN_HOST    SSH host alias (default cluster)
   BEACON_REMOTE_ROOT   the deployed folder the workers use: code, rooms, recordings/, and trained/NAME for this
                        (default /scratch/$USER/junction-recon)
-  BEACON_TRAIN_LAUNCH  slurm: submit iridis/video_map.slurm (Iridis). direct: start video_map.py in the background on
+  BEACON_TRAIN_LAUNCH  slurm: submit cluster/video_map.slurm (the Slurm cluster). direct: start video_map.py in the background on
                        the machine itself and watch its process (a plain GPU machine, such as one rented from Verda)
   BEACON_REMOTE_PYTHON the Python there (default .venv-recon/bin/python, relative to the root)
 
@@ -78,12 +78,12 @@ def to_webm(path):
 def train(source, name, out, host=None, root=None, launch=None, steps=7000, keyframes=96, log=print, remote_frames=None):
     """Returns {"state": "done" or "failed", "job", "seconds", "summary", "error"}."""
     t0 = time.time()
-    host = host or os.environ.get("BEACON_TRAIN_HOST") or "iridis"
+    host = host or os.environ.get("BEACON_TRAIN_HOST") or "cluster"
     launch = launch or os.environ.get("BEACON_TRAIN_LAUNCH") or "slurm"
     python = os.environ.get("BEACON_REMOTE_PYTHON") or ".venv-recon/bin/python"
     root = _ssh(host, f"cd {root or os.environ.get('BEACON_REMOTE_ROOT') or DEFAULT_ROOT} && pwd").strip()
     if "video_map.py" not in _ssh(host, f"ls {root}").split():
-        raise RuntimeError(f"video_map.py is not deployed in {host}:{root}: run iridis/deploy_from_laptop.sh first")
+        raise RuntimeError(f"video_map.py is not deployed in {host}:{root}: run cluster/deploy_from_laptop.sh first")
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     data = f"{root}/trained/{name}"
@@ -110,7 +110,7 @@ def train(source, name, out, host=None, root=None, launch=None, steps=7000, keyf
             log(f"video sent ({source.stat().st_size >> 20} MB)")
     options = f"--steps {steps} --keyframes {keyframes}"
     if launch == "slurm":
-        job = _ssh(host, f"cd {root} && sbatch --parsable iridis/video_map.slurm {given} {data}/out {options}").strip()
+        job = _ssh(host, f"cd {root} && sbatch --parsable cluster/video_map.slurm {given} {data}/out {options}").strip()
         running = lambda: bool(_ssh(host, f"squeue -h -j {job}").strip())  # noqa: E731
         job_log = f"{root}/video-map-{job}.out"
     else:  # direct: a plain GPU machine, no queue
@@ -153,7 +153,7 @@ def bring_back(host, data, out, log=print):
 
 def remote_data(name, host=None, root=None):
     """(host, the folder of training NAME on it): where train() put it."""
-    host = host or os.environ.get("BEACON_TRAIN_HOST") or "iridis"
+    host = host or os.environ.get("BEACON_TRAIN_HOST") or "cluster"
     root = _ssh(host, f"cd {root or os.environ.get('BEACON_REMOTE_ROOT') or DEFAULT_ROOT} && pwd").strip()
     return host, f"{root}/trained/{name}"
 

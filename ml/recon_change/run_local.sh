@@ -19,7 +19,7 @@
 #   RECON_ITEMS            items to look for; empty by default, because the item finder needs its own
 #                          packages and weights (about 640 MB, see DEMO.md)
 #   RECON_ITEMS_ENV        a folder with the item finder's packages (pkgs/) and weights (hf/hub/), made as in
-#                          iridis/setup_items.sh: when it is there, the default items are looked for
+#                          cluster/setup_items.sh: when it is there, the default items are looked for
 #   RECON_ITEMS_DEVICE     where the item finder runs (default here: cpu; on a 6 GB card next to VGGT it was
 #                          measured at the card's limit and once failed with a CUDA error)
 set -euo pipefail
@@ -51,5 +51,5 @@ PYTHONPATH="$WORKER_PATH" "$PY" -u live/worker.py > "$BEACON_ROOT/worker.log" 2>
 WORKER=$!
 trap 'touch "$BEACON_ROOT/STOP"; kill "$WORKER" 2>/dev/null || true' EXIT
 # Recordings (POST /recording) are trained into a splat on this SSH host (empty: never). Needs the VPN; see video_map.py.
-BEACON_TRAIN_HOST="${BEACON_TRAIN_HOST-iridis}"
+BEACON_TRAIN_HOST="${BEACON_TRAIN_HOST-cluster}"
 python -u live/relay.py --local "$BEACON_ROOT" --quick ${BEACON_TRAIN_HOST:+--train-host "$BEACON_TRAIN_HOST"} "${@:3}"

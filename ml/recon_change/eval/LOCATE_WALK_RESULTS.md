@@ -1,6 +1,6 @@
 # Position fix on a person walking through a real room (TUM RGB-D)
 
-Measured on 14 November 2026 on one Iridis L4 GPU: 938 position fixes. `locate.py` had so far been
+Measured on 14 November 2026 on one L4 GPU: 938 position fixes. `locate.py` had so far been
 measured only on PASLCD (`LOCATE_RESULTS.md`, `LOCATE_LOOKALIKE_RESULTS.md`): photos taken standing
 still, no motion blur, no real metres. This test uses a handheld camera carried through three
 rooms, with motion blur, true camera poses and true metres.
@@ -197,7 +197,7 @@ coverage, the shared map frame, the old keys), next to `test_locate_lookalike.py
 
 ### How to run it again
 
-On Iridis, from the work folder, with the walking test's `walk/` in place and this branch's
+On the cluster, from the work folder, with the walking test's `walk/` in place and this branch's
 `locate.py`, `recon_change.py` and the `eval/` scripts copied to `walk2/code/`:
 
 ```
@@ -608,7 +608,7 @@ prints as 0.50 and was reported as unsure.)
 
 ## How to run it again
 
-On Iridis, in a folder `walk/` next to `.venv-recon` (`walk/code/` holds `fetch_tum.py`,
+On the cluster, in a folder `walk/` next to `.venv-recon` (`walk/code/` holds `fetch_tum.py`,
 `locate_walk_eval.py`, `locate_walk_tables.py`, `locate_walk.slurm` and the `locate.py` and
 `recon_change.py` under test):
 

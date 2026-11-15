@@ -16,7 +16,7 @@ named places in locate.py: east, north, up in rough metres, distance along the f
 When in doubt it says nothing: a wrong "your keys are over there" is worse than "I have not
 seen them". The score limit comes from eval/ITEMS_RESULTS.md.
 
-Needs `transformers` (not in the base environment: see iridis/setup_items.sh). Importing this
+Needs `transformers` (not in the base environment: see cluster/setup_items.sh). Importing this
 file does not: only load() does.
 """
 import os
@@ -31,7 +31,7 @@ import locate
 
 MODEL_ID = os.environ.get("RECON_ITEMS_MODEL", "google/owlv2-base-patch16-ensemble")
 # Where the detector's weights are, if not in the Hugging Face cache that HF_HOME names (the
-# worker's HF_HOME is where VGGT is): a hub cache folder, e.g. <folder>/hf/hub from iridis/setup_items.sh.
+# worker's HF_HOME is where VGGT is): a hub cache folder, e.g. <folder>/hf/hub from cluster/setup_items.sh.
 CACHE = os.environ.get("RECON_ITEMS_CACHE") or None
 DEFAULT_ITEMS = "keys, glasses, wallet, phone, remote control"
 # A box counts from this score on. Chosen in eval/ITEMS_RESULTS.md; higher = fewer wrong answers, more misses.

@@ -4,7 +4,7 @@
 - **Detector:** `ml/recon_change/recon_change.py` at commit `636cc94f5f441fe9c6e40899c61a3d4efa776054`,
   default settings, imported unmodified (`import recon_change as rc`). SHA-256 of the file as run:
   `76b4a39de5190ffbc247542c743cf3256f0a3a736f08b7bb5865902655f035af`.
-- **Hardware:** one NVIDIA L4 on Iridis (`ecsstudents_l4`). Slurm jobs 2217849 (changed pairs,
+- **Hardware:** one NVIDIA L4 GPU. Slurm jobs 2217849 (changed pairs,
   2 min 21 s), 2217760 (unchanged pairs, 2 min 13 s) and 2217821 (different lighting, indoor,
   2 min 10 s). Job 2217759 was an earlier run of the changed pairs: its pixel counts are
   identical to 2217849 in every scene. The unchanged job ran with the harness one commit
@@ -113,7 +113,7 @@ several objects, and a flat sheet of paper counts the same as a box.
 ## What the overlays showed
 
 Looked at 12 of the 30 overlays and 3 detector contact sheets, at least one overlay for each
-of the 10 scenes (`bench/out/paslcd/<scene>_inst1_changed/` on Iridis), plus 2 overlays of the
+of the 10 scenes (`bench/out/paslcd/<scene>_inst1_changed/` on the cluster), plus 2 overlays of the
 different-lighting run.
 
 - **Where the false alarms come from.** Nearly all wrongly flagged pixels belong to "gone"
@@ -171,7 +171,7 @@ different-lighting run.
 
 ## How to re-run
 
-On the Iridis login node, in `/scratch/$USER/junction-recon` (the folder with `.venv-recon`):
+On the cluster login node, in `/scratch/$USER/junction-recon` (the folder with `.venv-recon`):
 
 ```bash
 mkdir -p bench

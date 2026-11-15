@@ -61,7 +61,7 @@ def check_tampering():
 
 
 def check_backends():
-    """Files sealed by one backend open with the other (OpenSSL through ctypes is what Iridis uses)."""
+    """Files sealed by one backend open with the other (OpenSSL through ctypes is what the GPU server uses)."""
     code = ("import sys,os;sys.path.insert(0,sys.argv[1]);os.environ['VAULT_BACKEND']=sys.argv[2];import vault;"
             "k=bytes.fromhex(sys.argv[3]);d=sys.stdin.buffer.read();"
             "sys.stdout.buffer.write(vault.seal(k,d) if sys.argv[4]=='seal' else vault.unseal(k,d));print(vault.AEAD.name,file=sys.stderr)")

@@ -449,7 +449,7 @@ async function fetchBytes(url, onProgress) {
 function chooser(info) {
   const which = $('which');
   const options = [];
-  if (info.kind === 'trained') options.push(['trained', 'Trained splat (Iridis)'], ['map', 'Room map (quick)']);
+  if (info.kind === 'trained') options.push(['trained', 'Trained splat (GPU)'], ['map', 'Room map (quick)']);
   which.hidden = options.length < 2;
   which.innerHTML = options.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
   which.value = info.kind;

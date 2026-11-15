@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vision worker. Runs inside a Slurm GPU job on Iridis and keeps VGGT loaded.
+"""Vision worker. Runs inside a Slurm GPU job on the cluster and keeps VGGT loaded.
 
 GPU nodes cannot be reached from outside, so requests arrive as folders on shared scratch:
 the gateway (login node) writes queue/<job>/ and then a READY marker; this worker renames it

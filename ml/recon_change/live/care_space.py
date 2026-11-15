@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One space for the caretaker's page (/care): a splat trained on Iridis, put into the room map's axes.
+"""One space for the caretaker's page (/care): a splat trained on the GPU server, put into the room map's axes.
 
 The wearer's position fixes, the named places and the room map (worker.room_map) share one set of axes: x east,
 y north, z up, in metres from the first baseline camera. A splat trained from a recording (video_map.py) has its

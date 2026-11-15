@@ -31,10 +31,10 @@ by replaying his own 90 s glasses video (02:59, recorded in the venue) through t
 ## Setup as found, and clocks
 
 - Event API on 127.0.0.1:8000 (up since 01:34). The relay on :8090 was restarted by other sessions at 02:51, ~03:10,
-  03:14:26 and 03:32:39 (see Incidents). Workers on Iridis: GPU on ecsai04 (L4), CPU on ruby047.
+  03:14:26 and 03:32:39 (see Incidents). Workers on the GPU cluster: one L4 GPU node and one CPU node.
 - `adb reverse` was **empty** at 02:31, which cut the phone off from the event API (it listens on 127.0.0.1 only).
   I re-added `tcp:8000` and `tcp:8090` at 02:34, as `phone_setup.py` does.
-- **Phone vs laptop clock:** the phone is +24 to +183 ms ahead (bounds from 15 adb round trips). Iridis logs are in UTC
+- **Phone vs laptop clock:** the phone is +24 to +183 ms ahead (bounds from 15 adb round trips). The cluster's logs are in UTC
   (01:19 there = 03:19 here); all relay and day-log times are laptop time. Clock offsets are not a source of error
   at the second level. The real offset is the processing delay below.
 
@@ -74,7 +74,7 @@ How: the whole 90 s walk was sent like the app's Live camera (one `/locate` in f
 | Kind of answer | n | Round trip median (p90, max) | Capture to answer, median |
 |---|---|---|---|
 | Instant fix (relay `--quick`) | 92 | 0.29 s (0.40, 0.53) | 0.36 s |
-| Full fix (model on Iridis) | 10 | 4.94 s (5.45, 12.71 cold) | 5.05 s |
+| Full fix (model on the GPU cluster) | 10 | 4.94 s (5.45, 12.71 cold) | 5.05 s |
 | Skipped (blurred or dark) | 15 | 0.04 s | - |
 
 - **The tracking follows the walk.** The room picture each instant fix matched rises with the video's time (Kendall tau
@@ -85,7 +85,7 @@ How: the whole 90 s walk was sent like the app's Live camera (one `/locate` in f
 - **Full fixes and instant fixes disagree.** Full fixes span 1.15 x 1.05 m. Instant fixes, at the room map's
   pictures, span 7.07 x 6.30 m. A full fix lands **2.1–4.0 m** (median 3.0 m) from the instant fix just before
   it. So every ~9 s the marker jumps toward the start point and back.
-- **`/viewer?live=validate-room` bird's-eye:** the splat trained on Iridis (job 2226699, attached at 03:42 after a
+- **`/viewer?live=validate-room` bird's-eye:** the splat trained on the GPU cluster (a GPU job, attached at 03:42 after a
   relay restart; 22.14 dB, 96 keyframes, 1.75 M Gaussians) has a bird's-eye picture. But `/care/space` refuses to line
   the room map up with it: "cameras 0.52 m apart on average", over the 0.5 m limit, 45 camera pairs, scale 4.54. So the
   wearer is not drawn on it. The map shows only the current position anyway; the 3D view keeps 40 points of trail,
@@ -108,14 +108,14 @@ How: the whole 90 s walk was sent like the app's Live camera (one `/locate` in f
 1. **Stray kitchen recording (my error).** At 02:45:29 an `adb shell input swipe` on the setup page registered as a
    tap on Always-on **Start recording** (zone kitchen), and a later swipe stopped it. The relay got session
    `aon-20261115-024529`: 282 frames, final at 02:46:24. It rebuilt kitchen's room from that session at 02:47:09 and
-   trained it (Iridis job 2226520, done 02:50). Seb chose to keep it, with no restore. From then on I tapped only
+   trained it (a GPU job, done 02:50). Seb chose to keep it, with no restore. From then on I tapped only
    by exact button text, and scrolled from the left margin.
 2. **Uploads cut by relay restarts.** The relay was restarted at 02:51, at about 03:10 (per the parent, to bring
    `/navigate` live), at 03:14:26 and at 03:32:39. The ~03:10 restart cut the app's first kitchen upload of the 02:59
    video (chunk 0 only, per the parent). By 03:46, kitchen's session `20261115_025911_0a9dfa62` was complete anyway
    (1347 frames, 12 chunks, final, accepted 03:12:52, splat 21.97 dB). The 03:14:26 restart came 90 s after
    validate-room's upload finished. Its room map failed (`BadZipFile`), and the resumed training gave up on an SSH
-   reset at 03:17:16, while the Iridis job (2226699) ran on regardless. I re-ran the map (a repeated empty final
+   reset at 03:17:16, while the GPU job ran on regardless. I re-ran the map (a repeated empty final
    chunk, done 03:21). The parent set the training back to "running" before the 03:32:39 restart, which attached the
    splat at 03:42.
 3. **403 after the key rotation.** RELAY_KEY was rotated around 02:51. The relay log shows clients still on the old key
@@ -149,7 +149,7 @@ How: the whole 90 s walk was sent like the app's Live camera (one `/locate` in f
    started a kitchen recording. At about 03:04 the auto-send put the 02:59 video into kitchen too. Each time, the
    relay's `recording_map` replaced kitchen's pictures and dropped its trained splat.
 2. **A relay restart cuts a recording in the middle.** At 03:14:26 validate-room's map failed (`BadZipFile`), and the
-   resumed training gave up on an SSH reset (`kex_exchange_identification ... Connection reset`). The Iridis job ran
+   resumed training gave up on an SSH reset (`kex_exchange_identification ... Connection reset`). The GPU job ran
    on regardless, and the relay only attached its splat after a second restart, with the state set back by hand.
 3. **Vision changes and watched spots are not events.** Neither reaches the day log, the event API or the family app.
    They are lost on relay restart.

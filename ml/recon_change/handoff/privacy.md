@@ -1,14 +1,14 @@
-# Privacy with Iridis untrusted: hand-off, 15 Nov 2026
+# Privacy with the GPU server untrusted: hand-off, 15 Nov 2026
 
 Full write-up: `ml/recon_change/PRIVACY.md` (threat model, numbers) and `PHONE_SPEC.md` (the phone version). No secrets
 here. Seb's ask: no plain images leave the trusted side; garble them with a key, blur faces, and keep the splat encrypted.
 
 ## Threat model in short
-- Today Iridis holds everything in plain files under `/scratch/ase1g23/junction-recon`: recording frames (full size),
+- Today the GPU server holds everything in plain files under `/scratch/ase1g23/junction-recon`: recording frames (full size),
   /locate photos, baselines, keyframes, `trained.splat`, depths, the camera path, labels and fly-throughs. The folder
   is mode 0700, so other users cannot read it. Admins, root on any node, backups and a later compromise can.
 - Root on the GPU node reads the job's memory: the key, the frames, the depths and the splat geometry. Only
-  confidential computing would stop that (not on L4s), or not using Iridis.
+  confidential computing would stop that (not on L4s), or not using a remote GPU.
 - The colour garbling is per pixel: shapes and edges stay visible. It hides appearance; it is not encryption.
 
 ## Built (all in `ml/recon_change`, pushed in c2e8dee; later edits are listed under "next steps")
@@ -17,9 +17,9 @@ here. Seb's ask: no plain images leave the trusted side; garble them with a key,
   coupling layers with a keyed MLP, all applied as a 3D LUT through cv2.remap (12–20 ms a 960×720 frame).
   `decode_colours` decodes a splat's colours. `screened_key` rejects keys that leave the brightness pattern.
 - `live/vault.py` + `test_vault.py`: AES-256-GCM in 1 MiB chunks. Uses `cryptography` on the laptop, and OpenSSL via
-  ctypes on Iridis (nothing installed). The key reaches a job's memory only: `push_key` runs
-  `ssh iridis srun --jobid=J --overlap` with the key on stdin, into `KeyInbox`, a 0600 FIFO in `/dev/shm`.
-- `live/private_train.py` (laptop) + `live/private_job.py` + `iridis/private_train.slurm`: private splat training,
+  ctypes on the GPU server (nothing installed). The key reaches a job's memory only: `push_key` runs
+  `ssh cluster srun --jobid=J --overlap` with the key on stdin, into `KeyInbox`, a 0600 FIFO in `/dev/shm`.
+- `live/private_train.py` (laptop) + `live/private_job.py` + `cluster/private_train.slurm`: private splat training,
   with the same call as `remote_train.train`. The laptop blurs, garbles and seals; the job unseals into RAM, runs
   `video_map.py` and seals its results; the laptop decodes. The job never holds the garbling key.
   `--resume JOB` reuses OUT/private.key.
@@ -48,7 +48,7 @@ here. Seb's ask: no plain images leave the trusted side; garble them with a key,
   on the laptop and call `private_train.train` instead of `remote_train.train`. For live fixes, the relay garbles and
   seals each zip after the anonymise hook points; the worker opens a KeyInbox and unseals in memory. Also: ungarble
   `/frame` for the dashboard.
-- If the relay moves to Iridis, garbling must happen before it: on the phone, or in a thin laptop proxy.
+- If the relay moves to the GPU server, garbling must happen before it: on the phone, or in a thin laptop proxy.
 
 ## Seb's open decisions
 1. Trusted side: the phone app (PHONE_SPEC.md; needs a face/person detector download Seb must approve) or the thin
@@ -56,14 +56,14 @@ here. Seb's ask: no plain images leave the trusted side; garble them with a key,
 2. Done: the anonymised venue splat is published with Seb's OK in `ml/recon_change/venue/` (Git LFS, 74d70bd):
    1,022,521 Gaussians, 32.7 MB, 619 person and 321 head boxes blurred, no faces left by OWLv2.
 
-## Iridis
-- Code is deployed in `junction-recon` (`live/garble.py`, `vault.py`, `private_job.py`, `eval/*`, `iridis/*.slurm`).
+## On the GPU server
+- Code is deployed in `junction-recon` (`live/garble.py`, `vault.py`, `private_job.py`, `eval/*`, `cluster/*.slurm`).
   The YuNet model is in `privacy-models/`.
 - Outputs: `privacy-out/{hall,kitchen-*}/summary.json` (evals), `trained/kitchen-glasses-20261115-001625-anon/`
   (venue splat and anonymised frames), `private/privtest-hall/` (sealed test). The jobs are all finished.
 
 ## Next steps
-1. Run `python live/test_garble.py`, `test_vault.py` and `test_private_train.py` (also on Iridis: `test_vault.py`).
+1. Run `python live/test_garble.py`, `test_vault.py` and `test_private_train.py` (also on the GPU server: `test_vault.py`).
 2. Fix `remote_train.to_webm` on the laptop (OpenCV 4.9 cannot write VP8 WebM: empty file).
 3. After Seb chooses, wire `BEACON_PRIVATE=1` into `relay.py` (through the integrator), test on a test zone, never
    kitchen.

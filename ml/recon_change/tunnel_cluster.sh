@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# The demo with every server on Iridis: this laptop runs no server and no model, only an SSH tunnel. Its ports 8000
-# (event API) and 8090 (relay) lead through the login node to the servers job (iridis/servers.slurm, a CPU node), and
+# The demo with every server on the cluster: this laptop runs no server and no model, only an SSH tunnel. Its ports 8000
+# (event API) and 8090 (relay) lead through the login node to the servers job (cluster/servers.slurm, a CPU node), and
 # the phone reaches them at http://127.0.0.1:8000 and :8090 over adb reverse, as before. Needs the VPN.
 #
-#   bash ml/recon_change/tunnel_iridis.sh            start: the servers job if it is not there, then the tunnel (Ctrl+C
-#                                                    ends the tunnel only; the servers keep running on Iridis)
-#   bash ml/recon_change/tunnel_iridis.sh stop       stop everything: this tunnel and the servers job
-#   bash ml/recon_change/tunnel_iridis.sh status     the servers job, and both servers through the tunnel
-#   bash ml/recon_change/tunnel_iridis.sh restart    restart the servers job (after deploy); the tunnel follows
-#   bash ml/recon_change/tunnel_iridis.sh deploy     copy the relay's and the event API's code and the two secrets
+#   bash ml/recon_change/tunnel_cluster.sh            start: the servers job if it is not there, then the tunnel (Ctrl+C
+#                                                    ends the tunnel only; the servers keep running on the cluster)
+#   bash ml/recon_change/tunnel_cluster.sh stop       stop everything: this tunnel and the servers job
+#   bash ml/recon_change/tunnel_cluster.sh status     the servers job, and both servers through the tunnel
+#   bash ml/recon_change/tunnel_cluster.sh restart    restart the servers job (after deploy); the tunnel follows
+#   bash ml/recon_change/tunnel_cluster.sh deploy     copy the relay's and the event API's code and the two secrets
 #
 # The tunnel follows the servers: when the job is replaced (walltime, restart) and they come back on another node, it
 # reconnects there by itself and runs adb reverse again.
 # Settings: TUNNEL_BIND (0.0.0.0: also the laptop's Wi-Fi address, the phone app's fallback; 127.0.0.1: this laptop
 # and adb only), TUNNEL_API_PORT / TUNNEL_RELAY_PORT (8000 / 8090), TUNNEL_ADB=0 (no adb reverse),
-# BEACON_TRAIN_HOST (SSH alias, iridis), ADB (adb.exe).
+# BEACON_TRAIN_HOST (SSH alias, cluster), ADB (adb.exe).
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-HOST="${BEACON_TRAIN_HOST:-iridis}"
+HOST="${BEACON_TRAIN_HOST:-cluster}"
 ROOT="${BEACON_REMOTE_ROOT:-/scratch/ase1g23/junction-recon}"
 API_DIR="${SERVERS_API_DIR:-/scratch/ase1g23/junction-api}"
 NODE_API_PORT="${SERVERS_API_PORT:-28000}" NODE_RELAY_PORT="${SERVERS_RELAY_PORT:-28090}"
@@ -29,8 +29,8 @@ ADB="${ADB:-/c/Users/User/platform-tools/adb.exe}"
 PIDFILE="${TMPDIR:-/tmp}/beacon-tunnel-$API_PORT.pid"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 
-on_iridis() { ssh "${SSH_OPTS[@]}" "$HOST" "bash -lc \"cd $ROOT && $*\""; }
-servers() { on_iridis "SERVERS_NAME=$NAME SERVERS_API_PORT=$NODE_API_PORT SERVERS_RELAY_PORT=$NODE_RELAY_PORT bash iridis/servers.sh $1"; }
+on_cluster() { ssh "${SSH_OPTS[@]}" "$HOST" "bash -lc \"cd $ROOT && $*\""; }
+servers() { on_cluster "SERVERS_NAME=$NAME SERVERS_API_PORT=$NODE_API_PORT SERVERS_RELAY_PORT=$NODE_RELAY_PORT bash cluster/servers.sh $1"; }
 node_now() { servers node 2>/dev/null | tr -d '\r' | grep -E '^[a-z][a-z0-9-]*$' | tail -1; }
 
 adb_reverse() {
@@ -47,17 +47,17 @@ adb_reverse() {
 
 deploy() {
     cd "$HERE" || exit 1
-    local relay_files=(live/relay.py live/relay_iridis.py live/remote_train.py live/*.html track.py day.py route.py
-                       iridis/servers.slurm iridis/servers.sh iridis/setup_api_env.sh)
+    local relay_files=(live/relay.py live/relay_cluster.py live/remote_train.py live/*.html track.py day.py route.py
+                       cluster/servers.slurm cluster/servers.sh cluster/setup_api_env.sh)
     for f in live/anonymise.py live/care_space.py; do [ -f "$f" ] && relay_files+=("$f"); done
     echo "relay: ${#relay_files[@]} files to $HOST:$ROOT"
-    tar -cf - "${relay_files[@]}" | ssh "${SSH_OPTS[@]}" "$HOST" "bash -lc \"cd $ROOT && tar -xf - && sed -i 's/\r\$//' iridis/servers.slurm iridis/servers.sh iridis/setup_api_env.sh &&.venv-recon/bin/python -m py_compile live/relay.py live/relay_iridis.py live/remote_train.py && echo '  compiled'\""
+    tar -cf - "${relay_files[@]}" | ssh "${SSH_OPTS[@]}" "$HOST" "bash -lc \"cd $ROOT && tar -xf - && sed -i 's/\r\$//' cluster/servers.slurm cluster/servers.sh cluster/setup_api_env.sh &&.venv-recon/bin/python -m py_compile live/relay.py live/relay_cluster.py live/remote_train.py && echo '  compiled'\""
     # gateway.py, recon_change.py and recon_rust.py are the workers' too: deploy_from_laptop.sh sends them (it restarts
     # the workers). Here they are only compared.
     for f in live/gateway.py recon_change.py recon_rust.py; do
-        here=$(tr -d '\r' < "$f" | md5sum | cut -c1-32)  # the checkout has CRLF line ends, Iridis LF
+        here=$(tr -d '\r' < "$f" | md5sum | cut -c1-32)  # the checkout has CRLF line ends, the cluster LF
         there=$(ssh "${SSH_OPTS[@]}" "$HOST" "tr -d '\r' < $ROOT/$f | md5sum" | cut -c1-32)
-        [ "$here" = "$there" ] || echo "  note: $f differs from the one on Iridis (iridis/deploy_from_laptop.sh sends it)"
+        [ "$here" = "$there" ] || echo "  note: $f differs from the one on the cluster (cluster/deploy_from_laptop.sh sends it)"
     done
     cd "$REPO" || exit 1
     local api_files
@@ -68,7 +68,7 @@ deploy() {
     grep -E '^(API_TOKEN|RELAY_KEY)=' "$REPO/.env.demo" | ssh "${SSH_OPTS[@]}" "$HOST" \
         "bash -lc \"umask 077 && cat > $ROOT/.servers.env.new && mv $ROOT/.servers.env.new $ROOT/.servers.env && chmod 600 $ROOT/.servers.env\"" \
         && echo "secrets: API_TOKEN and RELAY_KEY in $ROOT/.servers.env (mode 600)"
-    echo "deployed. A running servers job keeps the old code until: bash ml/recon_change/tunnel_iridis.sh restart"
+    echo "deployed. A running servers job keeps the old code until: bash ml/recon_change/tunnel_cluster.sh restart"
 }
 
 status() {
