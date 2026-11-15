@@ -162,3 +162,25 @@ def test_rejected_creation_can_retry_but_reconcile_cannot_forget_known_voice(tmp
             await manager.reconcile()
         await manager.aclose()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(('code', 'expected'), [
+    ('missing_permissions', 'Voices → Write'),
+    ('subscription_required', 'subscription'),
+    ('voice_limit_reached', 'voice limit'),
+    ('quota_exceeded', 'usage allowance'),
+    ('unknown_code', 'authentication or permissions'),
+])
+def test_provider_errors_are_actionable_without_leaking_messages(tmp_path, code, expected):
+    async def run():
+        manager = FamiliarVoice(tmp_path / 'voice.db', Standard(), httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(401, json={
+                'detail': {'status': code, 'message': 'private-upstream-secret'}
+            }))))
+        with pytest.raises(VoiceError) as error:
+            await manager.create('Family', b'synthetic', 'audio/webm')
+        assert expected in error.value.message
+        assert 'private-upstream-secret' not in error.value.message
+        assert manager.state() == {}
+        await manager.aclose()
+    asyncio.run(run())

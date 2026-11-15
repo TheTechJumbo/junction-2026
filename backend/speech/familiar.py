@@ -67,7 +67,29 @@ class FamiliarVoice:
         if response.status_code == 404 and method == 'DELETE':
             return {}
         if response.status_code not in (200, 201, 204):
-            raise VoiceError('ElevenLabs could not complete this action. Check plan, Voices write permission and voice verification in ElevenLabs.', 503, definitive=400 <= response.status_code < 500)
+            # Translate only known codes. Never expose raw upstream text or credentials.
+            try:
+                detail = response.json().get('detail', {})
+                code = detail.get('status', '') if isinstance(detail, dict) else ''
+            except (ValueError, AttributeError):
+                code = ''
+            messages = {
+                'missing_permissions': 'The ElevenLabs key lacks permission for this action. Enable Voices → Write on this key; workspace members also need permission to create instant voice clones.',
+                'invalid_api_key': 'ElevenLabs rejected the configured API key. Update the backend key and restart the backend.',
+                'subscription_required': 'This ElevenLabs account does not have the subscription required for voice cloning. Check Instant Voice Cloning availability in ElevenLabs.',
+                'voice_limit_reached': 'The ElevenLabs account has reached its voice limit. Manage existing voices in ElevenLabs before retrying.',
+                'quota_exceeded': 'The ElevenLabs account has reached its usage allowance. Check its quota before retrying.',
+                'voice_access_denied': 'This ElevenLabs key cannot access the selected voice. Check voice access in ElevenLabs.',
+            }
+            message = messages.get(code)
+            if not message:
+                message = {
+                    401: 'ElevenLabs rejected authentication or permissions. Check the backend key and Voices → Write permission.',
+                    403: 'ElevenLabs denied this action. Check Voices → Write, workspace cloning permission and plan eligibility.',
+                    422: 'ElevenLabs rejected the voice sample or request. Try a clear 1–2 minute recording of your own voice in a supported audio format.',
+                    429: 'ElevenLabs is rate-limiting requests. Wait before retrying.',
+                }.get(response.status_code, 'ElevenLabs could not complete the action. Its service may be unavailable; check voice status before retrying.')
+            raise VoiceError(message, 503, definitive=400 <= response.status_code < 500)
         try:
             return response.json() if response.content else {}
         except ValueError:
