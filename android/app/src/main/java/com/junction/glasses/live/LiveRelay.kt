@@ -243,15 +243,23 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
             }
         })
 
-    /** The zone's named places (GET {relay}/waypoints?zone=): names only, for "take me to …". */
-    suspend fun placeNames(): List<String> {
+    /** The zone's named places (GET {relay}/waypoints?zone=): names only, for "take me to …". Seen things excluded. */
+    suspend fun placeNames(): List<String> = spots().filter { it.second != "object" }.map { it.first }
+
+    /**
+     * Every entry of GET {relay}/waypoints?zone=: (name, kind). kind is null for a named place and "object"
+     * for a thing the relay has seen (the orange box), which is asked about with /find rather than walked to.
+     */
+    suspend fun spots(): List<Pair<String, String?>> {
         val body = send(http, Request.Builder()
             .url(base.newBuilder().addPathSegment("waypoints").addQueryParameter("zone", zone).build())
             .header("X-Key", key).header("Accept", "application/json").get().build()) { "zone $zone" }
         return try {
-            JsonParser.parseString(body).asJsonObject.getAsJsonArray("waypoints")
-                ?.mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject?.get("name")?.takeIf { n -> n.isJsonPrimitive }?.asString }
-                .orEmpty()
+            JsonParser.parseString(body).asJsonObject.getAsJsonArray("waypoints")?.mapNotNull { e ->
+                val o = e.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+                val name = o.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: return@mapNotNull null
+                name to o.get("kind")?.takeIf { it.isJsonPrimitive }?.asString
+            }.orEmpty()
         } catch (_: Exception) { emptyList() }
     }
 

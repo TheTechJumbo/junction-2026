@@ -287,7 +287,7 @@ def test_relay():
     got = ask("Where is the orange box?")
     assert got["answer"].startswith("The orange box is on our table, about 2 metres ahead on your right. I last saw it at"), got
     assert got["target"] == "orange box" and got["confirmed"] and got["point"]["position"], got
-    assert got["seen_at"] >= put_down
+    assert got["seen_at"] >= put_down - 0.1  # times are kept to 0.1 s
     # "take me there": /navigate knows the thing
     status, way = call(f"/navigate?zone={ZONE}&to={urllib.parse.quote('orange box')}")
     assert status == 200 and way["to"] == "orange box" and way["distance_m"] > 1.5, (status, way)
@@ -352,6 +352,18 @@ def test_relay():
     status, got = call(f"/find?zone={ZONE}")
     thing = next(t for t in got["things"] if t["name"] == "orange box")
     assert status == 200 and "red cup" in got["watching"] and thing["sighting"]["near"] == "snack table" and len(thing["moves"]) == 1, got
+    # GET /find&what=: the phone app's find me X, always 200
+    status, got = call(f"/find?zone={ZONE}&what=orange+box")
+    assert status == 200 and got["ok"] and got["found"] and got["confirmed"] and not got["looking"], (status, got)
+    assert got["place"] == "snack table" and got["moved_from"] == "our table" and got["at"] >= put_down - 0.1, got
+    assert got["answer"].startswith("The orange box is on the snack table") and len(got["position"]) == 3, got
+    # /where carries the found thing in "seen" (the app's map, the wearer page's way to it, before "take me there")
+    status, here = call(f"/where?zone={ZONE}")
+    box_seen = [x for x in here.get("seen") or [] if x["name"] == "orange box"]
+    assert status == 200 and len(box_seen) == 1 and box_seen[0]["finder"] and box_seen[0]["near"] == "snack table", here.get("seen")
+    assert box_seen[0]["kind"] == "object" and not box_seen[0]["doubt"] and len(box_seen[0]["position"]) == 3, box_seen
+    status, got = call(f"/find?zone={ZONE}&what=green+kettle")
+    assert status == 200 and got["ok"] and not got["found"] and got["looking"] and got["position"] is None, (status, got)
     # POST /find: watch for a name without asking; forget it
     status, got = call(f"/find?zone={ZONE}&name=blue+mug", {})
     assert status == 200 and "blue mug" in got["watching"], got
