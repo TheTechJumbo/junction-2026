@@ -47,6 +47,7 @@ class RelayProxy(private val client: OkHttpClient, private val relay: () -> Rela
         private const val ZONE = "zone=[a-z0-9_-]{1,32}"
         private val ZONE_QUERY = Regex(ZONE)
         private val DAY_QUERY = Regex("date=\\d{4}-\\d{2}-\\d{2}")
+        private val FIND_QUERY = Regex("$ZONE&what=[A-Za-z0-9%+._-]{1,64}")  // /find: where a thing was last seen
         private val EVIDENCE = Regex("/evidence/[A-Za-z0-9_-]{1,96}/\\w{1,64}\\.(splat|json|jpg)")
         private val BY_ZONE = setOf("/care", "/care/space", "/where", "/waypoints", "/frame", "/changes")
 
@@ -55,6 +56,7 @@ class RelayProxy(private val client: OkHttpClient, private val relay: () -> Rela
             path in BY_ZONE -> query != null && ZONE_QUERY.matches(query)
             path == "/day" -> query == null || DAY_QUERY.matches(query)
             path == "/reminders" -> query == null
+            path == "/find" -> query != null && FIND_QUERY.matches(query)
             EVIDENCE.matches(path) -> query == null
             else -> false
         }

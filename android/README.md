@@ -201,6 +201,15 @@ The map and guidance use the **venue zone**, apart from the zone field that reco
 so recordings can go to a test zone while the wearer is guided in the venue. Debug builds set it
 with `--es venue_zone kitchen` (remembered); without it they use the zone field.
 
+### "Find me X"
+
+"Find me the orange box", "where is / where did I put / have you seen the orange box" (glasses or phone
+mic, or typed) ask the relay `GET /find?zone=<venue zone>&what=orange box` when the thing is not a named
+place (named places stay guidance). The answer is spoken through the selected audio (the glasses'),
+shown on the wearer screen, and the thing is drawn on the map as an amber ring. While the relay says it
+is still `looking`, the app says "I'll look for the orange box" and asks again every 3 s for up to a
+minute. Then "Take me there" (the button under the map, or said) guides to it with `/navigate?to=`.
+
 ### Debug panel
 
 A small dim "debug" under the map opens, on a long press only, a panel with no secrets:

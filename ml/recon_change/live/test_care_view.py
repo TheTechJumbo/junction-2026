@@ -184,6 +184,10 @@ def check_relay():
             assert hall["named"] == []
 
             assert get(base, "/care/space?zone=nowhere")[0] == 404
+            # The wearer's phone asks for the lighter copy: made next to the trained splat, same axes.
+            lite = json.loads(get(base, "/care/space?zone=kitchen&lite=1")[2])
+            assert lite["lite_splat"] == "/evidence/train-kitchen-x-1/lite.splat" and lite["matrix"] == space["matrix"], lite.get("lite_splat")
+            assert get(base, lite["lite_splat"])[0] == 200
             # The splat itself comes through the relay's evidence route, as on the page.
             assert get(base, space["splat"])[0] == 200
             print("  relay: /care page, /care/space trained and room-map replies, named places from depth, key required")
@@ -191,7 +195,22 @@ def check_relay():
             server.shutdown()
 
 
+def check_lite():
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp)
+        rec = np.zeros(5, dtype=[("pos", "<f4", 3), ("scale", "<f4", 3), ("rgba", "u1", 4), ("rot", "u1", 4)])
+        rec["pos"][:, 0] = np.arange(5)
+        rec["scale"] = [[0.01] * 3, [0.2] * 3, [0.05] * 3, [0.3] * 3, [0.3] * 3]
+        rec["rgba"][:, 3] = [255, 255, 255, 255, 10]  # the last is big but nearly see-through
+        rec.tofile(folder / "trained.splat")
+        made = care_space.make_lite(folder, most=2)
+        kept = np.fromfile(made, dtype=rec.dtype)
+        assert sorted(kept["pos"][:, 0].tolist()) == [1.0, 3.0], kept["pos"]
+        print("  lite splat: keeps the Gaussians that cover the most")
+
+
 if __name__ == "__main__":
+    check_lite()
     check_space()
     check_relay()
     print("care view: all checks passed")

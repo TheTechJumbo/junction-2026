@@ -243,18 +243,6 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
             }
         })
 
-    /** POST {relay}/ask?zone=: the relay's answer to "find me X" / "where is X" (where the glasses last saw it). */
-    suspend fun ask(question: String): com.junction.glasses.core.FindReply {
-        val body = JsonObject().apply { addProperty("question", question) }.toString()
-        val request = Request.Builder()
-            .url(base.newBuilder().addPathSegment("ask").addQueryParameter("zone", zone).build())
-            .header("X-Key", key).header("Accept", "application/json")
-            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
-        return com.junction.glasses.core.FindReply.parse(send(http, request) { reply ->
-            "zone $zone: " + (runCatching { com.junction.glasses.core.FindReply.parse(reply).answer.take(80) }.getOrNull() ?: "no answer")
-        })
-    }
-
     /** The zone's named places (GET {relay}/waypoints?zone=): names only, for "take me to …". */
     suspend fun placeNames(): List<String> {
         val body = send(http, Request.Builder()
@@ -266,6 +254,24 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
                 .orEmpty()
         } catch (_: Exception) { emptyList() }
     }
+
+    /** GET {relay}/find?zone=&what=: whether and where the thing was seen, and the words to say. */
+    fun findRequest(what: String): Request = Request.Builder()
+        .url(base.newBuilder().addPathSegment("find").addQueryParameter("zone", zone).addQueryParameter("what", what.take(60)).build())
+        .header("X-Key", key)
+        .header("Accept", "application/json")
+        .get()
+        .build()
+
+    suspend fun find(what: String): com.junction.glasses.core.FindReply =
+        com.junction.glasses.core.FindReply.parse(send(http, findRequest(what)) { body ->
+            val r = com.junction.glasses.core.FindReply.parse(body)
+            "zone $zone, $what: " + when {
+                r.found -> "found" + (r.place?.let { " by $it" } ?: "")
+                r.looking -> "looking"
+                else -> r.error ?: "not seen"
+            }
+        })
 
     suspend fun baseline(zip: ByteArray, zone: String): BaselineReply =
         BaselineReply.parse(send(slowHttp, baselineRequest(zip, zone)))
