@@ -322,6 +322,11 @@ def test_relay():
     assert status == 200 and got["ok"] and got["found"] and got["confirmed"] and not got["looking"], (status, got)
     assert got["place"] == "snack table" and got["moved_from"] == "our table" and got["at"] >= put_down - 0.1, got
     assert got["answer"].startswith("The orange box is on the snack table") and len(got["position"]) == 3, got
+    # /where carries the found thing in "seen" (the app's map, the wearer page's way to it, before "take me there")
+    status, here = call(f"/where?zone={ZONE}")
+    box_seen = [x for x in here.get("seen") or [] if x["name"] == "orange box"]
+    assert status == 200 and len(box_seen) == 1 and box_seen[0]["finder"] and box_seen[0]["near"] == "snack table", here.get("seen")
+    assert box_seen[0]["kind"] == "object" and not box_seen[0]["doubt"] and len(box_seen[0]["position"]) == 3, box_seen
     status, got = call(f"/find?zone={ZONE}&what=green+kettle")
     assert status == 200 and got["ok"] and not got["found"] and got["looking"] and got["position"] is None, (status, got)
     assert "green kettle" in call(f"/find?zone={ZONE}")[1]["watching"]

@@ -891,6 +891,14 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if fix and fix.get("state") != "lost":
                 entry["distance_m"], entry["bearing_deg"] = from_here(spot["position"], fix)
             out.append(entry)
+        for found in found_things.targets(zone):  # find me X: the watched things seen, for the app's map and the pages
+            spot = found_things.sighting(zone, found["name"]) or found_things.single_view(zone, found["name"]) or {}
+            entry = {**{k: spot[k] for k in ("image", "box2d", "size_m") if spot.get(k) is not None}, **found,
+                     "near": spot.get("near") or "", "age_s": round(time.time() - found["at"]),
+                     "time": home_time(found["at"]).strftime("%H:%M"), "doubt": False, "finder": True}
+            if fix and fix.get("state") != "lost":
+                entry["distance_m"], entry["bearing_deg"] = from_here(found["position"], fix)
+            out.append(entry)
         return out
 
     def item_answer(name, zone, question):
@@ -1514,6 +1522,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         if stable and stable.get("position") and stable.get("state") != "lost":
             start = {**fix, "state": "found", "position": stable["position"], "heading_deg": stable.get("heading_deg") or 0}
         targets = list(fix.get("waypoints") or []) + [s for s in seen.get(fix.get("zone"), {}).values() if not in_doubt(s)]
+        targets += found_things.targets(fix.get("zone"))  # find me X: the way to a found thing, before "take me there"
         key = (fix.get("job"), fix.get("at"), json.dumps([start.get("position"), [[t.get("name"), t.get("position")] for t in targets]]))
         if route_cache.get(fix.get("zone"), (None, None))[0] != key:
             route_cache[fix.get("zone")] = (key, route_finder.plan(start, targets))

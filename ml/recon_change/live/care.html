@@ -994,14 +994,22 @@ function currentVisit() {
 function goal() {  // where the wearer is being guided (the app's "take me to", relay /navigate), as /where reports it
   const f = fix || {};
   const g = f.navigate || f.navigation || f.going_to || f.goal || (f.stable && (f.stable.navigate || f.stable.goal)) || null;
-  if (!g || (typeof g === 'object' && (g.active === false || g.done))) return null;
+  if (!g || (typeof g === 'object' && (g.active === false || g.done))) return foundGoal();
   const name = typeof g === 'string' ? g : (g.name || g.place || g.target || g.to);
-  if (!name) return null;
+  if (!name) return foundGoal();
   const place = places.find((p) => p.name.toLowerCase() === String(name).toLowerCase());
   const pose = wearerPose(f);
   let d = typeof g === 'object' && Number.isFinite(g.distance_m) ? g.distance_m : null;
   if (place && pose) d = Math.hypot(place.position[0] - pose.position[0], place.position[1] - pose.position[1]);
   return { name: String(name), d, place };
+}
+function foundGoal() {  // no guidance, but a thing asked for (find me X) was found: the way to it, unasked
+  const since = (room && room.map_at) || 0;  // as drawFound: a position from an older map is in other axes
+  const f = foundFromFind.filter((x) => x.position && (!x.at || x.at >= since)).sort((a, b) => (b.at || 0) - (a.at || 0))[0];
+  if (!f) return null;
+  const pose = wearerPose(fix || {});
+  const d = pose ? Math.hypot(f.position[0] - pose.position[0], f.position[1] - pose.position[1]) : null;
+  return { name: f.name, d, place: { name: f.name, position: f.position }, found: true };
 }
 const routeMat = new THREE.MeshBasicMaterial({ color: 0x5dff9a, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
 const routeRibbon = new THREE.Mesh(new THREE.BufferGeometry(), routeMat);
@@ -1031,7 +1039,7 @@ space.add(goalLine);
 let saidGoal = '';
 function renderGoal() {
   const g = goal();
-  if (WEARER && g && g.name !== saidGoal) say(`Going to the ${g.name}`, g.d != null ? `${metres(g.d)} away. Follow the green line.` : 'Follow the green line.');
+  if (WEARER && g && g.name !== saidGoal) say(g.found ? `Found the ${g.name}` : `Going to the ${g.name}`, g.d != null ? `${metres(g.d)} away. Follow the green line.` : 'Follow the green line.');
   saidGoal = g ? g.name : '';
   $('goal').hidden = !g;
   for (const [id, t] of tags) if (id.startsWith('p:')) t.el.classList.toggle('goal', !!g && id === `p:${g.place && g.place.name}`);
@@ -1042,7 +1050,8 @@ function renderGoal() {
   routeRibbon.visible = !!pts;
   goalLine.visible = !!(g && g.place && wearer.visible && !pts);
   if (!g) return;
-  $('goal').textContent = `Going to: ${g.name}${g.d != null ? `, ${metres(g.d)} away` : ''}`;
+  $('goal').textContent = g.found ? `Found: ${g.name}${g.d != null ? `, ${metres(g.d)} away` : ''}. Follow the green line.`
+    : `Going to: ${g.name}${g.d != null ? `, ${metres(g.d)} away` : ''}`;
   if (g.place) {
     const p = g.place.position;
     goalLine.geometry.dispose();
