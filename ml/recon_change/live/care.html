@@ -52,6 +52,18 @@
   #see img { width: 100%; border-radius: 10px; display: block; background: #0b1118; aspect-ratio: 4 / 3; object-fit: cover; }
   #see figcaption { margin-top: 4px; }
   ul, ol { list-style: none; margin: 0; padding: 0; }
+  #check { margin-top: 8px; padding: 7px 10px; border-radius: 9px; background: #101924; border: 1px solid var(--line); font-size: 13px; }
+  #check.local { border-color: rgba(255, 184, 77, .7); background: rgba(255, 184, 77, .1); }
+  #check.moved { border-color: rgba(74, 163, 255, .5); }
+  #check b { font-weight: 600; }
+  .chg { padding: 8px 0; }
+  .chg + .chg { border-top: 1px solid #172230; }
+  .chg.new { animation: flash 2.4s ease-out; }
+  @keyframes flash { from { background: rgba(255, 184, 77, .25); } to { background: transparent; } }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+  .pair figure { margin: 0; }
+  .pair img { width: 100%; border-radius: 8px; display: block; background: #0b1118; aspect-ratio: 1; object-fit: cover; }
+  .pair figcaption { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .rem { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; }
   .rem + .rem { border-top: 1px solid #172230; }
   .chip { flex: none; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; text-transform: uppercase; letter-spacing: .04em; }
@@ -108,7 +120,13 @@
     <h2>Now</h2>
     <p id="nowLine">…</p>
     <div id="doing" class="muted"></div>
+    <div id="check" hidden></div>
     <figure id="see" style="margin:10px 0 0"><img id="seeImg" alt="What the glasses saw last"><figcaption class="muted small" id="seeWhen"></figcaption></figure>
+  </section>
+  <section id="changesSection">
+    <h2>Changes in view</h2>
+    <ul id="changes"><li class="muted small">Nothing moved yet. When the camera holds still and something in view is moved,
+      taken or put down, it shows here with a before and a now picture (checked on every photo the model looks at).</li></ul>
   </section>
   <section>
     <h2>Reminders</h2>
@@ -136,7 +154,7 @@
 </script>
 <script type="module">
 // The caretaker's page: the room as a Gaussian splat with the wearer moving in it, the named places as labels in 3D,
-// and what the wearer is doing (relay: /care/space, /where, /day, /reminders, /frame, /waypoints).
+// and what the wearer is doing (relay: /care/space, /where, /day, /reminders, /frame, /changes).
 //   /care?zone=kitchen&k=KEY   in a browser on the laptop or a phone
 //   /relay/care?zone=kitchen   in the family app, whose proxy adds the key (any path ending in /care works)
 // Everything is drawn in the room map's axes (x east, y north, z up, metres; relay /room): the position fixes and
@@ -591,6 +609,44 @@ function renderNow() {
   $('doing').innerHTML = doingWords().map((w) => `<div>${esc(w)}</div>`).join('');
 }
 
+function renderCheck() {  // the relay's cheap check of the newest photo against the one before (relay view_verdict)
+  const v = fix && fix.view;
+  const el = $('check');
+  if (!v || !fresh(fix)) { el.hidden = true; return; }
+  const when = clock(fix.at);
+  const pct = Math.round(100 * (v.share || 0));
+  const words = {
+    same: `<b>Same view</b> as the photo before: nothing changed${v.model_asked ? '' : ' (answered without the model)'}.`,
+    local: `<b>Something changed in view</b>: ${pct}% of the picture, the camera held still.`,
+    moved: `<b>New view</b>: the camera moved (${pct}% of the picture changed).`,
+    first: '<b>First photo</b> checked: the next ones are compared with it.',
+  }[v.kind] || esc(v.kind);
+  const c = v.counts || {};
+  el.className = v.kind || '';
+  el.innerHTML = `${words}<div class="muted small">Checked ${when} · ${c.model_not_asked || 0} unchanged · ${c.something_moved || 0} changes · ${c.camera_moved || 0} camera moves</div>`;
+  el.hidden = false;
+}
+
+let changesSeen = '', newestChange = 0;
+async function tickChanges() {
+  let list;
+  try { list = (await getJson(`/changes?zone=${encodeURIComponent(zone)}`)).changes || []; } catch { return; }
+  const key = list.map((c) => c.at).join();
+  if (key === changesSeen) return;
+  changesSeen = key;
+  const before = newestChange;
+  newestChange = list.length ? list[0].at : 0;
+  if (!list.length) return;
+  $('changes').innerHTML = list.slice(0, 6).map((c) => {
+    const img = c.images || {};
+    const pics = img.before || img.now ? `<div class="pair">
+        ${img.before ? `<figure><img loading="lazy" src="${esc(api(img.before))}" alt="Before"><figcaption>before, ${c.since_s} s earlier</figcaption></figure>` : ''}
+        ${img.now ? `<figure><img loading="lazy" src="${esc(api(img.now))}" alt="Now"><figcaption>now</figcaption></figure>` : ''}</div>` : '';
+    return `<li class="chg${before && c.at > before ? ' new' : ''}"><div><b>${esc(c.time || clock(c.at))}</b>
+      <span class="muted small"> · ${Math.round(100 * (c.share || 0))}% of the view changed</span></div>${pics}</li>`;
+  }).join('');
+}
+
 async function tickWhere() {
   try {
     fix = await getJson(`/where?zone=${encodeURIComponent(zone)}`);
@@ -616,6 +672,7 @@ async function tickWhere() {
   }
   updateWearer();
   renderNow();
+  renderCheck();
   renderPlaces();
 }
 
@@ -738,6 +795,7 @@ every(1000, tickWhere);
 every(15000, tickDay);
 every(10000, tickReminders);
 every(3000, tickSee);
+every(2000, tickChanges);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickWhere(); tickDay(); } });
 window.__care = { camera, look, space, splatFrame, get fix() { return fix; }, get room() { return room; }, get places() { return places; }, wearer };
 </script>
