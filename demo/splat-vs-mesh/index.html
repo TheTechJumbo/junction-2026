@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Splat vs mesh</title>
+<style>
+  :root { --bg: #0f1830; --panel: #16213f; --text: #eef2f6; --soft: #a0b0cc; --amber: #f2b04a; --line: #2b3a63; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 12px 16px; display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; }
+  header p { margin: 0; color: var(--soft); }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 8px 8px; flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  section { position: relative; background: var(--panel); border-radius: 10px; overflow: hidden; min-height: 300px; }
+  section h2 { position: absolute; z-index: 2; top: 10px; left: 12px; margin: 0; font-size: 14px; font-weight: 600;
+    background: rgba(15,24,48,.75); padding: 4px 10px; border-radius: 6px; }
+  section h2 span { color: var(--soft); font-weight: 400; }
+  #splat { position: absolute; inset: 0; }
+  .mesh-pane { display: flex; flex-direction: column; }
+  .stage { position: relative; flex: 1; min-height: 200px; }
+  #mesh { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  #mesh:active { cursor: grabbing; }
+  .status { position: absolute; z-index: 2; bottom: 10px; left: 12px; color: var(--soft); font-size: 13px; }
+  label { color: var(--soft); }
+  @media (max-width: 760px) { body { display: block; height: auto; } main { grid-template-columns: 1fr; grid-auto-rows: minmax(50vh, auto); } .mesh-pane { min-height: 90vh; } }
+
+  /* The night controls: the family app's (dashboard/base.css), with a plain dark look for the buttons. */
+  .night-panel { padding: 8px 12px 10px; border-top: 1px solid var(--line); }
+  .night-panel[hidden] { display: none; }
+  .night-summary { margin: 0 0 4px; font-weight: 600; }
+  .night-note { margin: 0 0 6px; color: var(--soft); font-size: 13px; }
+  .night-row { display: flex; align-items: center; gap: .5rem 1rem; flex-wrap: wrap; }
+  button { font: inherit; color: var(--text); border-radius: 8px; cursor: pointer; }
+  .ghost { background: transparent; border: 1px solid var(--line); }
+  .ghost:hover { background: rgba(255,255,255,.06); }
+  .primary { background: var(--amber); color: #1b1407; border: 1px solid var(--amber); }
+  .link-button { background: none; border: 0; padding: 2px 0; color: var(--soft); text-decoration: underline; text-underline-offset: 3px; }
+  .visually-hidden{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .trip-list{list-style:none;margin:.35rem 0 0;padding:0;display:flex;gap:.25rem 1rem;flex-wrap:wrap;font-size:13px}
+  .trip-list button{text-align:start}
+  .night-controls{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+  .night-controls .icon-button{display:inline-grid;place-items:center;min-width:2.75rem;min-height:2.75rem}
+  .media-icon{width:1.25rem;height:1.25rem}
+  .night-options{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+  .night-options .icon-button{display:inline-grid;place-items:center;min-width:2.75rem;min-height:2.75rem}
+  .night-speed{display:flex;align-items:center;gap:.5rem}
+  .speed-dial{width:3.25rem;height:3.25rem;cursor:ns-resize;touch-action:none;border-radius:50%;color:var(--amber)}
+  .speed-dial svg{display:block;width:100%;height:100%}
+  .speed-dial .dial-track{opacity:.25}
+  .speed-text{font-variant-numeric:tabular-nums;min-width:5.5em}
+  .night-skip[aria-pressed="true"]{outline:2px solid currentColor;outline-offset:-2px}
+  .night-skip[aria-pressed="false"]{opacity:.6}
+  #night-rewind[aria-pressed="true"]{outline:2px solid var(--amber);outline-offset:-2px}
+  [data-tip]{position:relative}
+  .tip{position:absolute;bottom:calc(100% + .5rem);left:50%;transform:translateX(-50%);z-index:5;padding:.35rem .6rem;border-radius:.4rem;
+    background:rgba(12,16,32,.94);color:#fff;font-size:.8rem;line-height:1.3;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s}
+  [data-tip]:hover>.tip,[data-tip]:focus-visible>.tip,[data-tip][data-tip-open]>.tip{opacity:1}
+  @media (hover:none){[data-tip]:hover>.tip{opacity:0}[data-tip][data-tip-open]>.tip{opacity:1}}
+  .night-ends{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-size:.85rem;opacity:.75}
+  .night-clock{font-variant-numeric:tabular-nums;font-size:1.6rem;font-weight:600;margin-inline-start:.25rem;min-width:5ch}
+  .night-time{width:100%;margin:.25rem 0;accent-color:var(--amber)}
+  .night-strip{position:relative;height:1.1rem;margin-top:.5rem;cursor:pointer;color:var(--amber);background:rgba(255,255,255,.04);border-radius:3px}
+  .night-strip span{position:absolute;inset-block:0;inset-inline-start:calc(var(--from,0) * 100%);width:calc(var(--span,0) * 100%);min-width:3px;border-radius:2px;background:currentColor;opacity:.35}
+  .night-strip span[data-kind="event"]{width:3px;opacity:1;color:#7fd3c9}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"
+} }
+</script>
+</head>
+<body>
+<header>
+  <h1>Gaussian splat → our mesh</h1>
+  <p id="scene-words">Mip-NeRF 360 "room" (public example, 1.59 M Gaussians). Right: <code>splat_mesh.from_splat()</code> in the family app's own viewer.</p>
+  <label>Mesh: <select id="which"><option value="room_blocks_fine.ply">blocks, 7 cm (~10k)</option><option value="room_blocks_mid.ply">blocks, 12 cm (~3k)</option><option value="room_10k.ply">~10k triangles (simplified surface)</option><option value="room_20k.ply">~20k triangles (simplified)</option><option value="room_lowpoly.ply">blocks, under 1k (lowpoly.py)</option><option value="room_mesh.ply" data-raw>coarse voxel</option><option value="room_mesh_fine.ply" data-raw>fine voxel</option></select></label>
+  <label><input type="checkbox" id="show-night" checked> Last night in 3D</label>
+</header>
+<main>
+  <section><h2>Gaussian splat <span>(GaussianSplats3D)</span></h2><div id="splat"></div><div class="status" id="splat-status">Loading 51 MB…</div></section>
+  <section class="mesh-pane"><h2>Our mesh <span>(space.js, as in the app)</span></h2>
+    <div class="stage"><canvas id="mesh" tabindex="0" aria-label="3D view of the room. Drag or use the arrow keys to turn; scroll or plus and minus to zoom; double-click or 0 to reset."></canvas><div class="status" id="mesh-status">Loading…</div></div>
+    <div id="night-panel" class="night-panel">
+      <p id="night-summary" class="night-summary"></p>
+      <p id="night-note" class="night-note"></p>
+      <div class="night-row">
+        <div class="night-controls">
+<button id="night-prev" class="ghost icon-button" type="button" aria-label="Previous moment" data-tip="Previous moment"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.5v14H6zM19 5.5v13a1 1 0 0 1-1.5.86L9.6 12.86a1 1 0 0 1 0-1.72l7.9-6.5A1 1 0 0 1 19 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-rewind" class="ghost icon-button" type="button" aria-label="Play backwards" data-tip="Play backwards"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5.5v13a1 1 0 0 1-1.5.86L4.1 12.86a1 1 0 0 1 0-1.72L14.5 4.64A1 1 0 0 1 16 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-play" class="primary icon-button" type="button" aria-label="Play" data-tip="Play"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true" data-show="play"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor" stroke="none"></path></svg><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true" data-show="pause" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" stroke="none"></path></svg></button>
+<button id="night-next" class="ghost icon-button" type="button" aria-label="Next moment" data-tip="Next moment"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM5 5.5v13a1 1 0 0 0 1.5.86l7.9-6.5a1 1 0 0 0 0-1.72l-7.9-6.5A1 1 0 0 0 5 5.5z" fill="currentColor" stroke="none"></path></svg></button>
+<output id="night-clock" class="night-clock" for="night-time">--:--</output>
+        </div>
+        <div class="night-options">
+<div class="night-speed"><div id="speed-dial" class="speed-dial" role="slider" tabindex="0" aria-label="Playing speed" aria-valuemin="0.25" aria-valuemax="30" aria-valuenow="1" aria-valuetext="1 minute of night per second" data-tip="Speed: drag, scroll or use the arrow keys">
+<svg viewBox="0 0 48 48" aria-hidden="true"><path class="dial-track" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" d=""></path><path id="speed-arc" class="dial-fill" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" d=""></path><circle id="speed-knob" class="dial-knob" r="3.2" fill="currentColor" cx="24" cy="24"></circle></svg>
+</div><output id="speed-text" class="speed-text" for="speed-dial">1 min/s</output></div>
+<button id="night-skip" class="ghost icon-button night-skip" type="button" aria-pressed="true" aria-label="Skip time in bed" data-tip="Skip time in bed: play jumps from one trip to the next"><svg class="icon media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 20V10h2v5h16a2 2 0 0 1 2 2v3h-2v-2H4v2z" fill="currentColor" stroke="none"></path><path d="M5 12.6a1.6 1.6 0 1 0 3.2 0 1.6 1.6 0 0 0-3.2 0z" fill="currentColor" stroke="none"></path><path d="M10 4l4.5 3.5L10 11zM15.5 4l4.5 3.5-4.5 3.5z" fill="currentColor" stroke="none"></path></svg></button>
+        </div>
+      </div>
+      <div class="night-strip" id="night-strip" title="Click to jump; scroll to move a minute (Shift: ten)"></div>
+      <div class="night-ends"><time id="night-from">--:--</time><time id="night-to">--:--</time></div>
+      <label for="night-time" class="visually-hidden">Time of night. Arrow keys move a minute, with Shift ten; Home and End go to the ends.</label><input id="night-time" class="night-time" type="range" min="0" max="1000" value="0" step="1">
+      <ul id="trip-list" class="trip-list"></ul>
+    </div>
+  </section>
+</main>
+<script type="module">
+  import * as GS from '@mkkellogg/gaussian-splats-3d';
+  import {Space, parsePly} from '../../dashboard/space.js'; // the family app's own viewer
+  import {NightView} from './night.js';
+
+  // Right first (it is quick): the mesh our code made from the splat, in the family app's viewer,
+  // with last night's walk over it as the app draws it.
+  const $ = id => document.getElementById(id);
+  const space = new Space($('mesh'));
+  const nightView = new NightView({$, space});
+  // Which splat: Seb's venue splat from our Ray-Ban Meta glasses (default), or ?scene=room for the public example.
+  const SCENES = {
+    venue: {dir: 'venue/', splat: 'venue/venue-kitchen-glasses-anon.splat',
+      words: 'Junction hacking hall, from our Ray-Ban Meta glasses (Seb’s splat, people anonymised; 1.02 M Gaussians).',
+      meshes: [['room_blocks_fine.ply', 'blocks, high (7 cm)'], ['room_blocks_mid.ply', 'blocks, medium (12 cm)']]},
+    room: {dir: 'room/', splat: 'room/room.splat', words: 'Mip-NeRF 360 “room” (public example, 1.59 M Gaussians).',
+      meshes: [['room_blocks_fine.ply', 'blocks, 7 cm (~10k)'], ['room_blocks_mid.ply', 'blocks, 12 cm (~3k)'], ['room_10k.ply', '~10k triangles (simplified surface)'],
+        ['room_lowpoly.ply', 'blocks, under 1k'], ['room_mesh.ply', 'coarse voxel', true], ['room_mesh_fine.ply', 'fine voxel', true]]},
+  };
+  const scene = SCENES[new URLSearchParams(location.search).get('scene')] || SCENES.venue;
+  document.getElementById('scene-words').firstChild.textContent = scene.words + ' ';
+  document.getElementById('which').replaceChildren(...scene.meshes.map(([file, label, raw]) => {
+    const o = document.createElement('option'); o.value = file; o.textContent = label; if (raw) o.dataset.raw = ''; return o;
+  }));
+  const nightData = fetch(scene.dir + 'night.json').then(r => r.json());
+  const which = $('which'), showNight = $('show-night');
+  // The voxel meshes are in the splat's own units, not the room frame's metres: the walk does not fit them.
+  const fits = () => !which.selectedOptions[0].hasAttribute('data-raw');
+  async function overlay() {
+    const on = showNight.checked && fits();
+    $('night-panel').hidden = !on;
+    if (on) nightView.show(await nightData); else { nightView.hide(); }
+    showNight.disabled = !fits();
+  }
+  async function load(name) {
+    const status = $('mesh-status');
+    status.textContent = 'Loading…';
+    const buffer = await (await fetch(scene.dir + name)).arrayBuffer();
+    const mesh = parsePly(buffer);
+    space.show(mesh); space.start();
+    status.textContent = `${(mesh.indices.length / 3 / 1000).toFixed(0)} k triangles · drag to turn · scroll to zoom` + (fits() ? '' : ' · the night walk is drawn on the room-frame meshes only');
+    await overlay();
+  }
+  which.addEventListener('change', e => load(e.target.value));
+  showNight.addEventListener('change', () => { if (!showNight.checked) space.reset(); overlay(); });
+  window.demo = {space, nightView, ready: load('room_blocks_fine.ply')};
+
+  // Left: the splat, rendered as a splat.
+  const cam = await (await fetch(scene.dir + 'camera.json')).json(); // the same "up" the mesh was levelled with
+  const splatView = new GS.Viewer({
+    rootElement: $('splat'),
+    cameraUp: cam.up, initialCameraPosition: cam.eye, initialCameraLookAt: cam.look,
+    sharedMemoryForWorkers: false, gpuAcceleratedSort: false, selfDrivenMode: true,
+  });
+  splatView.addSplatScene(scene.splat, {showLoadingUI: false, progressiveLoad: false, splatAlphaRemovalThreshold: 5})
+    .then(() => { splatView.start(); $('splat-status').textContent = 'Drag to orbit · scroll to zoom'; window.demo.splat = true; })
+    .catch(e => { $('splat-status').textContent = 'Could not load the splat: ' + e.message; });
+</script>
+</body>
+</html>

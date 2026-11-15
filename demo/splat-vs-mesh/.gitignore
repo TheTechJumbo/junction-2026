@@ -1,0 +1,3 @@
+# The splats are large: fetch them (see README.md), never commit them.
+*.splat
+room/
