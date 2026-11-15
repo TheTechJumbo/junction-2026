@@ -70,6 +70,9 @@ class Settings:
     stream_poll_seconds: float = .1
     stream_keepalive_seconds: float = 15
     allowed_origins: tuple[str, ...] = ()
+    # Trip hazards (GET /hazards) are an optional guess from the 3D map; False answers 404 so the family
+    # app hides them. HAZARDS_ENABLED=0 switches them off without touching anything else.
+    hazards_enabled: bool = True
     # Optional device-specific bearer credentials. Do not configure real credentials in code.
     device_tokens: dict[str, str] = field(default_factory=dict, repr=False)
 
@@ -84,6 +87,7 @@ class Settings:
             sensor_offline_seconds=float(os.environ.get("SENSOR_OFFLINE_SECONDS", "30")),
             evidence_mode=os.environ.get("EVIDENCE_MODE", "local_only"),
             allowed_origins=tuple(filter(None, os.environ.get("ALLOWED_ORIGINS", "").split(","))),
+            hazards_enabled=os.environ.get("HAZARDS_ENABLED", "1").strip().lower() not in ("0", "false", "off", "no"),
         )
 
 
@@ -425,6 +429,8 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
     def trip_hazards():
         """Things on the floor in the way of the night walks (ml/recon_change/hazards.py writes
         mesh/hazards.json). Suggestions for the family to clear up, never alerts."""
+        if not settings.hazards_enabled:
+            raise APIError(404, "not_found", "The trip hazard check is switched off.")
         return mesh_json("hazards.json", "No trip hazard check yet.")
 
     @app.get("/night", dependencies=auth)

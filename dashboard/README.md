@@ -28,4 +28,7 @@ are fixed defaults, not a detected wearer location. No alerts is not an assessme
   from `ml/recon_change/hazards.py`): suggestions to clear up, never alerts. **Last night** replays
   the night's walk (`GET /night?day=`, from `night.py`) as a trail with a time slider. Without a 3D
   map from home, all three show the example home (`fixtures/`, made by `demo_room.py`), labelled.
+  Hazards can come from the refined map (`hazards.py`, knows what moved) or from one trained splat
+  (`splat_hazards.py`, shape only, shown as "possible"). `HAZARDS_ENABLED=0` on the backend switches
+  them off; the rest of the 3D view is unaffected.
 

@@ -37,3 +37,23 @@ def test_files_from_the_vision_stage_are_served(client):
     assert c.get("/night", headers=auth).json()["day"] == "2026-11-15"  # today in Helsinki
     assert c.get("/night?day=2026-11-14", headers=auth).status_code == 404
     assert c.get("/night?day=../../etc", headers=auth).status_code in (400, 422)  # only a date, never a path
+
+
+def test_hazards_can_be_switched_off(tmp_path):
+    (tmp_path / "mesh").mkdir()
+    (tmp_path / "mesh" / "hazards.json").write_text(json.dumps({"hazards": []}))
+    (tmp_path / "mesh" / "home.ply").write_bytes(b"ply\n")
+    app = create_app(Settings(api_token="test-token", local_data_dir=tmp_path, hazards_enabled=False))
+    with TestClient(app) as c:
+        auth = {"Authorization": "Bearer test-token"}
+        assert c.get("/hazards", headers=auth).status_code == 404
+        assert c.get("/mesh", headers=auth).status_code == 200  # the rest of the 3D view is unaffected
+
+
+def test_hazards_switch_reads_the_environment(monkeypatch):
+    for value, on in (("0", False), ("off", False), ("1", True)):
+        monkeypatch.setenv("HAZARDS_ENABLED", value)
+        assert Settings.from_env().hazards_enabled is on
+    monkeypatch.delenv("HAZARDS_ENABLED")
+    assert Settings.from_env().hazards_enabled is True
+
