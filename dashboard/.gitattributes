@@ -1,0 +1,2 @@
+# Meshes are binary: never convert line endings.
+*.ply binary

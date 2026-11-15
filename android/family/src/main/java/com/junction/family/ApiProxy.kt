@@ -62,6 +62,8 @@ class ApiProxy(private val client: OkHttpClient, private val backend: () -> Http
         fun isAllowed(path: String, query: String?): Boolean = when {
             path == "/timeline" || path == "/summary" -> query != null && DAY_QUERY.matches(query)
             EVIDENCE_PATH.matches(path) -> query == null
+            path == "/mesh" || path == "/hazards" -> query == null
+            path == "/night" -> query == null || DAY_QUERY.matches(query)
             else -> false
         }
 

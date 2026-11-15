@@ -1,11 +1,23 @@
-import {ApiClient, TIMEZONE, localDay, timeLabel, sortedEvents} from './client.js';
+import {ApiClient, ApiError, TIMEZONE, localDay, timeLabel, sortedEvents, medicationOpenings} from './client.js';
+import {Home3D, homeSummary} from './home3d.js';
 import {DAYPARTS, dayFraction, dayState, daypart, mood, shiftDay, sunPosition, sunTimes} from './day.js';
 
 const $ = id => document.getElementById(id);
 const root = document.documentElement;
 const api = new ApiClient({origin: location.origin});
+// People see our own messages only. Anything unexpected (a script error, a reply in a shape we
+// don't know) gets a plain sentence on screen and the detail in the console.
+const plain = (error, fallback) => {
+  if (error instanceof ApiError || error.userFacing) return error.message;
+  console.error(error);
+  return `${fallback} Refresh to try again.`;
+};
 const params = new URLSearchParams(location.search);
 let demo = params.has('demo'), controller, generation = 0, evidenceController, evidenceObject, lastData = null, refreshedAt = null;
+// While today is on screen, connected and visible, the day reloads quietly so new sensor, glasses
+// and vision events appear without pressing Refresh.
+const LIVE_MS = 10000;
+let liveTimer, liveController, shownKey = '';
 
 // ---------- Words ----------
 const KINDS = {
@@ -39,9 +51,12 @@ const setVar = (name, value) => root.style.setProperty(name, String(value));
 // Each theme is a folder under themes/: theme.css plus SVG assets (mark, scene, icons). The SVGs are
 // inlined so the theme's CSS can colour and animate them. They are our own files, but are still
 // stripped of scripts, event handlers and external links before they are added to the page.
-let themes = [{id: 'kaamos', name: 'Kaamos'}];
-function storedTheme() { try { return localStorage.getItem('daylight-theme'); } catch { return null; } }
-function storeTheme(id) { try { localStorage.setItem('daylight-theme', id); } catch { /* private mode */ } }
+const DEFAULT_THEME = 'kaamos';
+let themes = [{id: DEFAULT_THEME, name: 'Kaamos'}];
+// Only a pick made with Look is remembered; ?theme= previews don't stick. The key changed when Kaamos
+// became the default, so older remembered picks reset once.
+function storedTheme() { try { return localStorage.getItem('daylight-look'); } catch { return null; } }
+function storeTheme(id) { try { localStorage.setItem('daylight-look', id); } catch { /* private mode */ } }
 function cleanSvg(text) {
   const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
   const svg = doc.documentElement;
@@ -59,8 +74,8 @@ async function loadAsset(id, name) {
   try { const response = await fetch(`themes/${id}/assets/${name}.svg`); if (!response.ok) return null; return cleanSvg(await response.text()); }
   catch { return null; }
 }
-async function applyTheme(id) {
-  if (!themes.some(theme => theme.id === id)) id = themes[0].id;
+async function applyTheme(id, remember = false) {
+  if (!themes.some(theme => theme.id === id)) id = DEFAULT_THEME;
   const link = $('theme-css'), href = `themes/${id}/theme.css`;
   const loaded = link.getAttribute('href') === href ? Promise.resolve()
     : new Promise(resolve => { link.addEventListener('load', resolve, {once: true}); link.addEventListener('error', resolve, {once: true}); link.setAttribute('href', href); });
@@ -69,7 +84,7 @@ async function applyTheme(id) {
   document.querySelectorAll('[data-asset="scene"]').forEach(slot => slot.replaceChildren(...(scene ? [scene] : [])));
   $('sprite').replaceChildren(...(icons ? [icons] : []));
   root.dataset.themeId = id;
-  storeTheme(id);
+  if (remember) storeTheme(id);
   await Promise.race([loaded, new Promise(resolve => setTimeout(resolve, 1500))]);
   syncThemeColor();
   document.querySelectorAll('#theme-options input').forEach(input => { input.checked = input.value === id; });
@@ -83,7 +98,7 @@ function buildThemeOptions() {
   $('theme-options').replaceChildren(...themes.map(theme => {
     const label = node('label', undefined, 'theme-option');
     const input = node('input'); input.type = 'radio'; input.name = 'theme'; input.value = theme.id;
-    input.addEventListener('change', () => applyTheme(theme.id));
+    input.addEventListener('change', () => applyTheme(theme.id, true));
     const swatches = node('span', undefined, 'swatches');
     for (const color of theme.swatches || []) { const swatch = node('span', undefined, 'swatch'); swatch.style.setProperty('background', color); swatches.append(swatch); }
     const words = node('span', undefined, 'theme-words'); words.append(node('strong', theme.name), node('small', theme.description || ''));
@@ -139,8 +154,8 @@ function heroFor(data, state) {
   if (!data) return demo ? ['Loading…', ''] : ['Connect to see the day at home.', ''];
   const {timeline, summary} = data, alerts = timeline.alerts.length;
   const title = alerts ? `${plural(alerts, 'thing', 'things')} to notice${today ? ' today' : ''}.`
-    : !timeline.events.length ? (today ? 'Quiet so far today.' : 'A quiet day.')
-    : (today ? 'A calm day so far.' : 'A calm day.');
+    : !timeline.events.length ? 'No observations recorded for this day.'
+    : `${plural(timeline.events.length, 'observation', 'observations')} recorded${today ? ' today' : ''}.`;
   return [title, summary.text || 'No daily note has been written for this day yet.'];
 }
 function renderHero() {
@@ -149,7 +164,7 @@ function renderHero() {
   $('hero-title').textContent = title; $('summary-text').textContent = lede;
   $('info-button').hidden = !lastData;
   $('info-footnote').hidden = /not confirm/i.test(lede); // the backend's note may already say it
-  $('hero-place').textContent = demo ? "Anna's home · example" : 'At home';
+  $('hero-place').textContent = demo ? "Anna's home · example" : 'Recorded observations';
   const t = lastData?.timeline;
   $('stat-alerts').textContent = t ? t.alerts.length : '–';
   $('stat-events').textContent = t ? t.events.length : '–';
@@ -176,7 +191,7 @@ function renderRhythm(timeline) {
 }
 function renderAlerts(timeline) {
   $('alert-count').textContent = timeline.alerts.length || '';
-  if (!timeline.alerts.length) { empty('alerts', 'All calm'); return; }
+  if (!timeline.alerts.length) { empty('alerts', 'No alerts recorded'); return; }
   $('alerts').replaceChildren(...timeline.alerts.map(alert => {
     const row = node('article', undefined, 'alert'); row.dataset.type = alert.type;
     const night = ['door_open_night', 'night_door_open'].includes(alert.type);
@@ -238,12 +253,22 @@ function renderSensors(timeline) {
     row.append(icon('sensor'), words, node('span', {online: 'Online', offline: 'Offline', unknown: 'Unknown'}[state], 'state')); return row;
   }));
 }
-function render(data) {
-  lastData = data;
+function renderMedication(timeline) {
+  const openings = medicationOpenings(timeline);
+  $('medication-count').textContent = plural(openings.length, 'recorded opening', 'recorded openings');
+  $('medication-openings').replaceChildren(...openings.map(event => {
+    const item = node('li');
+    item.append(timeEl(event.ts), node('span', ` · ${capital(event.zone)}${event.object ? ` · ${readable(event.object)}` : ''}`));
+    return item;
+  }));
+  $('medication-empty').hidden = openings.length > 0;
+}
+function render(data, {quiet = false} = {}) {
+  lastData = data; shownKey = JSON.stringify(data);
   const {timeline, summary} = data;
-  renderHero(); renderRhythm(timeline); renderAlerts(timeline); renderEvents(timeline); renderQuestions(timeline); renderSensors(timeline);
+  renderHero(); renderRhythm(timeline); renderAlerts(timeline); renderEvents(timeline); renderQuestions(timeline); renderSensors(timeline); renderMedication(timeline);
   $('content').hidden = false;
-  root.dataset.loaded = String(Date.now()); // themes may key entrance animations off this
+  if (!quiet) root.dataset.loaded = String(Date.now()); // themes key entrance animations off this; live updates don't replay them
 }
 
 // ---------- Evidence ----------
@@ -253,14 +278,30 @@ async function showEvidence(event) {
   $('evidence-status').textContent = `Loading the moment from ${timeLabel(event.ts)}…`;
   $('evidence-dialog').showModal();
   try { const blob = await api.evidence(event.evidence_url, active.signal); if (active.signal.aborted) return; evidenceObject = URL.createObjectURL(blob); $('evidence-image').src = evidenceObject; $('evidence-image').hidden = false; $('evidence-status').textContent = `${kindOf(event).title} · ${timeLabel(event.ts)} Helsinki`; }
-  catch (error) { if (error.name !== 'AbortError') $('evidence-status').textContent = error.message; }
+  catch (error) { if (error.name !== 'AbortError') $('evidence-status').textContent = plain(error, 'The photo could not be shown.'); }
 }
 
 // ---------- Loading ----------
+function isLiveToday() { return !demo && api.token && !document.hidden && navigator.onLine && $('day').value === localDay(); }
+function scheduleLive() { clearTimeout(liveTimer); if (isLiveToday()) liveTimer = setTimeout(refreshQuietly, LIVE_MS); }
+// Reload today in place: the page stays on screen, redraws only when something changed, and keeps
+// what it shows if a reload fails (the next one tries again).
+async function refreshQuietly() {
+  if (!isLiveToday() || !lastData || root.dataset.loading || document.querySelector('dialog[open]')) { scheduleLive(); return; }
+  const active = generation; liveController = new AbortController();
+  try {
+    const data = await api.day($('day').value, liveController.signal);
+    if (active !== generation) return;
+    if (JSON.stringify(data) !== shownKey) render(data, {quiet: true});
+    refreshedAt = new Date(); status(''); tick();
+  } catch (error) { if (error.name !== 'AbortError' && active === generation) status(plain(error, 'Live updates paused.'), true); }
+  finally { if (active === generation) scheduleLive(); }
+}
 async function load() {
+  clearTimeout(liveTimer); liveController?.abort();
   controller?.abort(); controller = new AbortController(); const active = ++generation;
   cleanupEvidence(); if ($('evidence-dialog').open) $('evidence-dialog').close();
-  lastData = null; root.dataset.loading = 'true';
+  lastData = null; shownKey = ''; root.dataset.loading = 'true';
   $('content').hidden = true; $('refresh').disabled = true;
   root.dataset.mode = demo ? 'demo' : api.token ? 'live' : 'disconnected';
   $('connection-label').textContent = demo ? 'Example day' : api.token ? 'Connected' : 'Not connected';
@@ -277,18 +318,19 @@ async function load() {
       data = {timeline, summary}; $('day').value = timeline.day;
     } else {
       if (!api.token) { $('updated').textContent = ''; return; }
-      if (!navigator.onLine) throw new Error('You are offline. Reconnect, then refresh to load this day.');
+      if (!navigator.onLine) throw Object.assign(new Error('You are offline. Reconnect, then refresh to load this day.'), {userFacing: true});
       data = await api.day($('day').value, controller.signal);
     }
     if (active !== generation) return;
     showSun($('day').value); $('day-name').textContent = dayName($('day').value);
     render(data);
+    refreshHome();
     status('');
     refreshedAt = new Date();
     $('updated').textContent = demo ? 'Example data, not a real home' : 'Updated just now';
     tick();
-  } catch (error) { if (error.name !== 'AbortError' && active === generation) { status(error.message, true); $('updated').textContent = 'The day could not be loaded. Refresh to try again.'; } }
-  finally { if (active === generation) { $('refresh').disabled = false; delete root.dataset.loading; } }
+  } catch (error) { if (error.name !== 'AbortError' && active === generation) { status(plain(error, 'This day could not be shown.'), true); $('updated').textContent = 'The day could not be loaded. Refresh to try again.'; } }
+  finally { if (active === generation) { $('refresh').disabled = false; delete root.dataset.loading; scheduleLive(); } }
 }
 function goTo(day) { $('day').value = day; $('day-name').textContent = dayName(day); load(); }
 function toggleDemo() { demo = !demo; if (!demo) $('day').value = localDay(); load(); }
@@ -314,21 +356,53 @@ $('evidence-image').addEventListener('error', () => { cleanupEvidence(); $('evid
 $('theme-button').addEventListener('click', () => $('theme-dialog').showModal());
 $('info-button').addEventListener('click', () => $('info-dialog').showModal());
 $('close-info').addEventListener('click', () => $('info-dialog').close());
+
+// ---------- The home in 3D ----------
+// home3d.js: the mesh, trip hazards to clear up (Now) and last night's walk (Last night).
+const home3d = new Home3D({$, api, plain});
+const live = () => !demo && Boolean(api.token);
+const openHome = (tab, focusFirst = false) => home3d.open({tab, live: live(), day: $('day').value || localDay(), focusFirst});
+$('space-button').addEventListener('click', () => openHome('now'));
+$('tidy-button').addEventListener('click', () => openHome('now', true));
+$('night-button').addEventListener('click', () => openHome('night'));
+$('close-space').addEventListener('click', () => $('space-dialog').close());
+// The hero's two home buttons: things to clear up, and last night in a few words. Today only.
+let homeController;
+async function refreshHome() {
+  homeController?.abort(); homeController = new AbortController();
+  $('hero-home').hidden = true;
+  if (!demo && !api.token) return;
+  if (!demo && $('day').value !== localDay()) return;
+  try {
+    const {clearUp, night} = await homeSummary({api, live: live(), day: $('day').value || localDay(), signal: homeController.signal});
+    $('tidy-text').textContent = clearUp; $('tidy-button').hidden = !clearUp;
+    $('night-text').textContent = night; $('night-button').hidden = !night;
+    $('hero-home').hidden = !clearUp && !night;
+  } catch (error) { if (error.name !== 'AbortError') console.warn('Home summary unavailable', error); }
+}
 window.addEventListener('offline', () => { if (!demo && api.token) { controller?.abort(); generation++; $('refresh').disabled = false; $('content').hidden = true; status('You are offline. Reconnect, then refresh to load this day.', true); } });
-window.addEventListener('online', () => { if (!demo && api.token) status('Back online. Refresh to load the latest.'); });
+window.addEventListener('online', () => { if (!demo && api.token) load(); });
 setInterval(tick, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearTimeout(liveTimer); return; }
+  tick();
+  if (isLiveToday() && (!refreshedAt || Date.now() - refreshedAt > LIVE_MS)) refreshQuietly(); else scheduleLive();
+});
 
 // Installed app: register the service worker (static files only) and offer an Install button
 // where the browser supports it. Opening from the home screen starts in standalone mode.
 if ('serviceWorker' in navigator && !params.has('nosw')) navigator.serviceWorker.register('./sw.js').catch(() => {});
 let installPrompt;
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; $('install').hidden = false; });
-$('install').addEventListener('click', async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice.catch(() => {}); installPrompt = null; $('install').hidden = true; });
+$('install').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  try { await installPrompt.prompt(); await installPrompt.userChoice; } catch (error) { console.warn('Install prompt unavailable', error); }
+  installPrompt = null; $('install').hidden = true;
+});
 window.addEventListener('appinstalled', () => { installPrompt = null; $('install').hidden = true; });
 
 // ---------- Start ----------
 try { const response = await fetch('themes/themes.json'); if (response.ok) themes = await response.json(); } catch { /* keep the default */ }
 buildThemeOptions();
-await applyTheme(params.get('theme') || storedTheme() || themes[0].id);
+await applyTheme(params.get('theme') || storedTheme() || DEFAULT_THEME);
 load();

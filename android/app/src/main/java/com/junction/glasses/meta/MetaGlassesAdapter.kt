@@ -809,12 +809,12 @@ class MetaGlassesAdapter(activity: ComponentActivity, parentScope: CoroutineScop
     }
 
     /** Shows a wearer card on the display (an idle card clears it). False when no display is ready. */
-    suspend fun showCard(card: com.junction.glasses.core.Card, onDone: (String) -> Unit): Boolean = try {
+    suspend fun showCard(card: com.junction.glasses.core.Card, onDone: (String) -> Unit, onGo: (String) -> Unit = {}, onStop: () -> Unit = {}): Boolean = try {
         val panel = display
         if (panel == null || panel.state.value != DisplayState.STARTED) false
         else withTimeoutOrNull(5_000) {
             panel.sendContent { flexBox(direction = Direction.COLUMN, padding = 16, gap = 10) {
-                with(GlassesCards) { render(card, onDone) }
+                with(GlassesCards) { render(card, onDone, onGo, onStop) }
             } }.isSuccess
         } ?: false
     } catch (e: CancellationException) { throw e }
