@@ -25,7 +25,7 @@ class NoCluster:
 
 def main():
     code = share.pairing_code("https://abc-def.trycloudflare.com/", "v1ew&key=1", "Seb's Ray-Ban Meta")
-    assert code.startswith("DL1-") and "=" not in code and "+" not in code and "/" not in code, code
+    assert code.startswith("TU1-") and "=" not in code and "+" not in code and "/" not in code, code
     assert share.read_code(code) == ("https://abc-def.trycloudflare.com", "v1ew&key=1", "Seb's Ray-Ban Meta")
 
     handler = relay.make_handler(NoCluster(), Path(tempfile.mkdtemp(prefix="share-test-")), "full-key", None, pick=None, view_token="view-key")

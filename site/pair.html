@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pair glasses · Daylight</title>
+<title>Pair glasses · Tuttu</title>
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
 <style>
@@ -18,7 +18,7 @@
   h1 { font: 600 30px/1.1 "Josefin Sans", sans-serif; margin: 14px 0 6px; }
   p { color: var(--soft); margin: 0 0 18px; }
   .name { color: var(--lamp); font-weight: 600; }
-  .button { display: block; width: 100%; padding: 15px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--snow); font: 600 16px/1 inherit; text-decoration: none; cursor: pointer; margin-top: 10px; }
+  .button { display: block; width: 100%; padding: 15px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--snow); font-family: inherit; font-size: 16px; font-weight: 600; line-height: 1; text-decoration: none; cursor: pointer; margin-top: 10px; }
   .primary { background: var(--lamp); border-color: var(--lamp); color: #1b1407; }
   code { display: block; word-break: break-all; text-align: left; font: 12.5px/1.5 ui-monospace, Consolas, monospace; background: rgba(0,0,0,.25); padding: 12px; border-radius: 12px; color: var(--soft); margin-top: 18px; }
   .small { font-size: 13.5px; margin-top: 18px; }
@@ -30,10 +30,10 @@
   <img src="dashboard/themes/kaamos/assets/mark.svg" alt="">
   <h1 id="title">Pair glasses</h1>
   <p id="words">Open this page from the link a pair of glasses' relay printed.</p>
-  <a id="open" class="button primary" hidden>Open in the Daylight app</a>
+  <a id="open" class="button primary" hidden>Open in the Tuttu app</a>
   <button id="copy" class="button" type="button" hidden>Copy the code</button>
   <code id="code" hidden></code>
-  <p class="small">No app yet? <a href="./#get">Get Daylight for Android</a>. The code is watch-only: it shows what the glasses display, never the camera.</p>
+  <p class="small">No app yet? <a href="./#get">Get Tuttu for Android</a>. The code is watch-only: it shows what the glasses display, never the camera.</p>
 </main>
 <script>
   // The code stays in the address's #fragment: browsers never send that part to the server.
@@ -46,12 +46,12 @@
       return {url: q.get('u'), name: q.get('n')};
     } catch { return null; }
   }
-  const pair = code.startsWith('DL1-') ? read(code) : null;
+  const pair = code.startsWith('TU1-') ? read(code) : null;
   if (pair && pair.url) {
     $('title').textContent = 'Watch these glasses';
     $('words').innerHTML = '';
-    $('words').append('Add ', Object.assign(document.createElement('span'), {className: 'name', textContent: pair.name || 'this pair'}), ' to Daylight and watch what they show, live.');
-    $('open').href = 'daylight://pair?c=' + encodeURIComponent(code); $('open').hidden = false;
+    $('words').append('Add ', Object.assign(document.createElement('span'), {className: 'name', textContent: pair.name || 'this pair'}), ' to Tuttu and watch what they show, live.');
+    $('open').href = 'tuttu://pair?c=' + encodeURIComponent(code); $('open').hidden = false;
     $('code').textContent = code; $('code').hidden = false;
     $('copy').hidden = false;
     $('copy').addEventListener('click', async () => {

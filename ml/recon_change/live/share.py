@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Share a pair of glasses with the Daylight apps: put the relay on the internet through a free Cloudflare
+"""Share a pair of glasses with the Tuttu apps: put the relay on the internet through a free Cloudflare
 quick tunnel and print a pairing code that carries its address, the WATCH-ONLY key and the pair's name.
 
     python live/share.py --port 8090 --view-token VIEW_KEY --name "Seb's Ray-Ban Meta"
@@ -20,11 +20,11 @@ import sys
 from urllib.parse import parse_qs, quote, urlencode
 
 SITE = "https://thetechjumbo.github.io/junction-2026/pair.html"
-PREFIX = "DL1-"
+PREFIX = "TU1-"
 
 
 def pairing_code(url, key, name):
-    """The code the apps read: DL1- then the address, key and name, base64url without padding."""
+    """The code the apps read: TU1- then the address, key and name, base64url without padding."""
     raw = urlencode({"u": url.rstrip("/"), "k": key, "n": name}, quote_via=quote)
     return PREFIX + base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 

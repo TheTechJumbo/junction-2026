@@ -58,10 +58,10 @@ class GlassesActivity : ComponentActivity() {
 
     override fun onDestroy() { live?.destroy(); super.onDestroy() }
 
-    /** daylight://pair?c=DL1-… : connect that pair and watch it. */
+    /** tuttu://pair?c=TU1-… : connect that pair and watch it. */
     private fun pairFromLink(intent: Intent?) {
         val data = intent?.data ?: return
-        if (data.scheme != "daylight" || data.host != "pair") return
+        if (data.scheme != "tuttu" || data.host != "pair") return
         val code = data.getQueryParameter("c") ?: return
         val pair = book.connect(code)
         if (pair != null) watch(pair) else { showList(); say("That link is not a pairing code.") }
@@ -114,7 +114,7 @@ class GlassesActivity : ComponentActivity() {
     }
 
     private fun askCode(pair: GlassesPair?) {
-        val field = EditText(this).apply { hint = "DL1-…"; isSingleLine = true }
+        val field = EditText(this).apply { hint = "TU1-…"; isSingleLine = true }
         val frame = FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(field) }
         AlertDialog.Builder(this)
             .setTitle(pair?.let { "Code for ${it.name}" } ?: "Add Meta glasses")

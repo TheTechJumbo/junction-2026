@@ -46,41 +46,41 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 12px; background: #15171a; color: #d6d9de; font: 15px/1.4 system-ui, sans-serif;
+  body { margin: 0; padding: 12px; background: #0f1830; color: #eef2f6; font: 15px/1.4 "Albert Sans", system-ui, sans-serif;
          display: flex; flex-direction: column; align-items: center; gap: 12px; }
   #display { width: min(600px, calc(100vw - 24px)); aspect-ratio: 1; background: #000; border-radius: 20px; display: block; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; max-width: 600px; }
-  button, select, input, label.file { font: inherit; color: inherit; background: #262a30; border: 1px solid #3a4048; border-radius: 10px;
+  button, select, input, label.file { font: inherit; color: inherit; background: #1d2a4a; border: 1px solid #3b4763; border-radius: 10px;
                                       padding: 8px 12px; }
   button, select, label.file { cursor: pointer; }
   #question { flex: 1; min-width: 180px; }
-  button.on { background: #1f6f43; border-color: #2c9a5e; color: #fff; }
+  button.on { background: #f2b04a; border-color: #f2b04a; color: #1b1407; }
   button.item { border-style: dashed; }
-  #finish { background: #6b5310; border-color: #ffd23f; color: #fff; }
+  #finish { background: #5a2a33; border-color: #f08c98; color: #fff; }
   label.file input { display: none; }
-  #note { color: #9aa1ab; text-align: center; max-width: 600px; min-height: 1.4em; }
+  #note { color: #a0b0cc; text-align: center; max-width: 600px; min-height: 1.4em; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <svg id="display" viewBox="0 0 600 600" role="img" aria-label="Directions">
   <defs><clipPath id="disc"><circle cx="0" cy="0" r="92"/></clipPath></defs>
-  <text id="going" x="300" y="58" text-anchor="middle" fill="#7fd6a4" font-size="22" letter-spacing="3">GOING TO</text>
+  <text id="going" x="300" y="58" text-anchor="middle" fill="#f0c27e" font-size="22" letter-spacing="3">GOING TO</text>
   <text id="place" x="300" y="108" text-anchor="middle" fill="#fff" font-size="46" font-weight="600"></text>
 
   <g id="compass" transform="translate(300 290)">
-    <circle r="118" fill="none" stroke="#1d4d33" stroke-width="3"/>
-    <g id="arrow"><path d="M0 -100 L62 30 L22 14 L22 96 L-22 96 L-22 14 L-62 30 Z" fill="#3ddc84"/></g>
-    <g id="there" hidden><circle r="70" fill="none" stroke="#3ddc84" stroke-width="10"/><path d="M-34 2 L-8 30 L38 -26" fill="none" stroke="#3ddc84" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <circle r="118" fill="none" stroke="#4a3a1c" stroke-width="3"/>
+    <g id="arrow"><path d="M0 -100 L62 30 L22 14 L22 96 L-22 96 L-22 14 L-62 30 Z" fill="#f2b04a"/></g>
+    <g id="there" hidden><circle r="70" fill="none" stroke="#f2b04a" stroke-width="10"/><path d="M-34 2 L-8 30 L38 -26" fill="none" stroke="#f2b04a" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/></g>
     <g id="lost" hidden><circle r="70" fill="none" stroke="#f0b429" stroke-width="8" stroke-dasharray="14 12"/><text y="22" text-anchor="middle" fill="#f0b429" font-size="64" font-weight="700">?</text></g>
   </g>
 
   <text id="turn" x="400" y="468" text-anchor="middle" fill="#fff" font-size="40" font-weight="600"></text>
-  <text id="far" x="400" y="512" text-anchor="middle" fill="#7fd6a4" font-size="30"></text>
-  <text id="age" x="400" y="572" text-anchor="middle" fill="#55606c" font-size="18"></text>
+  <text id="far" x="400" y="512" text-anchor="middle" fill="#f0c27e" font-size="30"></text>
+  <text id="age" x="400" y="572" text-anchor="middle" fill="#6b7a99" font-size="18"></text>
 
   <g transform="translate(104 496)">
-    <circle r="94" fill="#000" stroke="#1d4d33" stroke-width="2"/>
+    <circle r="94" fill="#000" stroke="#4a3a1c" stroke-width="2"/>
     <g clip-path="url(#disc)"><g id="map"></g></g>
     <path d="M0 -13 L9 10 L0 5 L-9 10 Z" fill="#4aa3ff"/>
   </g>
@@ -88,9 +88,9 @@
   <!-- An answer or a reminder covers the display for a few seconds, then the arrow is back. -->
   <g id="card" hidden>
     <rect width="600" height="600" fill="#000"/>
-    <text id="asked" x="300" y="64" text-anchor="middle" fill="#7fd6a4" font-size="24"></text>
+    <text id="asked" x="300" y="64" text-anchor="middle" fill="#f0c27e" font-size="24"></text>
     <text id="answer" x="300" y="300" text-anchor="middle" fill="#fff" font-size="36" font-weight="600"></text>
-    <text id="next" x="300" y="556" text-anchor="middle" fill="#3ddc84" font-size="26"></text>
+    <text id="next" x="300" y="556" text-anchor="middle" fill="#f2b04a" font-size="26"></text>
   </g>
 </svg>
 
@@ -116,10 +116,10 @@
 <div id="note"></div>
 <!-- What the photo gate is doing, for the demo: the last minute as a strip, one column per quarter second. -->
 <canvas id="strip" width="600" height="34" style="width:min(600px,calc(100vw - 24px));border-radius:8px;background:#0c0d0f" hidden></canvas>
-<div id="gateline" style="color:#9aa1ab;text-align:center;max-width:600px;font-size:13px"></div>
+<div id="gateline" style="color:#a0b0cc;text-align:center;max-width:600px;font-size:13px"></div>
 <div id="movedbox" class="row" hidden>
-  <figure style="margin:0;text-align:center"><img id="movedbefore" alt="Before" style="height:120px;border-radius:8px"><figcaption style="color:#9aa1ab;font-size:13px">before</figcaption></figure>
-  <figure style="margin:0;text-align:center"><img id="movednow" alt="Now" style="height:120px;border-radius:8px"><figcaption style="color:#9aa1ab;font-size:13px">now</figcaption></figure>
+  <figure style="margin:0;text-align:center"><img id="movedbefore" alt="Before" style="height:120px;border-radius:8px"><figcaption style="color:#a0b0cc;font-size:13px">before</figcaption></figure>
+  <figure style="margin:0;text-align:center"><img id="movednow" alt="Now" style="height:120px;border-radius:8px"><figcaption style="color:#a0b0cc;font-size:13px">now</figcaption></figure>
   <div id="movedtext" style="max-width:180px"></div>
 </div>
 <video id="video" playsinline muted hidden></video>
@@ -229,7 +229,7 @@ function draw() {
   const to = places.find(p => p.name === target) || places[0];
   $('place').textContent = to ? to.name : (fix ? 'No places named yet' : 'Waiting for a position');
   $('going').textContent = due ? due.text.toUpperCase().slice(0, 34) : to && to.item ? `LAST SEEN ${to.time || ''}` : 'GOING TO';
-  $('going').setAttribute('fill', due ? '#ffd23f' : '#7fd6a4');
+  $('going').setAttribute('fill', due ? '#f08c98' : '#f0c27e');
   $('going').setAttribute('visibility', to || due ? 'visible' : 'hidden');
   const [direct, straightOn] = to ? fromMe(to.position) : [0, 0];
   // route finding: with a route, the arrow points at its next corner and the distance is the walk
@@ -255,9 +255,9 @@ function draw() {
     : way && way.why ? ' · straight line' : '';
 
   // Mini map, heading up: 1 m = 26 px, the wearer at the centre. Places are yellow, items are blue.
-  const dots = fix ? fix.map.points.map(p => `<rect x="${(p[0] * 26).toFixed(1)}" y="${(-p[1] * 26).toFixed(1)}" width="2.4" height="2.4" fill="#2f7d55"/>`).join('') : '';
-  const pins = places.map(p => `<circle cx="${p.position[0] * 26}" cy="${-p.position[1] * 26}" r="${p === to ? 8 : 5}" fill="${p.item ? (p === to ? '#7fb8ff' : '#3d6fa8') : (p === to ? '#ffd23f' : '#8a7a2a')}"/>`).join('');
-  const path = leg && !there ? `<polyline points="${leg.line}" fill="none" stroke="#3ddc84" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 7"/>` : '';  // route finding
+  const dots = fix ? fix.map.points.map(p => `<rect x="${(p[0] * 26).toFixed(1)}" y="${(-p[1] * 26).toFixed(1)}" width="2.4" height="2.4" fill="#8a6a3a"/>`).join('') : '';
+  const pins = places.map(p => `<circle cx="${p.position[0] * 26}" cy="${-p.position[1] * 26}" r="${p === to ? 8 : 5}" fill="${p.item ? (p === to ? '#7fb8ff' : '#3d6fa8') : (p === to ? '#f08c98' : '#8a7a2a')}"/>`).join('');
+  const path = leg && !there ? `<polyline points="${leg.line}" fill="none" stroke="#f2b04a" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 7"/>` : '';  // route finding
   // Sample room with noisy photos: what the newest photo alone says (red ring) and where the wearer really is (white dot).
   const marks = !noisy ? '' : (noisy.raw && noisy.raw.position ? `<circle cx="${noisy.raw.position[0] * 26}" cy="${-noisy.raw.position[1] * 26}" r="6" fill="none" stroke="#ff6b6b" stroke-width="2"/>` : '')
     + `<circle cx="${noisy.real.x * 26}" cy="${-noisy.real.y * 26}" r="3" fill="#fff"/>`;
@@ -491,7 +491,7 @@ function gateStep(moving, differs, now) {
 
 function drawGate(now) {
   show('strip', true);
-  const g = $('strip').getContext('2d'), colour = { moving: '#f0b429', settling: '#7d6a1f', photo: '#4aa3ff', still: '#1f6f43' };
+  const g = $('strip').getContext('2d'), colour = { moving: '#f0b429', settling: '#7d6a1f', photo: '#4aa3ff', still: '#4a3a1c' };
   g.clearRect(0, 0, 600, 34);
   gate.ticks.forEach((state, i) => { g.fillStyle = colour[state]; g.fillRect(600 - (gate.ticks.length - i) * 2.5, state === 'photo' ? 0 : 8, state === 'photo' ? 3 : 2.5, state === 'photo' ? 34 : 18); });
   const timer = Math.max(1, Math.floor((now - gate.since) / 6000) + 1);  // what the old 6 s timer would have sent
