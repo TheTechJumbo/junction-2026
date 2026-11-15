@@ -1,5 +1,6 @@
 package com.junction.glasses.live
 
+import com.junction.glasses.core.HttpTrace
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -273,6 +274,37 @@ class LiveRelayTest {
                 val failure = try { client.locate(jpeg); null } catch (e: RelayFailure) { e }
                 assertEquals("Relay HTTP 403: Open the link that includes the access key (?k=...).", failure?.message)
                 assertFalse(failure!!.message!!.contains("synthetic-relay-key"))
+            }
+        }
+    }
+
+    @Test fun everyRelayAnswerIsNotedForTheDebugPanelWithoutTheKey() {
+        runBlocking {
+            MockWebServer().use { server ->
+                server.enqueue(MockResponse().setResponseCode(403).setHeader("Content-Type", "application/json")
+                    .setBody("""{"ok":false,"error":"wrong key"}"""))
+                server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+                    .setBody("""{"ok":true,"to":"pill box","instruction":"pill box, 2 metres ahead","places":[]}"""))
+                server.start()
+                HttpTrace.clear()
+                val client = RelayClient(server.url("/").toString(), "synthetic-relay-key", "kitchen", allowLocalHttp = true)
+                try { client.locate(byteArrayOf(1)); fail("403 should fail") } catch (_: RelayFailure) { }
+                assertEquals("pill box, 2 metres ahead", client.navigate("pill box").instruction)
+                val away = RelayClient("http://127.0.0.1:1", "synthetic-relay-key", "kitchen", allowLocalHttp = true)
+                try { away.placeNames(); fail("nothing listens on port 1") } catch (_: RelayFailure) { }
+                val trace = HttpTrace.snapshot()
+                val locate = trace.entries.single { it.key.startsWith("relay /locate · ") }
+                assertEquals(403, locate.value.status)
+                assertTrue(locate.value.note!!.contains("wrong key"))
+                val navigate = trace.entries.single { it.key.startsWith("relay /navigate · ") }
+                assertEquals(200, navigate.value.status)
+                assertEquals("zone kitchen to pill box: pill box, 2 metres ahead", navigate.value.note)
+                assertEquals(0, trace.getValue("relay /waypoints · 127.0.0.1:1").status)
+                for ((label, entry) in trace) {
+                    assertFalse(label.contains("synthetic-relay-key") || label.contains("?"))
+                    assertFalse(entry.note.orEmpty().contains("synthetic-relay-key"))
+                }
+                HttpTrace.clear()
             }
         }
     }

@@ -67,6 +67,8 @@ import com.junction.glasses.meta.GlassesCards
 import com.junction.glasses.wearer.WearerPanel
 import com.junction.glasses.wearer.WearerMap
 import com.junction.glasses.live.FailoverRelay
+import com.junction.glasses.live.ChunkDrain
+import com.junction.glasses.live.ChunkQueue
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import com.junction.glasses.core.RelayClient as WearerRelayClient
@@ -214,6 +216,9 @@ class MainActivity : ComponentActivity() {
     }
     // The wearer's map and "take me to …" guidance (core/Navigation.kt, wearer/WearerMap.kt).
     private lateinit var navMap: WearerMap
+    /** The debug panel while it is open (refreshed every 2 s), and its Retry uploads run. */
+    private var debugDialog: AlertDialog? = null
+    private var debugDrainJob: Job? = null
     private var navGuide: NavGuide? = null
     private var navJob: Job? = null
     /** The zone's place names, for matching what the wearer says; refreshed with the map. */
@@ -487,7 +492,17 @@ class MainActivity : ComponentActivity() {
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
                 addView(wearer)
-                addView(navMap, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(320)).apply { setMargins(dp(20), 0, dp(20), dp(20)) })
+                addView(navMap, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(320)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
+                // Small and dim, and it opens only on a long press, so the wearer does not open it by accident.
+                addView(TextView(this@MainActivity).apply {
+                    text = "debug"; textSize = 11f; setTextColor(Color.argb(110, 255, 255, 255))
+                    contentDescription = "Debug panel (hold to open)"
+                    setPadding(dp(12), dp(6), dp(12), dp(6))
+                    setOnClickListener { Toast.makeText(this@MainActivity, "Hold to open the debug panel", Toast.LENGTH_SHORT).show() }
+                    setOnLongClickListener { showDebugPanel(); true }
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    gravity = Gravity.END; setMargins(0, 0, dp(16), dp(12))
+                })
                 addView(setup)
             })
             setOnApplyWindowInsetsListener { view, insets ->
@@ -1577,6 +1592,132 @@ class MainActivity : ComponentActivity() {
         showWearer()
     }
 
+    // ---- Debug panel (long press on "debug" under the map) ----
+
+    /** What the panel shows: addresses, key and token prints, zones, last answers, glasses, recording. Never a secret. */
+    private fun diagnosticsFacts(): DiagnosticsFacts {
+        val s = glasses.state.value
+        val glassesLines = listOf(
+            "Registration ${s.registration} · ${s.connection} · ${s.deviceCount} device(s)",
+            "Glasses: ${s.device ?: "not reported yet"}",
+            "Camera ${s.camera} · consent: camera ${s.cameraPermission}, microphone ${s.microphonePermission}",
+            "Sessions: ${s.sessionEnds} idle ends, ${s.sessionDrops} drops, ${s.sessionAsleep} asleep, " +
+                "${s.sessionFailures} failed, ${s.sessionBlocks} blocked" + (s.blocker?.let { " (needs $it)" } ?: ""),
+            "Last end or error: ${s.error ?: "none"}",
+        )
+        val a = AlwaysOn.status.value
+        val waiting = ChunkQueue(File(filesDir, "chunks")).pending()
+        val videos = recordingsFolder()?.listFiles()?.count { it.isFile && RecordingNames.isRecording(it.name) } ?: 0
+        val recordingLines = mutableListOf<String>()
+        recordingLines += if (AlwaysOn.isRecording) "Always-on: recording · " + RecordingService.summary(a)
+            else "Always-on: off" + (a.session?.let { " · last session $it" } ?: "") + if (RecordingService.wanted(this)) " (wanted: starts with the app)" else ""
+        if (AlwaysOn.isRecording) recordingLines += RecordingService.details(a).lines().filter { it.isNotBlank() }
+        else {
+            a.lastUpload?.let { recordingLines += "Last upload: $it" }
+            a.uploadError?.let { recordingLines += "Upload error: $it" }
+        }
+        recordingLines += "Chunks waiting on the phone: ${waiting.size} (${megabytes(waiting.sumOf { it.bytes })})" +
+            if (waiting.isNotEmpty() && !AlwaysOn.isRecording) ": tap Retry uploads" else ""
+        recordingLines += "Phone videos not sent: $videos" + if (videos > 0) " (Retry each under Record video in setup)" else ""
+        recordingLines += "Live camera ${if (liveLoop != null) "on" else "off"} · room recording ${if (recordJob != null) "on" else "off"} · " +
+            "video ${if (videoRecorder != null) "recording" else "off"} · guidance ${navGuide?.place ?: "off"}"
+        return DiagnosticsFacts(
+            build = "${BuildConfig.VERSION_NAME} (${BuildConfig.COMMIT})" + if (BuildConfig.DEBUG) " debug" else "",
+            relayUrl = relayUrl,
+            relayLanUrl = relayLanUrl,
+            relayKeyPrint = KeyPrint.of(relayKey),
+            backendUrl = configuredOrigin ?: endpoint.text.toString().trim().ifEmpty { null },
+            backendTokenPrint = configuredClient?.tokenPrint ?: "not connected",
+            zone = cardZone(),
+            venueZone = venueZone,
+            glasses = glassesLines,
+            recording = recordingLines,
+            trace = HttpTrace.snapshot(),
+            nowMs = System.currentTimeMillis(),
+        )
+    }
+
+    private fun showDebugPanel() {
+        if (debugDialog?.isShowing == true) return
+        val report = TextView(this).apply {
+            typeface = Typeface.MONOSPACE; textSize = 12f; setTextIsSelectable(true)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        val note = TextView(this).apply { textSize = 13f; setPadding(dp(16), 0, dp(16), dp(8)) }
+        fun render() { report.text = Diagnostics.report(diagnosticsFacts()) }
+        fun small(label: String, action: () -> Unit) = Button(this).apply {
+            text = label; isAllCaps = false; setOnClickListener { action() }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL; setPadding(dp(8), 0, dp(8), 0)
+                addView(small("Refresh") { note.text = "Asking the relay and the backend…"; probeForDebug { render(); note.text = "Checked just now." } })
+                addView(small("Retry uploads") { retryUploadsFromDebug { message -> note.text = message; render() } })
+                addView(small("Copy") {
+                    val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Glasses app diagnostics", report.text))
+                    note.text = "Copied (addresses, key prints and states only: no keys or tokens)."
+                })
+            })
+            addView(note)
+            addView(ScrollView(this@MainActivity).apply { addView(report) },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        render()
+        val ticker = object : Runnable {
+            override fun run() { if (debugDialog?.isShowing == true) { render(); main.postDelayed(this, 2_000) } }
+        }
+        debugDialog = AlertDialog.Builder(this)
+            .setTitle("Debug")
+            .setView(content)
+            .setNegativeButton("Close", null)
+            .setOnDismissListener { main.removeCallbacks(ticker); debugDialog = null }
+            .show()
+        main.postDelayed(ticker, 2_000)
+    }
+
+    /** Asks each relay address (USB and Wi-Fi) for the zone's places and the backend for one event, then [done]. */
+    private fun probeForDebug(done: () -> Unit) {
+        var pending = 1
+        fun finished() { pending--; if (pending == 0) done() }
+        val key = relayKey?.takeIf { it.isNotBlank() }
+        val zone = venueZone?.takeIf { RelayClient.isZone(it) } ?: cardZone().takeIf { RelayClient.isZone(it) } ?: relayZone
+        if (key != null) for (url in listOfNotNull(relayUrl, relayLanUrl).distinct()) {
+            val client = try { RelayClient(url, key, zone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) { continue }
+            pending++
+            lifecycleScope.launch {
+                try { client.placeNames() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                finished()
+            }
+        }
+        configuredClient?.let { client -> pending++; client.checkConnection { main.post { finished() } } }
+        finished()
+    }
+
+    /** Retry uploads: the recording retries its waiting chunk now; otherwise the chunks it left are sent in order. */
+    private fun retryUploadsFromDebug(done: (String) -> Unit) {
+        if (AlwaysOn.retryUploadsNow()) { done("The recording is trying its waiting chunk again now."); return }
+        if (debugDrainJob?.isActive == true) { done("Already sending the waiting chunks…"); return }
+        val queue = ChunkQueue(File(filesDir, "chunks"))
+        if (queue.pending().isEmpty()) { done("No chunks are waiting on the phone."); return }
+        val key = relayKey?.takeIf { it.isNotBlank() } ?: run { done("No relay key yet: chunks stay on the phone."); return }
+        val primary = try { RelayClient(relayUrl, key, relayZone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) {
+            done("Relay address not accepted."); return
+        }
+        val lan = relayLanUrl?.let { url -> try { RelayClient(url, key, relayZone, allowLocalHttp = BuildConfig.DEBUG) } catch (_: Exception) { null } }
+        val relay = FailoverRelay(primary, lan)
+        done("Sending ${queue.pending().size} waiting chunk(s)…")
+        debugDrainJob = lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                ChunkDrain.drain(queue) { c -> relay.call { it.uploadChunk(c.zone, c.session, c.seq, c.final, c.file) } }
+            }
+            done("Sent ${result.sent}" + (if (result.refused > 0) ", ${result.refused} refused by the relay and dropped" else "") +
+                (result.stoppedBy?.let { ", stopped: ${LiveRelayLoop.describe(it)}" } ?: "") + ". ${result.left} still on the phone.")
+        }
+    }
+
     // ---- The wearer's map and guidance ----
 
     /** The relay for the map and guidance: USB first, the Wi-Fi address when the cable is out. */
@@ -1695,6 +1836,7 @@ class MainActivity : ComponentActivity() {
             token.text.isEmpty() && endpoint.text.toString().trim() == configuredOrigin) connectBackend()
     }
     override fun onDestroy() {
+        debugDialog?.dismiss(); debugDialog = null
         navJob?.cancel(); navGuide = null
         stopLiveCamera("Live camera is off.")
         stopRecording("Recording stopped.")

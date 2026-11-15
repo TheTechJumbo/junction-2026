@@ -11,6 +11,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"
+        // The commit this APK was built from (CI sets GITHUB_SHA), shown in the wearer screen's debug panel.
+        buildConfigField("String", "COMMIT", "\"${System.getenv("GITHUB_SHA")?.take(7) ?: "local"}\"")
     }
     buildFeatures { buildConfig = true }
     testOptions { unitTests.isIncludeAndroidResources = true }

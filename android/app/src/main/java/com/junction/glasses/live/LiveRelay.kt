@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import com.junction.glasses.core.HttpTrace
 import com.junction.glasses.core.LocalHosts
 import okhttp3.Call
 import okhttp3.Callback
@@ -194,7 +195,7 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
     }
 
     suspend fun uploadChunk(zone: String, session: String, seq: Int, final: Boolean, zip: File): RecordingReply =
-        RecordingReply.parse(send(videoHttp, chunkRequest(zone, session, seq, final, zip)))
+        RecordingReply.parse(send(videoHttp, chunkRequest(zone, session, seq, final, zip)) { "zone $zone, chunk $seq" + if (final) " (last)" else "" })
 
     /** Where this client sends, for the screen: the address without the key. */
     val address: String get() = base.toString().trimEnd('/')
@@ -211,12 +212,14 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
     }
 
     suspend fun uploadRecording(zone: String, video: RequestBody, session: String): RecordingReply =
-        RecordingReply.parse(send(videoHttp, recordingRequest(zone, video, session)))
+        RecordingReply.parse(send(videoHttp, recordingRequest(zone, video, session)) { "zone $zone, whole video" })
 
     suspend fun recordingStatus(zone: String): RecordingReply =
         RecordingReply.parse(send(http, recordingStatusRequest(zone)))
 
-    suspend fun locate(jpeg: ByteArray): LocateReply = LocateReply.parse(send(http, request(jpeg)))
+    suspend fun locate(jpeg: ByteArray): LocateReply = LocateReply.parse(send(http, request(jpeg)) { body ->
+        runCatching { LocateReply.parse(body) }.getOrNull()?.let { r -> "zone $zone: " + listOf(r.state, r.headline.take(80)).filter { it.isNotBlank() }.joinToString(", ") }
+    })
 
     /**
      * GET {relay}/navigate?zone=&to=: where the wearer is, the way to [to] and the room for the map.
@@ -231,13 +234,20 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         .build()
 
     suspend fun navigate(to: String?): com.junction.glasses.core.NavReply =
-        com.junction.glasses.core.NavReply.parse(send(http, navigateRequest(to)))
+        com.junction.glasses.core.NavReply.parse(send(http, navigateRequest(to)) { body ->
+            val r = com.junction.glasses.core.NavReply.parse(body)
+            "zone $zone" + (to?.let { " to $it" } ?: " (map)") + ": " + when {
+                !r.ok -> r.error ?: "refused"
+                r.instruction != null -> r.instruction
+                else -> "${r.places.size} places, " + (if (r.position != null) "wearer placed" else "wearer not placed yet")
+            }
+        })
 
     /** The zone's named places (GET {relay}/waypoints?zone=): names only, for "take me to …". */
     suspend fun placeNames(): List<String> {
         val body = send(http, Request.Builder()
             .url(base.newBuilder().addPathSegment("waypoints").addQueryParameter("zone", zone).build())
-            .header("X-Key", key).header("Accept", "application/json").get().build())
+            .header("X-Key", key).header("Accept", "application/json").get().build()) { "zone $zone" }
         return try {
             JsonParser.parseString(body).asJsonObject.getAsJsonArray("waypoints")
                 ?.mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject?.get("name")?.takeIf { n -> n.isJsonPrimitive }?.asString }
@@ -248,16 +258,28 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
     suspend fun baseline(zip: ByteArray, zone: String): BaselineReply =
         BaselineReply.parse(send(slowHttp, baselineRequest(zip, zone)))
 
-    /** The reply body of a successful call; a RelayFailure (never containing the key) otherwise. */
-    private suspend fun send(client: OkHttpClient, request: Request): String = suspendCancellableCoroutine { cont ->
+    /**
+     * The reply body of a successful call; a RelayFailure (never containing the key) otherwise. Each
+     * answer (or no answer) is noted for the debug panel: path, address, status and [summary] of the
+     * reply. Never the key, the query or the body.
+     */
+    private suspend fun send(client: OkHttpClient, request: Request, summary: ((String) -> String?)? = null): String = suspendCancellableCoroutine { cont ->
+        val label = traceLabel(request)
         val call = client.newCall(request)
         cont.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
+                if (!call.isCanceled()) HttpTrace.record(label, 0, System.currentTimeMillis(), e.javaClass.simpleName)
                 cont.resumeWithException(RelayFailure("Relay unreachable (${e.javaClass.simpleName}). Check the relay address, Wi-Fi or adb reverse.", unreachable = true))
             }
             override fun onResponse(call: Call, response: Response) {
+                val code = response.code
                 val outcome = runCatching { response.use { read(it) } }
+                val note = outcome.fold(
+                    onSuccess = { body -> runCatching { summary?.invoke(body) }.getOrNull() },
+                    onFailure = { it.message },
+                )
+                HttpTrace.record(label, code, System.currentTimeMillis(), note)
                 outcome.fold(
                     onSuccess = { cont.resume(it) },
                     onFailure = { cont.resumeWithException(it as? RelayFailure ?: RelayFailure("Relay reply could not be read.")) },
@@ -265,6 +287,10 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
             }
         })
     }
+
+    /** "relay /locate · 127.0.0.1:8090": the path and address only, never the query or the key. */
+    private fun traceLabel(request: Request): String =
+        "relay ${request.url.encodedPath} · ${request.url.host}:${request.url.port}"
 
     private fun read(response: Response): String {
         val body = response.body ?: throw RelayFailure("Relay HTTP ${response.code}: empty reply.", status = response.code)

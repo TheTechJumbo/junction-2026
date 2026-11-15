@@ -173,4 +173,27 @@ class AlwaysOnPartsTest {
         assertThrows(IllegalArgumentException::class.java) { RelayClient("http://192.168.1.20:8090", "k", "kitchen", allowLocalHttp = false) }
         assertThrows(IllegalArgumentException::class.java) { RelayClient("http://8.8.8.8:8090", "k", "kitchen", allowLocalHttp = true) }
     }
+
+    @Test fun aDrainSendsLeftChunksInOrderDropsRefusedOnesAndStopsWhileTheRelayIsAway() {
+        val queue = ChunkQueue(folder.newFolder("left"))
+        queue.add("aon-1", 0, false, "kitchen", ByteArray(10))
+        queue.add("aon-1", 1, false, "kitchen", ByteArray(10))
+        queue.add("aon-1", 2, true, "kitchen", ByteArray(10))
+        val sent = mutableListOf<Int>()
+        val result = runBlocking {
+            ChunkDrain.drain(queue) { c ->
+                if (c.seq == 1) throw RelayFailure("Relay HTTP 413.", status = 413)
+                sent.add(c.seq)
+            }
+        }
+        assertEquals(listOf(0, 2), sent)
+        assertEquals(DrainResult(sent = 2, refused = 1, left = 0, stoppedBy = null), result)
+        queue.add("aon-2", 0, false, "kitchen", ByteArray(10))
+        queue.add("aon-2", 1, true, "kitchen", ByteArray(10))
+        val away = runBlocking { ChunkDrain.drain(queue) { throw RelayFailure("Relay unreachable.", unreachable = true) } }
+        assertEquals(0, away.sent)
+        assertEquals(2, away.left)
+        assertNotNull(away.stoppedBy)
+        assertEquals("the chunks stay on the phone", 2, queue.pending().size)
+    }
 }

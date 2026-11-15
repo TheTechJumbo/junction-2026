@@ -169,4 +169,23 @@ class SetupDiagnosticsTest {
         yield(view)
         if (view is ViewGroup) for (i in 0 until view.childCount) yieldAll(descendants(view.getChildAt(i)))
     }
+
+    @Test fun holdingDebugOpensAPanelWithKeyPrintsAndNoSecrets() {
+        field("relayKey").set(activity, "synthetic-relay-key")
+        val debug = descendants(activity.window.decorView).filterIsInstance<TextView>()
+            .first { it.contentDescription?.toString()?.startsWith("Debug panel") == true }
+        assertTrue(debug.performLongClick())
+        drain()
+        val dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        assertNotNull(dialog)
+        assertTrue(dialog.isShowing)
+        val report = descendants(dialog.window!!.decorView).filterIsInstance<TextView>()
+            .first { it.text.toString().contains("Relay key print") }.text.toString()
+        assertTrue(report.contains("Relay key print: ${KeyPrint.of("synthetic-relay-key")}"))
+        assertTrue(report.contains("Glasses:"))
+        assertTrue(report.contains("Chunks waiting on the phone"))
+        assertFalse(report.contains("synthetic-relay-key"))
+        assertFalse(report.contains("synthetic-setup-token"))
+        dialog.dismiss(); drain()
+    }
 }

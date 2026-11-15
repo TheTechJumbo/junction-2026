@@ -69,6 +69,7 @@ internal class AlwaysOnRecorder(
     val status: StateFlow<AlwaysOnStatus> = mutableStatus.asStateFlow()
     private val pump = FramePump(scope, capture = { camera.capture() }, retryDelayMs = CAMERA_RETRY_MS)
     private val wake = Channel<Unit>(Channel.CONFLATED)
+    private val retryNow = Channel<Unit>(Channel.CONFLATED)
     private val captureDone = CompletableDeferred<Unit>()
     @Volatile private var newestFrame: ByteArray? = null
     @Volatile private var stopRequested = false
@@ -96,6 +97,12 @@ internal class AlwaysOnRecorder(
         withTimeoutOrNull(drainMs) { uploadJob?.join() }
         jobs.forEach { it.cancel() }
         mutableStatus.update { it.copy(recording = false, stopping = false) }
+    }
+
+    /** Ends the current upload backoff wait: the waiting chunk is tried again now (debug panel's Retry). */
+    fun retryUploadsNow() {
+        retryNow.trySend(Unit)
+        wake.trySend(Unit)
     }
 
     private suspend fun captureLoop() {
@@ -189,7 +196,8 @@ internal class AlwaysOnRecorder(
                     val wait = UploadBackoff.delayMs(failures)
                     mutableStatus.update { it.copy(uploadError = "${clock()} · ${LiveRelayLoop.describe(e)} Retrying in ${wait / 1000} s; chunks stay on the phone.") }
                     refreshQueue()
-                    delay(wait)
+                    retryNow.tryReceive() // a Retry tapped before this failure does not cut this wait short
+                    withTimeoutOrNull(wait) { retryNow.receive() }
                 }
             }
             refreshQueue()
@@ -261,4 +269,7 @@ internal object AlwaysOn {
     /** The current or last recording's status (the service mirrors its recorder here). */
     val status = MutableStateFlow(AlwaysOnStatus())
     val isRecording: Boolean get() = recorder != null
+
+    /** Retries the waiting chunks now when recording; false when there is no recording to do it. */
+    fun retryUploadsNow(): Boolean = recorder?.let { it.retryUploadsNow(); true } ?: false
 }

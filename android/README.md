@@ -195,6 +195,22 @@ The map and guidance use the **venue zone**, apart from the zone field that reco
 so recordings can go to a test zone while the wearer is guided in the venue. Debug builds set it
 with `--es venue_zone kitchen` (remembered); without it they use the zone field.
 
+### Debug panel
+
+A small dim "debug" under the map opens, on a long press only, a panel with no secrets:
+- the build (commit) and the relay addresses (USB and Wi-Fi)
+- the relay key's and backend token's prints (the first 6 hex of their SHA-256: compare with
+  `printf %s "$RELAY_KEY" | sha256sum | cut -c1-6` on the laptop)
+- the recording zone and the venue zone
+- the last answer of every relay and backend call, with its HTTP status and age (0 = no answer,
+  403 = key or token mismatch, 404 = not on that server yet). /locate and /navigate also show
+  what they said.
+- the glasses' state with the last drop reason and time
+- recording and upload state
+
+Refresh asks the relay and backend now. Retry uploads sends the always-on chunks left on the
+phone (or makes a running recording retry at once). Copy puts the same text on the clipboard.
+
 ## Always-on recording (screen off, until Stop)
 
 The **Always-on recording** card records the room for the laptop all the time: with the

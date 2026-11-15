@@ -56,6 +56,39 @@ internal data class QueuedChunk(val file: File, val session: String, val seq: In
     val bytes: Long get() = file.length()
 }
 
+/** What [ChunkDrain.drain] did: chunks sent, refused by the relay (dropped), left on the phone, and why it stopped. */
+internal data class DrainResult(val sent: Int, val refused: Int, val left: Int, val stoppedBy: Exception?)
+
+/**
+ * Sends the chunks a stopped recording left on the phone, in upload order, each once: a chunk the
+ * relay refuses (400, 413) is dropped as the recorder would; any other failure stops the drain and
+ * leaves the rest on the phone. Not for use while recording: the recorder sends its own queue.
+ */
+internal object ChunkDrain {
+    suspend fun drain(queue: ChunkQueue, upload: suspend (QueuedChunk) -> Unit): DrainResult {
+        var sent = 0
+        var refused = 0
+        val tried = HashSet<String>()
+        while (true) {
+            val chunk = queue.next() ?: break
+            if (!tried.add(chunk.file.name)) break // could not be removed: do not loop on it
+            try {
+                upload(chunk)
+                queue.remove(chunk)
+                sent++
+            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (UploadBackoff.dropsChunk((e as? RelayFailure)?.status)) {
+                    queue.remove(chunk)
+                    refused++
+                } else return DrainResult(sent, refused, queue.pending().size, e)
+            }
+        }
+        return DrainResult(sent, refused, queue.pending().size, null)
+    }
+}
+
 /**
  * Chunks waiting for the relay, kept in app storage until uploaded, in upload order: by session (the
  * names start with their start time) and then by seq. File name `<session>.<seq>.<0|1>.<zone>.zip`:
