@@ -67,7 +67,7 @@ is DINOv2 ViT-L/14: 24 blocks, 0.3 B parameters. Measured with `eval/split_eval.
 |---|---|
 | Laptop CPU (i5-10300H, 4 threads, float32, while other sessions were using it), one 518×518 frame | patch embedding 44 ms; +4 blocks 5.7 s; +12 blocks 15 s; all 24 blocks 41 s. About 1 TFLOP a frame: 5–10 s on an idle CPU, too slow for a 2 fps stream. A phone is no better without a converted NPU model (about 300 MB) |
 | Size sent | 1369 × 1024 float16 = 2.8 MB a frame, against 62 kB for the JPEG (45× more over SSH) |
-| Inverting the tokens (attacker with the public VGGT weights) | after 0 blocks: exact (59 dB), since the patch embedding is linear. After 4 blocks: 23 dB from 400 Adam steps (85 s on the RTX 2060). After 12 and 24: see section 5 |
+| Inverting the tokens (attacker with the public VGGT weights) | after 0 blocks: exact (59 dB), since the patch embedding is linear. After 4 blocks: 23 dB from 400 Adam steps (85 s on the RTX 2060). After 12 and 24 blocks: not measured (on the laptop's 6 GB GPU, 12 blocks had not finished after 50 min; stopped to free the GPU for the demo) |
 
 Verdict: tokens from a few blocks are about as revealing as pixels. Tokens from the full backbone cost 5–40 s a frame
 on the laptop CPU. A keyed rotation of the tokens does not help either: Iridis would need weights rotated the same
