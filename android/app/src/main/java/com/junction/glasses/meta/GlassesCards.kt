@@ -54,20 +54,28 @@ object GlassesCards {
         flexBox(direction = Direction.ROW, gap = 8) {
             image("way", drawn(Glyphs.arrowData, way.bearingDeg), ImageSize.ICON)
             text(way.metres, TextStyle.HEADING)
+            turns(way)
         }
+    }
+    private fun FlexBoxScope.turns(way: Way) {
+        if (way.turns > 0) text("${way.turns} ${if (way.turns == 1) "turn" else "turns"}", TextStyle.META, TextColor.SECONDARY)
+    }
+    private fun FlexBoxScope.go(target: String?, way: Way?, onGo: (String) -> Unit) {
+        if (target != null && way != null) button("Go", ButtonStyle.OUTLINE, IconName.ARROW_RIGHT, { onGo(target) })
     }
     private fun clock(t: LocalTime?) = if (t == null) "–" else "%02d:%02d".format(t.hour, t.minute)
 
     /** True when the card has something to show on the glasses. */
     fun shows(card: Card) = card !is Card.Idle
 
-    fun FlexBoxScope.render(card: Card, onDone: (String) -> Unit) {
+    fun FlexBoxScope.render(card: Card, onDone: (String) -> Unit, onGo: (String) -> Unit = {}, onStop: () -> Unit = {}) {
         when (card) {
             is Card.Idle -> Unit
             is Card.Due -> {
                 flexBox(direction = Direction.ROW, gap = 8) { icon(IconName.BELL); text(card.reminder.time, TextStyle.META, TextColor.SECONDARY) }
                 flexBox(direction = Direction.ROW, gap = 8) { symbol(card.glyph); text(word(card.glyph), TextStyle.HEADING) }
                 way(card.way)
+                go(card.target, card.way, onGo)
                 button("Done", ButtonStyle.PRIMARY, IconName.CHECKMARK, { onDone(card.reminder.id) })
             }
             is Card.Checked -> {
@@ -77,6 +85,7 @@ object GlassesCards {
                     card.at?.let { text(clock(it), TextStyle.HEADING) }
                 }
                 way(card.way)
+                go(card.target, card.way, onGo)
             }
             is Card.GoingOut -> {
                 flexBox(direction = Direction.ROW, gap = 8) { icon(IconName.HOUSE); text("Going out?", TextStyle.HEADING) }
@@ -88,15 +97,26 @@ object GlassesCards {
             is Card.Night -> {
                 flexBox(direction = Direction.ROW, gap = 8) { icon(IconName.CLOUD_CRESCENT_MOON); text(clock(card.at), TextStyle.HEADING) }
                 flexBox(direction = Direction.ROW, gap = 8) { icon(IconName.BED_SIDE); text("Bed?", TextStyle.HEADING) }
+                way(card.way)
+                go("bed", card.way, onGo)
             }
             is Card.Guide -> {
-                image("way", drawn(Glyphs.arrowData, card.way.bearingDeg), ImageSize.ICON)
-                flexBox(direction = Direction.ROW, gap = 8) { symbol(card.glyph); text(card.way.metres, TextStyle.HEADING) }
+                val w = card.way
+                when {
+                    card.arrived -> flexBox(direction = Direction.ROW, gap = 8) { icon(IconName.CHECKMARK_CIRCLE); symbol(card.glyph); text("Here", TextStyle.HEADING) }
+                    w == null -> flexBox(direction = Direction.ROW, gap = 8) { icon(IconName.EYE); symbol(card.glyph); text("…", TextStyle.HEADING) }
+                    else -> {
+                        image("way", drawn(Glyphs.arrowData, w.bearingDeg), ImageSize.ICON)
+                        flexBox(direction = Direction.ROW, gap = 8) { symbol(card.glyph); text(w.metres, TextStyle.HEADING); turns(w) }
+                    }
+                }
+                button("Stop", ButtonStyle.OUTLINE, IconName.X, { onStop() })
             }
             is Card.Found -> {
                 flexBox(direction = Direction.ROW, gap = 8) { symbol(card.glyph); text(card.near ?: "Seen", TextStyle.HEADING) }
                 card.time?.let { t -> flexBox(direction = Direction.ROW, gap = 8) { icon(IconName.CLOCK); text(t, TextStyle.META, TextColor.SECONDARY) } }
                 way(card.way)
+                go(card.target, card.way, onGo)
             }
             is Card.Said -> text(card.text, TextStyle.BODY)
         }

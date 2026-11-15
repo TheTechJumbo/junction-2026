@@ -17,7 +17,7 @@ class WearerBrainTest {
 
     @Test fun dueReminderPointsToItsPlace() {
         val card = WearerBrain.decide(WearerInputs(at(8, 5), listOf(pills), room(box = Way(3.4, 40))))
-        assertEquals(Card.Due(pills, Glyph.PILL_BOX, Way(3.4, 40)), card)
+        assertEquals(Card.Due(pills, Glyph.PILL_BOX, Way(3.4, 40), "pill box"), card)
     }
 
     @Test fun anOpenedPillBoxAnswersWithItsTimeNeverWithPillsTaken() {
@@ -30,7 +30,7 @@ class WearerBrainTest {
         val yesterday = Sensed("pillbox_open", at(8, 0).minusDays(1))
         val card = WearerBrain.decide(WearerInputs(at(8, 41), fix = room(box = Way(4.2, 120)), sensed = listOf(yesterday),
             asked = Asked(Topic.Pills, at(8, 41).toInstant(), null)))
-        assertEquals(Card.Checked(Glyph.PILL_BOX, null, false, Way(4.2, 120)), card)
+        assertEquals(Card.Checked(Glyph.PILL_BOX, null, false, Way(4.2, 120), "pill box"), card)
     }
 
     @Test fun atTheFrontDoorInTheDayItIsTimeToCheckTheThingsToTake() {
@@ -61,7 +61,7 @@ class WearerBrainTest {
     @Test fun lostItemsShowWhereTheyWereLastSeen() {
         val keys = Sighting("keys", "Pill box", "09:40", Way(2.5, -70))
         val card = WearerBrain.decide(WearerInputs(at(9, 45), fix = room(seen = listOf(keys)), asked = Asked(Topic.Item("keys"), at(9, 45).toInstant(), null)))
-        assertEquals(Card.Found(Glyph.KEY, "Pill box", "09:40", Way(2.5, -70)), card)
+        assertEquals(Card.Found(Glyph.KEY, "Pill box", "09:40", Way(2.5, -70), "keys"), card)
     }
 
     @Test fun answersFadeAndIdleShowsTheNextReminder() {
@@ -72,7 +72,7 @@ class WearerBrainTest {
 
     @Test fun anUnusableFixGivesNoDirections() {
         val lost = Fix(false, listOf(Place("pill box", Way(1.0, 0))), emptyList())
-        assertEquals(Card.Due(pills, Glyph.PILL_BOX, null), WearerBrain.decide(WearerInputs(at(8, 5), listOf(pills), lost)))
+        assertEquals(Card.Due(pills, Glyph.PILL_BOX, null, "pill box"), WearerBrain.decide(WearerInputs(at(8, 5), listOf(pills), lost)))
     }
 
     @Test fun questionsAreSortedByTopic() {
@@ -93,5 +93,66 @@ class WearerBrainTest {
         val sensed = WearerJson.sensed("""{"events":[{"type":"pillbox_open","source":"sensor","ts":"2026-11-14T08:00:00+02:00"},
             {"type":"object_gone","source":"vision","ts":"2026-11-14T09:00:00+02:00"}]}""", zone)
         assertEquals(listOf(Sensed("pillbox_open", at(8, 0))), sensed)
+    }
+
+    // ---- Guidance: the way around the furniture, Go, and named places ----
+
+    @Test fun theRelaysRouteAroundFurnitureReplacesTheStraightLine() {
+        val fix = WearerJson.fix("""{"state":"found",
+            "waypoints":[{"name":"pill box","distance_m":3.1,"bearing_deg":40},{"name":"bathroom","distance_m":5.0,"bearing_deg":-90}],
+            "seen":[{"name":"keys","near":"Hall table","time":"09:12","distance_m":2.0,"bearing_deg":10}],
+            "route":{"ok":true,"to":{
+                "pill box":{"way":"route","length_m":4.2,"corners":2,"next":{"distance_m":1.1,"bearing_deg":-35}},
+                "keys":{"way":"straight","length_m":2.0,"corners":0,"next":{"distance_m":2.0,"bearing_deg":10}}}}}""")
+        assertEquals(Way(4.2, -35, 2), fix.way("pill box"))
+        assertEquals(Way(5.0, -90), fix.way("bathroom")) // no route for it: the straight line
+        assertEquals(Way(2.0, 10, 0), fix.way("keys"))
+        // A fix without a route (or with route: null) still parses.
+        assertEquals(Way(3.1, 40), WearerJson.fix("""{"state":"found","route":null,"waypoints":[{"name":"pill box","distance_m":3.1,"bearing_deg":40}]}""").way("pill box"))
+    }
+
+    @Test fun cardsWithAPlaceCarryItSoGoCanWalkThere() {
+        val due = WearerBrain.decide(WearerInputs(at(8, 5), listOf(pills), room(box = Way(3.4, 40)))) as Card.Due
+        assertEquals("pill box", due.target)
+        val notTaken = WearerBrain.decide(WearerInputs(at(8, 41), fix = room(box = Way(4.2, 120)),
+            asked = Asked(Topic.Pills, at(8, 41).toInstant(), null))) as Card.Checked
+        assertEquals("pill box", notTaken.target)
+    }
+
+    @Test fun pillsAlreadyOpenedTodayNeverShowTheWayBack() {
+        val card = WearerBrain.decide(WearerInputs(at(9, 0), fix = room(box = Way(2.0, 0)), sensed = listOf(Sensed("pillbox_open", at(8, 0))),
+            asked = Asked(Topic.Pills, at(9, 0).toInstant(), null))) as Card.Checked
+        assertNull(card.way); assertNull(card.target)
+    }
+
+    @Test fun goingSomewhereFollowsTheWayAndSaysWhenThere() {
+        val walking = WearerBrain.decide(WearerInputs(at(14, 0), fix = room(box = Way(3.0, 25, 1)), guideTo = "pill box"))
+        assertEquals(Card.Guide(Glyph.PILL_BOX, Way(3.0, 25, 1), "pill box", false), walking)
+        val there = WearerBrain.decide(WearerInputs(at(14, 1), fix = room(box = Way(0.6, 5)), guideTo = "pill box"))
+        assertEquals(true, (there as Card.Guide).arrived)
+        val lost = WearerBrain.decide(WearerInputs(at(14, 1), fix = Fix(false, emptyList(), emptyList()), guideTo = "pill box"))
+        assertNull((lost as Card.Guide).way)
+    }
+
+    @Test fun askingForAnyNamedPlaceUsesTheCarersNames() {
+        val home = Fix(true, listOf(Place("Bathroom", Way(5.0, -90)), Place("bed", Way(7.0, 120)), Place("kitchen table", Way(2.0, 0))), emptyList())
+        assertEquals(Topic.Go("the loo"), WearerBrain.classify("Where is the loo?"))
+        assertEquals("Bathroom", WearerBrain.resolve("the loo", home))
+        assertEquals("bed", WearerBrain.resolve((WearerBrain.classify("Take me back to bed") as Topic.Go).words, home))
+        assertEquals("kitchen table", WearerBrain.resolve((WearerBrain.classify("How do I get to the kitchen?") as Topic.Go).words, home))
+        assertNull(WearerBrain.resolve("garage", home))
+        // Pills, door and item questions keep their own cards.
+        assertEquals(Topic.Pills, WearerBrain.classify("Where are my pills?"))
+        assertEquals(Topic.Item("keys"), WearerBrain.classify("Where are my keys?"))
+        val unknown = WearerBrain.decide(WearerInputs(at(14, 0), fix = home, asked = Asked(Topic.Go("garage"), at(14, 0).toInstant(), null)))
+        assertEquals(Card.Checked(Glyph.PLACE, null, null, null), unknown)
+    }
+
+    @Test fun atNightTheDoorCardShowsTheWayToBedAndGoingThereComesFirst() {
+        val home = Fix(true, listOf(Place("front door", Way(0.5, 0)), Place("bedroom", Way(6.0, 150, 2))), emptyList())
+        val night = WearerBrain.decide(WearerInputs(at(3, 11), fix = home)) as Card.Night
+        assertEquals(Way(6.0, 150, 2), night.way)
+        val walking = WearerBrain.decide(WearerInputs(at(3, 11), fix = home, guideTo = "bed"))
+        assertEquals(Card.Guide(Glyph.BED, Way(6.0, 150, 2), "bedroom", false), walking)
     }
 }
