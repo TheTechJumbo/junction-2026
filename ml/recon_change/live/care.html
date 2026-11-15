@@ -66,6 +66,8 @@
   #live .frame { position: relative; }
   #live img { width: 100%; display: block; }
   #live .outline { position: absolute; border: 3px solid #ff9a1f; border-radius: 4px; box-shadow: 0 0 0 2px rgba(0,0,0,.55); display: none; }
+  #live .outline.other { border-color: #7fc3ff; }
+  #live .outline.other span { background: #7fc3ff; }
   #live .outline span { position: absolute; left: -3px; top: -22px; background: #ff9a1f; color: #1a0d00; font-size: 12px; font-weight: 700;
     padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
   #live .bar { display: flex; justify-content: space-between; gap: 8px; padding: 5px 9px; font-size: 12px; color: var(--muted); }
@@ -139,7 +141,7 @@
 </div>
 <div id="hint" role="status" hidden></div>
 <div id="live" hidden aria-label="What the glasses see now, with what was found outlined">
-  <div class="frame"><img id="liveImg" alt="What the glasses see now"><div class="outline" id="liveBox"><span id="liveName"></span></div></div>
+  <div class="frame" id="liveFrame"><img id="liveImg" alt="What the glasses see now"></div>
   <div class="bar"><span><b>●</b> Live from the glasses</span><span id="liveWhen"></span></div>
 </div>
 <div id="help"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd><kbd>E</kbd> down / up · <kbd>Shift</kbd> faster ·
@@ -737,7 +739,7 @@ function drawPlaces() {
     placeGroup.add(g);
     const id = `p:${p.name}`;
     keep.add(id);
-    tag(id, p.name, 'place', top, () => lookAtPoint(g.getWorldPosition(new THREE.Vector3())));
+    tag(id, p.name, FIND.some((w) => w.toLowerCase() === p.name.toLowerCase()) ? 'found' : 'place', top, () => lookAtPoint(g.getWorldPosition(new THREE.Vector3())));
   }
   dropTags('p:', keep);
   renderPlaces();
@@ -860,14 +862,31 @@ async function tickLive() {
     if (liveUrl) URL.revokeObjectURL(liveUrl);
     liveUrl = url;
     $('live').hidden = false;
+    // What to outline: /find's newest answer, and what the item finder saw in this fix (items: name, score, box),
+    // each while at most LIVE_FOUND_S old. The things looked for (FIND, e.g. the orange box) in orange, the rest blue.
     const now = Date.now() / 1000;
-    const hit = foundFromFind.filter((f) => f.box2d && f.at && now - f.at <= LIVE_FOUND_S).sort((a, b) => b.at - a.at)[0];
-    const box = $('liveBox');
-    if (hit) {
-      const [u0, v0, u1, v1] = hit.box2d;
-      Object.assign(box.style, { display: 'block', left: `${100 * u0}%`, top: `${100 * v0}%`, width: `${100 * (u1 - u0)}%`, height: `${100 * (v1 - v0)}%` });
-      $('liveName').textContent = `${hit.name} · ${Math.max(0, Math.round(now - hit.at))} s ago`;
-    } else box.style.display = 'none';
+    const wanted = new Set(FIND.map((w) => w.toLowerCase()));
+    const boxes = foundFromFind.filter((f) => f.box2d && f.at && now - f.at <= LIVE_FOUND_S)
+      .map((f) => ({ name: f.name, box: f.box2d, note: `${Math.max(0, Math.round(now - f.at))} s ago` }));
+    if ((fix.age_s ?? 99) <= LIVE_FOUND_S) {
+      for (const it of fix.items || []) {
+        if (Array.isArray(it.box) && it.box.length === 4 && !boxes.some((b) => b.name.toLowerCase() === String(it.name).toLowerCase())) {
+          boxes.push({ name: String(it.name), box: it.box.map(Number), note: it.score != null ? `${Math.round(100 * it.score)}%` : '' });
+        }
+      }
+    }
+    const frame = $('liveFrame');
+    frame.querySelectorAll('.outline').forEach((el) => el.remove());
+    for (const b of boxes) {
+      const [u0, v0, u1, v1] = b.box;
+      const el = document.createElement('div');
+      el.className = `outline${wanted.has(b.name.toLowerCase()) ? '' : ' other'}`;
+      Object.assign(el.style, { display: 'block', left: `${100 * u0}%`, top: `${100 * v0}%`, width: `${100 * (u1 - u0)}%`, height: `${100 * (v1 - v0)}%` });
+      const label = document.createElement('span');
+      label.textContent = `${b.name}${b.note ? ` · ${b.note}` : ''}`;
+      el.appendChild(label);
+      frame.appendChild(el);
+    }
     $('liveWhen').textContent = clock(fix.at);
   } catch { $('live').hidden = true; } finally { liveBusy = false; }
 }
