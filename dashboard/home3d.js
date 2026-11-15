@@ -12,6 +12,8 @@ import {Space, parsePly, upright, shape, ring, disc, ribbon, wall, softRibbon, s
 
 const RED = [0.86, 0.27, 0.25], ORANGE = [0.95, 0.6, 0.25], AMBER = [0.95, 0.69, 0.29], TEAL = [0.3, 0.75, 0.7];
 const EARLY = [0.33, 0.36, 0.85], LATE = [0.97, 0.7, 0.3], DIM = [0.42, 0.45, 0.58];
+// The speed dial's range, in minutes of night per second.
+const SPEED_MIN = 0.25, SPEED_MAX = 30;
 // Floor overlays sit this far above the floor: the meshed floor is a slab a few centimetres thick.
 const LIFT = 0.07;
 // The night trail's height: time mapped from LOW_M (start of the night) to HIGH_M (the end) above the floor.
@@ -75,12 +77,10 @@ export class Home3D {
     $('night-rewind').addEventListener('click', () => (this.timer && this.dir < 0 ? this.pause() : this.play(-1)));
     $('night-prev').addEventListener('click', () => this.jump(-1));
     $('night-next').addEventListener('click', () => this.jump(1));
-    for (const b of document.querySelectorAll('.night-speed [data-speed]')) {
-      b.addEventListener('click', () => {
-        this.speed = Number(b.dataset.speed);
-        document.querySelectorAll('.night-speed [data-speed]').forEach(x => x.setAttribute('aria-checked', String(x === b)));
-      });
-    }
+    this.dial($('speed-dial'));
+    this.skip = true;
+    $('night-skip').addEventListener('click', () => { this.skip = !this.skip; $('night-skip').setAttribute('aria-pressed', String(this.skip)); });
+    this.tips(document.querySelectorAll('#night-panel [data-tip]'));
     // The strip: click to jump there; scroll (here or on the slider) to move a minute, with Shift ten.
     const strip = $('night-strip');
     strip.addEventListener('click', e => { const r = strip.getBoundingClientRect(); this.pause(); this.setTime(this.t0 + (this.t1 - this.t0) * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))); });
@@ -202,6 +202,59 @@ export class Home3D {
   setTime(t) { this.$('night-time').value = String(Math.round(((t - this.t0) / ((this.t1 - this.t0) || 1)) * 1000)); this.drawNight(); }
   now() { return this.t0 + (Number(this.$('night-time').value) / 1000) * (this.t1 - this.t0); }
   step(seconds) { this.pause(); this.setTime(Math.min(this.t1, Math.max(this.t0, this.now() + seconds * 1000))); }
+  /** The speed dial: a knob turned by dragging (up or right is faster), scrolling or the arrow keys.
+   * Its position (0 to 1) maps to SPEED_MIN..SPEED_MAX minutes of night per second on a log scale,
+   * so the slow end is as easy to set as the fast one. Changing it while playing takes effect at once. */
+  dial(el) {
+    const $ = this.$, arc = (from, to) => {
+      const at = f => { const a = (135 + 270 * f) * Math.PI / 180; return [24 + 18 * Math.cos(a), 24 + 18 * Math.sin(a)]; };
+      const [x0, y0] = at(from), [x1, y1] = at(to);
+      return `M${x0.toFixed(2)} ${y0.toFixed(2)}A18 18 0 ${(to - from) * 270 > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+    };
+    el.querySelector('.dial-track').setAttribute('d', arc(0, 1));
+    const set = f => {
+      f = Math.min(1, Math.max(0, f)); this.dialAt = f;
+      const minutes = SPEED_MIN * (SPEED_MAX / SPEED_MIN) ** f;
+      this.speed = minutes * 60;
+      const words = minutes < 1 ? `${Math.round(minutes * 60)} s/s` : `${minutes < 10 ? minutes.toFixed(1).replace(/\.0$/, '') : Math.round(minutes)} min/s`;
+      $('speed-arc').setAttribute('d', arc(0, Math.max(f, 0.001)));
+      const a = (135 + 270 * f) * Math.PI / 180;
+      $('speed-knob').setAttribute('cx', (24 + 18 * Math.cos(a)).toFixed(2)); $('speed-knob').setAttribute('cy', (24 + 18 * Math.sin(a)).toFixed(2));
+      $('speed-text').textContent = words;
+      el.setAttribute('aria-valuenow', minutes.toFixed(2));
+      el.setAttribute('aria-valuetext', minutes < 1 ? `${Math.round(minutes * 60)} seconds of night per second` : `${words.replace(' min/s', '')} minutes of night per second`);
+    };
+    set(Math.log(1 / SPEED_MIN) / Math.log(SPEED_MAX / SPEED_MIN)); // start at 1 min/s
+    let drag = null;
+    el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); drag = {x: e.clientX, y: e.clientY, f: this.dialAt}; });
+    el.addEventListener('pointermove', e => { if (drag) set(drag.f + ((e.clientX - drag.x) - (e.clientY - drag.y)) / 160); });
+    el.addEventListener('pointerup', () => { drag = null; }); el.addEventListener('pointercancel', () => { drag = null; });
+    el.addEventListener('wheel', e => { e.preventDefault(); set(this.dialAt - Math.sign(e.deltaY || -e.deltaX) * 0.05); }, {passive: false});
+    el.addEventListener('keydown', e => {
+      const steps = {ArrowUp: 0.05, ArrowRight: 0.05, ArrowDown: -0.05, ArrowLeft: -0.05, PageUp: 0.2, PageDown: -0.2};
+      if (e.key in steps) { e.preventDefault(); set(this.dialAt + steps[e.key]); }
+      else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); set(e.key === 'Home' ? 0 : 1); }
+    });
+  }
+  /** Tooltips: each [data-tip] gets a bubble, shown on hover or keyboard focus (CSS) and on a long press
+   * (touch: hold for half a second; the press then does not also click). */
+  tips(elements) {
+    for (const el of elements) {
+      const tip = document.createElement('span'); tip.className = 'tip'; tip.setAttribute('aria-hidden', 'true');
+      tip.textContent = el.dataset.tip; el.append(tip);
+      let hold = 0, held = false;
+      el.addEventListener('pointerdown', e => {
+        if (e.pointerType === 'mouse') return;
+        held = false; clearTimeout(hold);
+        hold = setTimeout(() => { held = true; el.dataset.tipOpen = ''; }, 500);
+      });
+      const end = () => { clearTimeout(hold); if (held) setTimeout(() => delete el.dataset.tipOpen, 1500); };
+      el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end); el.addEventListener('pointerleave', end);
+      el.addEventListener('click', e => { if (held) { e.preventDefault(); e.stopImmediatePropagation(); held = false; } }, true);
+      el.addEventListener('contextmenu', e => { if (e.pointerType !== 'mouse') e.preventDefault(); });
+    }
+  }
+  tipText(el, text) { el.dataset.tip = text; const tip = el.querySelector('.tip'); if (tip) tip.textContent = text; }
   /** To the previous or next moment worth seeing (a trip starting or ending, a stop, a door). */
   jump(dir) {
     this.pause();
@@ -226,7 +279,7 @@ export class Home3D {
     let last = performance.now();
     const frame = time => {
       let t = this.now() + dir * (time - last) * this.speed; last = time;
-      if (this.$('night-skip').checked && this.trips?.length && !this.awake(t)) {
+      if (this.skip && this.trips?.length && !this.awake(t)) {
         const next = dir > 0 ? this.trips.find(([a]) => a > t) : [...this.trips].reverse().find(([, b]) => b < t);
         t = next ? (dir > 0 ? next[0] - 30000 : next[1] + 30000) : until;
       }
@@ -242,7 +295,7 @@ export class Home3D {
     const $ = this.$, forwards = on && this.dir > 0, backwards = on && this.dir < 0;
     $('night-play').querySelector('[data-show="play"]').hidden = forwards;
     $('night-play').querySelector('[data-show="pause"]').hidden = !forwards;
-    $('night-play').setAttribute('aria-label', forwards ? 'Pause' : 'Play'); $('night-play').title = forwards ? 'Pause' : 'Play';
+    $('night-play').setAttribute('aria-label', forwards ? 'Pause' : 'Play'); this.tipText($('night-play'), forwards ? 'Pause' : 'Play');
     $('night-rewind').setAttribute('aria-pressed', String(backwards));
   }
 
