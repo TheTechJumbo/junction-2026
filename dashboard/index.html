@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'">
 <title>Tuttu</title>
 <link rel="manifest" href="manifest.json"><meta name="theme-color" content="#0b1029">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -110,6 +110,36 @@
           <div id="sensors" class="sensor-list"></div>
         </section>
       </div>
+    </section>
+
+    <section class="panel familiar-voice" aria-labelledby="voice-title">
+      <div class="panel-head"><h2 id="voice-title">Familiar voice</h2></div>
+      <p class="panel-note">Let Tuttu speak in a voice you choose to share. It remains an automated assistant, not a live conversation with you.</p>
+      <p id="voice-status"></p>
+      <fieldset id="voice-actions">
+        <form id="voice-create" hidden>
+          <label>Your name <input id="voice-name" maxlength="60" required autocomplete="given-name"></label>
+          <p>Record 1–2 minutes of your own clear speech in a quiet room, or upload WebM, MP3, WAV, M4A or Ogg audio (up to 10 MiB). Recording stops after two minutes.</p>
+          <button type="button" class="ghost" id="voice-record">Record my voice</button>
+          <button type="button" class="ghost" id="voice-stop" disabled>Stop recording</button>
+          <label>Or choose a recording <input id="voice-file" type="file" accept="audio/webm,audio/mpeg,audio/wav,audio/mp4,audio/ogg"></label>
+          <audio id="voice-source" controls aria-label="Your recording"></audio>
+          <p>Creating a clone sends this recording to ElevenLabs. Tuttu does not save the source recording locally. ElevenLabs processes and stores voice data under its own terms; deleting the voice requests removal through their API.</p>
+          <label><input type="checkbox" id="voice-consent" required> I am 18 or older. This is my own voice, and I consent to ElevenLabs creating a clone for automated Tuttu replies in this household. I can disable or delete it.</label>
+          <button class="primary" id="voice-create-submit" type="submit">Upload and create my voice</button>
+        </form>
+        <div id="voice-existing" hidden>
+          <button type="button" class="ghost" id="voice-preview-button">Generate voice preview</button>
+          <audio id="voice-preview" controls aria-label="Tuttu generated voice preview"></audio>
+          <label><input type="checkbox" id="voice-listener"> I listened to the preview and explained to the wearer that this is Tuttu using a shared voice, not me speaking live.</label>
+          <button type="button" class="primary" id="voice-activate">Use familiar voice</button>
+          <button type="button" class="ghost" id="voice-disable">Use standard voice</button>
+          <button type="button" class="ghost" id="voice-delete">Delete my cloned voice</button>
+          <button type="button" class="ghost" id="voice-reconcile" hidden>Reset after manual ElevenLabs cleanup</button>
+        </div>
+      </fieldset>
+      <p id="voice-message" role="status" aria-live="polite"></p>
+      <p class="footnote">One voice per home. If familiar speech fails, Tuttu tries the standard voice. No claims about medication change with voice selection.</p>
     </section>
 
     <footer class="footer"><span class="footer-mark" data-asset="mark" aria-hidden="true"></span><p id="updated">Connect to view recorded observations.</p></footer>

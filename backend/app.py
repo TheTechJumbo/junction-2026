@@ -181,6 +181,10 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
     store = store or SQLiteStore(Path(settings.local_data_dir) / "events.sqlite3",
                                  settings.database_url)
 
+    from backend.speech.familiar import FamiliarVoice
+    from backend.speech.voice_routes import install_voice_routes
+    familiar = FamiliarVoice(Path(settings.local_data_dir) / "familiar-voice.sqlite3", speech)
+
     async def maintenance(stop):
         while not stop.is_set():
             try:
@@ -203,6 +207,7 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
         finally:
             stop.set()
             await task
+            await familiar.aclose()
             if owns_speech and hasattr(speech, "aclose"):
                 await speech.aclose()
             if owns_store:
@@ -262,6 +267,8 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
                     return device_id
         raise APIError(401, "unauthorized", "A valid bearer token is required.")
 
+    install_voice_routes(app, familiar, authenticate, bounded_body, APIError)
+    app.state.familiar_voice = familiar
     auth = [Depends(authenticate)]
 
     @app.get("/health")
@@ -418,7 +425,7 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
     @app.post("/speak", dependencies=auth)
     async def speak(body: SpeakRequest):
         try:
-            audio = await speech.synthesize(body.text)
+            audio = await familiar.synthesize(body.text)
             if not isinstance(audio, bytes) or not audio:
                 raise SpeechUnavailable()
         except SpeechUnavailable as exc:

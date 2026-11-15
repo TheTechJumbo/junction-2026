@@ -81,7 +81,7 @@ bounded deadlines and cannot affect deterministic intent latency. Cached /where 
 check state/age_s; do not call /locate. Navigation thresholds await D7.
 /speak returns actual MP3 bytes or 503 speech_unavailable; no fake audio or server-side
 claim that phone fallback ran. Proposed speech timeout 800 ms, pending Ed's acceptance.
-No voice cloning. Voice/model choice is configured and must be verified against current
+Optional consenting-adult familiar voice setup is now supported for the single-household deployment (see docs/FAMILIAR_VOICE.md). Voice/model choice must be verified against current
 ElevenLabs docs by the speech worker before live integration.
 
 Errors use ErrorResponse: 400 invalid input, 401 missing/invalid authentication,

@@ -49,3 +49,13 @@ This confirms the current conservative implementation for Bartek's scope. It is 
 team-wide approval, clinical validation, or a conclusion about legal responsibility.
 No Linear update or teammate message was sent. Live spoken-response timing under two
 seconds remains a separate acceptance check.
+
+## Familiar voice — 15 November 2026
+
+Bartek explicitly authorized optional cloning of a consenting adult family member's
+own voice through Tuttu. This supersedes the foundation's "No voice cloning" limit
+for this flow only. Source audio is explicitly sent to ElevenLabs, never silently
+collected from glasses. One clone per single-household backend, standard voice fallback,
+preview before activation, explicit assistant disclosure, and disable/delete controls.
+No claim of clinical benefit or complete JUN-40 Meta voice activation support.
+See FAMILIAR_VOICE.md for API, privacy, operational limits and live verification gates.

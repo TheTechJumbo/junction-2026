@@ -1,3 +1,4 @@
+import {setupVoice} from './voice.js';
 import {ApiClient, TIMEZONE, localDay, timeLabel, sortedEvents, medicationOpenings} from './client.js';
 import {DAYPARTS, dayFraction, dayState, daypart, mood, shiftDay, sunPosition, sunTimes} from './day.js';
 
@@ -6,6 +7,8 @@ const root = document.documentElement;
 const api = new ApiClient({origin: location.origin});
 const params = new URLSearchParams(location.search);
 let demo = params.has('demo'), controller, generation = 0, evidenceController, evidenceObject, lastData = null, refreshedAt = null;
+
+const refreshVoice = setupVoice(() => demo ? '' : api.token);
 
 // ---------- Words ----------
 const KINDS = {
@@ -271,6 +274,7 @@ async function showEvidence(event) {
 
 // ---------- Loading ----------
 async function load() {
+  refreshVoice();
   controller?.abort(); controller = new AbortController(); const active = ++generation;
   cleanupEvidence(); if ($('evidence-dialog').open) $('evidence-dialog').close();
   lastData = null; root.dataset.loading = 'true';
