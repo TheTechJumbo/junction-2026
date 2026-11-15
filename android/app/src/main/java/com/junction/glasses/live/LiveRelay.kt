@@ -243,6 +243,18 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
             }
         })
 
+    /** POST {relay}/ask?zone=: the relay's answer to "find me X" / "where is X" (where the glasses last saw it). */
+    suspend fun ask(question: String): com.junction.glasses.core.FindReply {
+        val body = JsonObject().apply { addProperty("question", question) }.toString()
+        val request = Request.Builder()
+            .url(base.newBuilder().addPathSegment("ask").addQueryParameter("zone", zone).build())
+            .header("X-Key", key).header("Accept", "application/json")
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+        return com.junction.glasses.core.FindReply.parse(send(http, request) { reply ->
+            "zone $zone: " + (runCatching { com.junction.glasses.core.FindReply.parse(reply).answer.take(80) }.getOrNull() ?: "no answer")
+        })
+    }
+
     /** The zone's named places (GET {relay}/waypoints?zone=): names only, for "take me to …". */
     suspend fun placeNames(): List<String> {
         val body = send(http, Request.Builder()

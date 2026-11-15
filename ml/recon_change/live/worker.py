@@ -324,8 +324,9 @@ def room_map(model, job, req):
         for s in asked:
             x = locate.spot(recon, {"frame": slot[int(s["frame"])], "u": float(s["u"]), "v": float(s["v"])})
             placed.append(None if x is None else [round(float(v), 4) for v in locate.to_map(room, x)[0]])
+        found = find_in_pictures(req, recon, frames, pick, room, valid, seconds)  # "find me X" (relay live/finder.py)
         return {"frames": len(frames), "of": len(files), "places": named, "spots": placed, "metres_from": room["metres_from"],
-                "seconds": seconds, **INFO}
+                "seconds": seconds, **({"found": found} if found is not None else {}), **INFO}
     nothing = {"points": np.zeros((0, 3)), "frames": np.zeros(0, int), "pixels": np.zeros(0, int), "member": np.zeros(0, int)}
     detail = {"after": base, "valid": shown, "appeared": nothing, "gone": nothing}
     pos, scale, rgba, quat = splat.gaussians(recon, detail, MAP_GAUSSIANS, max_frames=len(base))
@@ -351,6 +352,27 @@ def room_map(model, job, req):
             "fov_deg": round(float(np.degrees(2 * np.arctan(recon.depth.shape[2] / 2 / np.median(recon.K[:, 0, 0])))), 1),
             "median_depth_m": round(float(np.median(recon.depth[shown])) * room["metres"], 2) if shown.any() else None,
             "kept_share": round(float(shown.mean()), 3), "seconds": seconds, **INFO}
+
+
+def find_in_pictures(req, recon, frames, pick, room, valid, seconds):
+    """Op "spots" with look_for (the relay's "find me X"): those names looked for in the pass's pictures, each box placed
+    on the map (items.in_pictures). None when nothing was asked; a list with a note when the finder is not loaded."""
+    names = [n for n in req.get("look_for") or [] if isinstance(n, str)][:8]
+    if not names:
+        return None
+    t0 = time.time()
+    try:
+        if "model" not in ITEM_DETECTOR:
+            raise RuntimeError(ITEM_DETECTOR.get("error", "not loaded"))
+        if GPU.get("small"):
+            GPU["torch"].cuda.empty_cache()
+        found = items.in_pictures(ITEM_DETECTOR["model"], names, recon, frames, pick, room, valid,
+                                  floor=items.CANDIDATES if items.CANDIDATES > 0 else 0.25)
+    except Exception as error:  # the places must still go out
+        print(f"find in pictures FAILED: {traceback.format_exc()}", flush=True)
+        found = [{"note": f"Not looked for: {type(error).__name__}: {error}"[:300]}]
+    seconds["find"] = round(time.time() - t0, 2)
+    return found
 
 
 def crop_like(frame, like):

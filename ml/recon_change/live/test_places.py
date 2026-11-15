@@ -90,7 +90,7 @@ def main():
     # 2. A fix: every fix also looks for the AUTO_PLACES things.
     call(f"/locate?zone={ZONE}", jpeg(room(1)))
     asked = [c for c in gateway.calls if c["op"] == "locate"][-1]
-    assert asked["look_for"] == relay.AUTO_PLACES and asked["grow"] is True, asked
+    assert asked["look_for"][:len(relay.AUTO_PLACES)] == relay.AUTO_PLACES and asked["grow"] is True, asked  # + find me X's
 
     # 3. A spot on the newest photo: its own fix places it (no growing), it is kept with its position, and listed.
     status, reply = call(f"/waypoint?zone={ZONE}&name=front+door&live=1&u=0.25&v=0.75", b"")

@@ -233,6 +233,11 @@ except ImportError:  # route.py is missing: fixes go out without a route, the di
     route_finder = None
 # --- end route finding --------------------------------------------------------------------------
 
+# ---- find me X (live/finder.py): where watched things were put, from the fixes' item finder. Pure Python. ----
+sys.path.insert(0, str(HERE))
+import finder as finds  # noqa: E402
+FIND_RECENT = 3  # a newly asked thing is also looked for in this many of the zone's latest photos (and its pictures)
+
 # ---- caretaker's page (/care): the trained splat put into the room map's axes (care_space.py, needs NumPy) ----
 try:
     import care_space
@@ -528,6 +533,14 @@ def post_events(url, events):
         return response.status
 
 
+def _post_quietly(url, events):
+    """post_events for the finder's events (live/finder.py): in the background, a failure only noted in the log."""
+    try:
+        post_events(url, events)
+    except (OSError, ValueError) as err:
+        sys.stderr.write(f"find: event not posted: {type(err).__name__}" + chr(10))
+
+
 # ---------------------------------------------------------------- what the carer sets once
 # The room's real scale, the spots to watch and the items shown to the camera once. The relay
 # checks what the page sends, and the gateway, which writes the files, checks all of it again.
@@ -675,7 +688,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         try:
             log.fix(fix)
             for item in result.get("items") or []:
-                if item.get("position"):
+                if item.get("position") and not found_things.handles(zone, item.get("name")):  # the finder logs its own
                     log.item(item["name"], near=(seen.get(zone, {}).get(item["name"]) or {}).get("near", ""), zone=zone, position=item["position"])
         except Exception as err:  # noqa: BLE001
             sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
@@ -712,9 +725,117 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             threading.Thread(target=pull, daemon=True).start()
     # ---- end of the day log's own functions ----
 
+    # ---- find me X (live/finder.py): the watch lists and sightings; their events go to the day log and the event API ----
+    found_things = finds.Finder(evidence_dir / "finds.json", HOME_TZ)
+    shots = {}  # {zone: [(taken at, photo), ...]}: the latest photos the model placed, to look in again for a new name
+    searched = {}  # {(zone, name, room job): when}: the zone's pictures are searched once per name and room map
+
+    def find_places(zone, fix=None):
+        """The named places to describe a spot by: the room's and the fix's, not the watched things themselves."""
+        out = {}
+        for p in ((rooms.get(zone) or {}).get("places") or []) + list((fix or where.get(zone) or {}).get("waypoints") or []):
+            if p.get("name") and p.get("position") and not found_things.handles(zone, p["name"]):
+                out[p["name"]] = p
+        return list(out.values())
+
+    def find_events(events):
+        """A sighting or a move: into the day log (an item entry, with the place) and onto the event API's timeline (an
+        object_appeared or object_moved vision event, same id, so the day log does not take it in twice)."""
+        for e in events:
+            eid = f"find-{re.sub(r'[^A-Za-z0-9_-]+', '-', e['zone'])}-{re.sub(r'[^a-z0-9]+', '-', e['name'])}-{int(e['at'] * 1000)}"
+            try:
+                log.item(e["name"], at=e["at"], near=e.get("near", ""), zone=e["zone"], position=e["position"], id=eid)
+            except Exception as err:  # noqa: BLE001
+                sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
+            sys.stderr.write(f"{time.strftime('%H:%M:%S')} find: {e['text']}\n")
+            if event_api:
+                event = {"id": eid, "type": "object_appeared" if e["kind"] == "seen" else "object_moved", "source": "vision",
+                         "ts": datetime.fromtimestamp(e["at"], timezone.utc).isoformat(timespec="seconds"), "zone": e["zone"],
+                         "object": e["name"], "evidence_url": None, "confidence": 0.6 if e.get("views", 0) >= 3 else 0.5}
+                threading.Thread(target=lambda ev=event: _post_quietly(event_api, [ev]), daemon=True).start()
+
+    def find_seen(zone, result, job, at, images=None, source="fix"):
+        """A fix's (or a search's) boxes of watched names -> the finder; returns its events, already logged."""
+        boxes = [b for b in (result.get("items") or []) + (result.get("items_candidates") or []) if b.get("position")]
+        if not boxes:
+            return []
+        image = next(((images or {}).get(b.get("image") or "") for b in boxes if b.get("image")), None)
+        try:
+            events = found_things.observe(zone, boxes, find_places(zone), job, at=at, image=image, source=source)
+        except Exception as err:  # noqa: BLE001  the finder is an extra: the fix must still go out
+            sys.stderr.write(f"find: {type(err).__name__}: {err}\n")
+            return []
+        find_events(events)
+        return events
+
+    def find_search(zone, name):
+        """A name asked for the first time: look for it in the zone's latest photos (a fix each, on the background
+        connection) and, once per room map, in the zone's pictures (worker op "spots" with look_for)."""
+        def run():
+            for taken, photo in list(shots.get(zone) or [])[-FIND_RECENT:][::-1]:
+                try:
+                    header, blob = (bg_link or link).call({"op": "locate", "zone": zone, "device": "gpu", "view": False, "grow": False,
+                                                           "look_for": [name], "remembered": []}, one_photo(photo))
+                    if header.get("ok"):
+                        images, _ = keep_evidence(header["job"], blob)
+                        find_seen(zone, header["result"], header["job"], taken, images, source="recent")
+                except Exception as err:  # noqa: BLE001
+                    sys.stderr.write(f"find: recent photo not searched: {type(err).__name__}: {err}\n")
+            room = rooms.get(zone) or {}
+            if not room.get("job") or (zone, name, room["job"]) in searched:
+                return
+            searched[(zone, name, room["job"])] = time.time()
+            try:
+                header, _ = (bg_link or link).call({"op": "spots", "zone": zone, "device": "gpu", "look_for": [name]})
+                hits = header.get("result", {}).get("found") or [] if header.get("ok") else []
+                taken = pictures_taken(room)
+                for frame in sorted({h["frame"] for h in hits if h.get("position")}):
+                    find_seen(zone, {"items": [h for h in hits if h.get("frame") == frame and h.get("position")]},
+                              f"{header['job']}-{frame}", taken, source="pictures")
+            except Exception as err:  # noqa: BLE001
+                sys.stderr.write(f"find: pictures not searched: {type(err).__name__}: {err}\n")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def pictures_taken(room):
+        """When a zone's pictures were taken: the recording's start (session 20261115_025911_...), else the map's time."""
+        got = re.match(r"(\d{8})_(\d{6})", str(room.get("session") or ""))
+        if got:
+            try:
+                local = datetime.strptime(got[1] + got[2], "%Y%m%d%H%M%S")
+                return (local.replace(tzinfo=HOME_TZ) if HOME_TZ else local.astimezone()).timestamp()
+            except ValueError:
+                pass
+        return room.get("at") or time.time()
+
+    def find_answer(zone, question, asked):
+        """POST /ask with "find me X" / "where is X" / "where did I put X": X goes on the watch list (and, if new, is
+        looked for in the latest photos and the zone's pictures), and the answer comes from the sightings."""
+        fix = where.get(zone) or max(where.values(), key=lambda f: f["at"], default=None)
+        zone = zone or (fix or {}).get("zone", "")
+        fix = where.get(zone) or fix
+        name, new = found_things.want(zone, asked)
+        if new:
+            find_search(zone, name)
+        try:
+            log.question(question, topic=name)
+        except Exception as err:  # noqa: BLE001
+            sys.stderr.write(f"day log: {type(err).__name__}: {err}\n")
+        if api_base:  # still counted by the event API, like a lost-item question
+            threading.Thread(target=log_question, args=(question,), daemon=True).start()
+        reply = found_things.answer(zone, name, fix, find_places(zone, fix), looking=new)
+        return {"ok": True, "question": question, "evidence": [], "answered_by": "finder", "zone": zone, **reply}
+
+    def is_place(zone, asked):
+        """Does `asked` name a place (not a watched thing) in the zone? Then "where is" is the way to a place."""
+        fix = where.get(zone) or max(where.values(), key=lambda f: f["at"], default=None) or {}
+        names = [p["name"] for p in find_places(zone or fix.get("zone", ""), fix)]
+        return bool(names) and finds.match(asked, names) is not None and found_things.resolve(zone, asked) is None
+    # ---- end find me X ----
+
     def remember_items(zone, result, images):
         """Keep where each item in this fix was seen. Only with a position: a lost fix places nothing."""
-        found = [item for item in result.get("items") or [] if item.get("position")]
+        found = [item for item in result.get("items") or [] if item.get("position") and not found_things.handles(zone, item["name"])]
         for item in found:
             near = min(result.get("waypoints") or [], default=None,
                        key=lambda w: math.dist(w["position"][:2], item["position"][:2]))
@@ -1161,7 +1282,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         named = []
         for item in result.get("items") or []:
             name = item.get("name")
-            if name not in AUTO_PLACES or not item.get("position") or (item.get("score") or 0) < AUTO_SCORE:
+            if name not in AUTO_PLACES or not item.get("position") or (item.get("score") or 0) < AUTO_SCORE                     or found_things.handles(zone, name):  # a watched thing (live/finder.py) is an object that moves, not a place
                 continue
             mine = auto_seen.setdefault(zone, {}).setdefault(name, [])
             mine.append({"position": item["position"], "score": item.get("score"), "job": job, "at": time.time()})
@@ -1450,6 +1571,8 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         for p in ((rooms.get(zone) or {}).get("places") or []) + list(fix.get("waypoints") or []):
             if p.get("name") and p.get("position"):
                 places[p["name"]] = {"name": p["name"], "position": [round(float(c), 2) for c in p["position"]]}
+        for t in found_things.targets(zone):  # find me X: a thing seen is somewhere to go ("take me there"); its newest spot
+            places[t["name"]] = {"name": t["name"], "position": [round(float(c), 2) for c in t["position"]], "kind": "object"}
         listing = sorted(places.values(), key=lambda p: p["name"])
         if not asked:  # the wearer's map: where they are now, the places, the floor plan
             return 200, map_now(fix, listing)
@@ -1608,6 +1731,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     guiding.pop(zone, None)
                     return self.send_json(200, {"ok": True, "zone": zone, "stopped": True})
                 return self.send_json(*navigate(zone, parse_qs(url.query).get("to", [""])[0]))
+            if url.path == "/find":  # find me X: the watch list, the sightings, the moves and the last box not taken
+                return self.send_json(200, {"ok": True, "zone": zone, "watching": found_things.watched(zone),
+                                            "things": found_things.listing(zone)})
             if url.path == "/waypoints":
                 header, _ = link.call({"op": "waypoints", "zone": zone})
                 return self.send_json(200 if header.get("ok") else 404, header)
@@ -1665,6 +1791,11 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if not isinstance(text, str) or not text.strip():
                 return self.send_json(400, {"ok": False, "error": f'POST /{op} with a JSON body: {{"{field}": "..."}}'})
             text = text.strip()[:2000]
+            # ---- find me X (live/finder.py): "find me the orange box", "where did I put my orange box" -> where it was seen.
+            # The five items the worker always looks for (keys, ...) keep their own answer below; a named place keeps the way.
+            thing = finds.object_in(text) if op == "ask" else None
+            if thing and not item_in(text) and not is_place(zone, thing) and (found_things.resolve(zone, thing) or not finds.place_like(thing)):
+                return self.send_json(200, find_answer(zone, text, thing))
             # ---- day log (JUN-26): every question is logged, and a question about the day ("What did I do
             # today?", "When was I last in the kitchen?") is answered from the log before the event API is asked.
             if op == "ask":
@@ -1832,6 +1963,19 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                     return self.send_json(503, {"ok": False, "error": "route.py is not next to the relay."})
                 return self.send_json(200, {"ok": True, "route": route_finder.plan(asked, targets)})
             # --- end route finding
+            if op == "find":  # find me X: watch for a name (&name=), or &forget=1 (no name: the zone's whole watch list)
+                self.rfile.read(min(size, 65536))
+                name = " ".join(query.get("name", [""])[0].split())[:40]
+                if query.get("forget", [""])[0]:
+                    found_things.forget(zone, name or None)
+                elif name and re.fullmatch(r"[\w '-]{1,40}", name):
+                    name, new = found_things.want(zone, name)
+                    if new:
+                        find_search(zone, name)
+                else:
+                    return self.send_json(400, {"ok": False, "error": "POST /find?zone=Z&name=orange+box (or &forget=1)"})
+                return self.send_json(200, {"ok": True, "zone": zone, "watching": found_things.watched(zone),
+                                            "things": found_things.listing(zone)})
             if op == "forget":  # drop what is remembered about one item in a zone, or about all of them
                 self.rfile.read(min(size, 65536))
                 name, spots = query.get("name", [""])[0], seen.get(zone, {})
@@ -2046,7 +2190,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if op == "locate":  # the spots where items were seen, so the worker can look at them again
                 job["remembered"] = [{"name": s["name"], "position": s["position"]} for s in seen.get(zone, {}).values()]
                 job["grow"] = growing
-                job["look_for"] = AUTO_PLACES
+                job["look_for"] = list(dict.fromkeys(AUTO_PLACES + found_things.watched(zone)))[:8]  # + find me X
             header, blob = link.call(job, clip)
             seconds["total"] = round(time.time() - t0, 2)
             if not header.get("ok"):
@@ -2099,6 +2243,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 except OSError:
                     pass
                 remember_items(zone, result, images)
+                fix["found"] = find_seen(zone, result, header["job"], t0, images)  # find me X: sightings and moves
+                if shot is not None:  # a newly asked name is also looked for in the latest photos
+                    shots[zone] = (shots.get(zone) or [])[-(FIND_RECENT - 1):] + [(t0, shot)]
                 if AUTO_PLACES and result.get("items"):
                     fix["places_named"] = auto_places(zone, result, header["job"])
                 if result.get("picture_added") and growing:  # a part of the room not sampled before: the room map grows

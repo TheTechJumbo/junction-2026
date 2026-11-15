@@ -11,7 +11,8 @@ import java.util.concurrent.TimeUnit
 fun interface Cancelable { fun cancel() }
 data class Observation(val id: String, val type: String, val source: String, val ts: String,
     val zone: String, val objectName: String?, val confidence: Double, val evidenceUrl: String?)
-data class Answer(val text: String, val evidence: List<Observation>)
+/** [target]: what "take me there" walks to after a find answer from the relay (its /navigate name). */
+data class Answer(val text: String, val evidence: List<Observation>, val target: String? = null)
 interface BackendClient {
     fun ask(question: String, callback: (Result<Answer>) -> Unit): Cancelable
     fun speak(text: String, callback: (Result<ByteArray>) -> Unit): Cancelable

@@ -214,6 +214,11 @@ class MainActivity : ComponentActivity() {
     private var navJob: Job? = null
     /** The zone's place names, for matching what the wearer says; refreshed with the map. */
     private var knownPlaces: List<String> = emptyList()
+    /** Find me X: the things the map lists as seen (kind "object"), what was just found, and the question the relay answers. */
+    private var knownObjects: List<String> = emptyList()
+    private var lastFound: String? = null
+    private var relayQuestion: String? = null
+    private lateinit var takeMeThere: Button
     /** The live camera was started for guidance (to keep fixes coming) and stops with it. */
     private var navStartedLive = false
     private var navRelayFor: String? = null
@@ -491,11 +496,17 @@ class MainActivity : ComponentActivity() {
             onPlaceTap = { name -> startNavigation(name) }
             onStop = { stopNavigation("Stopped.") }
         }
+        // Find me X: after the relay said where a thing is, one tap (or "take me there") walks the wearer to it.
+        takeMeThere = Button(this).apply {
+            isAllCaps = false; textSize = 18f; visibility = android.view.View.GONE
+            setOnClickListener { lastFound?.let { target -> visibility = android.view.View.GONE; startNavigation(target) } }
+        }
         setContentView(ScrollView(this).apply {
             setBackgroundColor(WearerPanel.NIGHT); isFillViewport = true
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
                 addView(wearer)
+                addView(takeMeThere, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), 0, dp(20), dp(8)) })
                 addView(navMap, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(320)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
                 // Small and dim, and it opens only on a long press, so the wearer does not open it by accident.
                 addView(TextView(this@MainActivity).apply {
@@ -1345,7 +1356,7 @@ class MainActivity : ComponentActivity() {
                 result.fold(onSuccess = {
                     evidenceClient = configuredEvidence
                     screen.dayClient = configuredDay
-                    controller = VoiceTurnController(client, audio, { work -> if (Looper.myLooper() == main.looper) work() else main.post(work) }, ::renderTurn)
+                    controller = VoiceTurnController(findingClient(client), audio, { work -> if (Looper.myLooper() == main.looper) work() else main.post(work) }, ::renderTurn)
                     // DEBUG only: a verified origin and token are remembered, encrypted, for the next launch.
                     if (rememberToken != null) backendMemory?.save(origin, rememberToken)
                     backendStatus.text = "Backend: reachable and authenticated at last check."
@@ -1406,6 +1417,18 @@ class MainActivity : ComponentActivity() {
     private fun submit(text: String) {
         cancelDiagnostic()
         stopRecognition(); glasses.stopListening()
+        // Find me X: "take me there" after a find answer; "find me / where is / where did I put <thing>" goes to the relay,
+        // which answers from where the glasses saw it. Named places keep the guidance below.
+        if (FindPhrases.isTakeMeThere(text)) lastFound?.let { target -> takeMeThere.visibility = android.view.View.GONE; startNavigation(target); return }
+        val thing = FindPhrases.objectIn(text)
+        if (thing != null && controller != null && navRelay() != null &&
+            FindPhrases.asksRelay(thing, knownPlaces.filter { it !in knownObjects }, knownObjects)) {
+            if (screen.ask("find $thing")) return // the wearer card shows the answer's words (the demo answers by itself)
+            relayQuestion = text
+            lastQuestion = text
+            controller?.submit(text)
+            return
+        }
         // "Take me to / where is / how do I get to <place>" and "stop" are guidance, not questions.
         when (val command = NavPhrases.parse(text, knownPlaces)) {
             is NavCommand.GoTo -> { startNavigation(command.place); return }
@@ -1419,6 +1442,12 @@ class MainActivity : ComponentActivity() {
     }
     private fun renderTurn(turn: TurnState) {
         renderStatus(turn)
+        if (turn.phase == TurnPhase.ASKING) takeMeThere.visibility = android.view.View.GONE
+        turn.answer?.target?.takeIf { turn.phase == TurnPhase.FETCHING_SPEECH }?.let { target ->
+            lastFound = target
+            takeMeThere.text = "Take me to the $target"
+            takeMeThere.visibility = android.view.View.VISIBLE
+        }
         if (::screen.isInitialized) screen.turnBusy = turn.phase in setOf(TurnPhase.ASKING, TurnPhase.FETCHING_SPEECH, TurnPhase.PLAYING, TurnPhase.FALLBACK)
         if (::wearer.isInitialized) wearer.setStatus(when (turn.phase) {
             TurnPhase.ASKING -> "…"; TurnPhase.ERROR -> "No answer. Try again."; else -> ""
@@ -1691,8 +1720,29 @@ class MainActivity : ComponentActivity() {
 
     private fun renderMap(reply: NavReply, target: String?) {
         if (reply.places.isNotEmpty()) knownPlaces = (knownPlaces + reply.places.map { it.name }).distinct()
+        if (reply.places.isNotEmpty()) knownObjects = reply.places.filter { it.kind == "object" }.map { it.name }
         navMap.show(reply.plan, reply.places, reply.position, reply.headingDeg, if (target != null) reply.route else emptyList(),
             target, if (!reply.ok) reply.error else null)
+    }
+
+    /**
+     * The backend for questions, except the one [submit] marked as a find question ([relayQuestion]): that one goes to
+     * the relay's POST /ask (where the glasses saw the thing), and to the backend only when the relay cannot answer.
+     */
+    private fun findingClient(backend: BackendClient): BackendClient = object : BackendClient {
+        override fun ask(question: String, callback: (Result<Answer>) -> Unit): Cancelable {
+            val relay = navRelay()
+            if (question != relayQuestion || relay == null) return backend.ask(question, callback)
+            relayQuestion = null
+            var fallback: Cancelable? = null
+            val job = lifecycleScope.launch {
+                val reply = try { relay.call { it.ask(question) } } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+                if (reply != null) callback(Result.success(Answer(reply.answer, emptyList(), reply.target)))
+                else fallback = backend.ask(question, callback)
+            }
+            return Cancelable { job.cancel(); fallback?.cancel() }
+        }
+        override fun speak(text: String, callback: (Result<ByteArray>) -> Unit): Cancelable = backend.speak(text, callback)
     }
 
     /** Guides the wearer to [place]: map route, spoken directions on each new fix, until there or "stop". */

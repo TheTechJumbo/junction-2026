@@ -11,7 +11,8 @@ import kotlin.math.roundToInt
 /** A point on the zone's floor, in metres: [east] to the right, [north] up on the map. */
 data class FloorPoint(val east: Double, val north: Double)
 
-data class NavPlace(val name: String, val at: FloorPoint)
+/** [kind] "object": a thing the glasses saw (find me X), not a named place. */
+data class NavPlace(val name: String, val at: FloorPoint, val kind: String? = null)
 
 /**
  * The relay's answer to `GET /navigate?zone=Z&to=NAME`: where the wearer is and faces, the way to the
@@ -53,7 +54,7 @@ data class NavReply(
             fun points(a: JsonArray?): List<FloorPoint> = a?.mapNotNull { point(it) }.orEmpty()
             val places = root.get("places")?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { e ->
                 val o = e.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
-                NavPlace(text(o, "name") ?: return@mapNotNull null, point(o.get("position")) ?: return@mapNotNull null)
+                NavPlace(text(o, "name") ?: return@mapNotNull null, point(o.get("position")) ?: return@mapNotNull null, text(o, "kind"))
             }.orEmpty()
             val plan = root.get("plan")?.takeIf { it.isJsonObject }?.asJsonObject?.get("points")?.takeIf { it.isJsonArray }?.asJsonArray
             return NavReply(
