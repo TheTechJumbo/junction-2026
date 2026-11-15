@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Beacon Care</title>
+<style>
+  :root { --bg: #05070a; --panel: rgba(11, 16, 23, .9); --line: #213042; --text: #e8eef5; --muted: #93a1b2;
+    --blue: #4aa3ff; --yellow: #ffd228; --green: #3cdc78; --amber: #ffb84d; --red: #ff6b5b; --grey: #6f7d8c; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 14px/1.45 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
+  [hidden] { display: none !important; }
+  canvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+  #tags { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .tag { position: absolute; left: 0; top: 0; white-space: nowrap; padding: 2px 9px; border-radius: 999px; font-size: 12.5px;
+    font-weight: 600; background: rgba(8, 12, 18, .8); border: 1px solid; pointer-events: auto; cursor: pointer; will-change: transform;
+    text-shadow: 0 1px 2px #000; user-select: none; }
+  .tag.place { color: var(--yellow); border-color: rgba(255, 210, 40, .65); }
+  .tag.object { color: #d6e6ff; border-color: rgba(160, 190, 230, .35); font-weight: 500; font-size: 11.5px; }
+  .tag.wearer { color: #fff; background: rgba(74, 163, 255, .92); border-color: #9fd0ff; }
+  .tag.wearer.stale { background: rgba(111, 125, 140, .9); border-color: #aab6c3; }
+  #bar { position: fixed; left: 12px; top: 12px; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100% - 400px); }
+  #bar button, #bar select, #bar label { font: inherit; font-size: 13px; color: var(--text); background: rgba(13, 20, 29, .88);
+    border: 1px solid var(--line); border-radius: 9px; padding: 6px 11px; cursor: pointer; }
+  #bar button.on { border-color: var(--blue); background: rgba(30, 70, 115, .9); }
+  #bar label { display: flex; gap: 6px; align-items: center; }
+  #help { position: fixed; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; text-shadow: 0 1px 2px #000; pointer-events: none;
+    max-width: calc(100% - 400px); }
+  #help kbd { font: inherit; font-size: 11px; border: 1px solid #3a4a5c; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--text); }
+  #loading { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--muted); text-align: center; pointer-events: none; }
+  #loading .barline { width: 240px; height: 4px; background: #17202b; border-radius: 4px; margin: 10px auto 0; overflow: hidden; }
+  #loading .barline i { display: block; height: 100%; width: 0; background: var(--blue); transition: width .2s; }
+  #panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: 360px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; overflow: auto; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); overscroll-behavior: contain; }
+  #panel header { position: sticky; top: 0; z-index: 1; background: rgba(11, 16, 23, .97); padding: 12px 14px 10px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px; cursor: default; }
+  #panel header .who { flex: 1; min-width: 0; }
+  #panel header b { font-size: 16px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--grey); flex: none; }
+  .dot.live { background: var(--green); box-shadow: 0 0 0 4px rgba(60, 220, 120, .18); }
+  .dot.unsure { background: var(--amber); }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  #fold { display: none; font: inherit; color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 8px; padding: 3px 9px; }
+  section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: 0; }
+  h2 { margin: 0 0 8px; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  #nowLine { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+  #doing { margin: 0; }
+  #doing div + div { margin-top: 3px; }
+  #see { margin-top: 10px; display: none; }
+  #see img { width: 100%; border-radius: 10px; display: block; background: #0b1118; aspect-ratio: 4 / 3; object-fit: cover; }
+  #see figcaption { margin-top: 4px; }
+  ul, ol { list-style: none; margin: 0; padding: 0; }
+  .rem { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; }
+  .rem + .rem { border-top: 1px solid #172230; }
+  .chip { flex: none; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; text-transform: uppercase; letter-spacing: .04em; }
+  .chip.later { background: #1b2633; color: var(--muted); }
+  .chip.due { background: rgba(255, 184, 77, .18); color: var(--amber); }
+  .chip.done { background: rgba(60, 220, 120, .16); color: var(--green); }
+  .chip.missed { background: rgba(255, 107, 91, .18); color: var(--red); }
+  #summary li { padding: 2px 0 2px 14px; position: relative; }
+  #summary li::before { content: ""; position: absolute; left: 2px; top: 10px; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+  #timeline { margin-top: 8px; }
+  .ev { display: grid; grid-template-columns: 46px 1fr; gap: 8px; padding: 6px 0; border-top: 1px solid #172230; }
+  .ev time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; padding-top: 1px; }
+  .ev .k { display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; margin-right: 6px; }
+  .ev.gap { color: var(--muted); }
+  .k.room, .k.place, .k.walk { color: var(--blue); } .k.event { color: var(--green); } .k.question { color: #c79bff; }
+  .k.reminder { color: var(--amber); } .k.item { color: #7fe0d6; } .k.gap { color: var(--grey); }
+  #more { font: inherit; font-size: 12px; color: var(--blue); background: none; border: 0; padding: 6px 0 0; cursor: pointer; }
+  .pl { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  .pl + .pl { border-top: 1px solid #172230; }
+  .pl .name { flex: 1; color: var(--yellow); font-weight: 600; }
+  .pl button, a.btn { font: inherit; font-size: 12px; color: var(--text); background: #12202d; border: 1px solid var(--line); border-radius: 8px;
+    padding: 3px 9px; cursor: pointer; text-decoration: none; }
+  footer { padding: 10px 14px 14px; }
+  @media (max-width: 760px) {
+    #panel { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-height: 52vh; }
+    #panel.folded { max-height: 62px; overflow: hidden; }
+    #fold { display: block; }
+    #bar { max-width: calc(100% - 24px); }
+    #help { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="view" tabindex="0" aria-label="The room in 3D with the wearer and the named places"></canvas>
+<div id="tags"></div>
+<div id="loading"><div id="loadText">Loading the room…</div><div class="barline"><i id="loadBar"></i></div></div>
+<div id="bar">
+  <button id="follow" title="Keep the wearer in view (F)">Follow</button>
+  <button id="eyes" title="See from where the wearer stands (V)">Their view</button>
+  <button id="start" title="Back to the first picture's view (R)">Reset view</button>
+  <select id="which" title="Which 3D room to show" hidden></select>
+  <label title="Today's path"><input type="checkbox" id="showPath" checked> path</label>
+  <label title="Things the camera recognised" id="objectsLabel" hidden><input type="checkbox" id="showObjects" checked> objects</label>
+</div>
+<div id="help"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd><kbd>E</kbd> down / up · <kbd>Shift</kbd> faster ·
+  drag to look · right-drag to slide · <kbd>F</kbd> follow · <kbd>V</kbd> their view · click a label to go there</div>
+<aside id="panel" aria-label="What the wearer is doing">
+  <header>
+    <span class="dot" id="dot"></span>
+    <div class="who"><b id="title">Wearer</b><div class="muted small" id="seen">Waiting for the first position…</div></div>
+    <button id="fold" aria-expanded="true">Hide</button>
+  </header>
+  <section>
+    <h2>Now</h2>
+    <p id="nowLine">…</p>
+    <div id="doing" class="muted"></div>
+    <figure id="see" style="margin:10px 0 0"><img id="seeImg" alt="What the glasses saw last"><figcaption class="muted small" id="seeWhen"></figcaption></figure>
+  </section>
+  <section>
+    <h2>Reminders</h2>
+    <ul id="reminders"><li class="muted">None set.</li></ul>
+  </section>
+  <section>
+    <h2>Today</h2>
+    <ul id="summary"></ul>
+    <ol id="timeline"></ol>
+    <button id="more" hidden>Show the whole day</button>
+  </section>
+  <section>
+    <h2>Places</h2>
+    <ul id="places"><li class="muted">No named places yet.</li></ul>
+    <p class="small muted" style="margin:8px 0 0">Name a place by clicking it in a room picture: <a class="btn" id="namePlaces" href="#" target="_blank" rel="noopener">Name places</a></p>
+  </section>
+  <footer class="muted small" id="about"></footer>
+</aside>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "@sparkjsdev/spark": "https://cdn.jsdelivr.net/npm/@sparkjsdev/spark@2.4.0/dist/spark.module.js"
+} }
+</script>
+<script type="module">
+// The caretaker's page: the room as a Gaussian splat with the wearer moving in it, the named places as labels in 3D,
+// and what the wearer is doing (relay: /care/space, /where, /day, /reminders, /frame, /waypoints).
+//   /care?zone=kitchen&k=KEY   in a browser on the laptop or a phone
+//   /relay/care?zone=kitchen   in the family app, whose proxy adds the key (any path ending in /care works)
+// Everything is drawn in the room map's axes (x east, y north, z up, metres; relay /room): the position fixes and
+// places are in them already, and /care/space gives the matrix that takes the trained splat into them.
+import * as THREE from 'three';
+import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+
+const $ = (id) => document.getElementById(id);
+const q = new URLSearchParams(location.search);
+const zone = q.get('zone') || q.get('live') || 'kitchen';
+const key = q.get('k') || '';
+const base = location.pathname.replace(/\/care\/?$/, '');
+const api = (path) => base + path + (key ? `${path.includes('?') ? '&' : '?'}k=${encodeURIComponent(key)}` : '');
+async function getJson(path) {
+  const reply = await fetch(api(path), { cache: 'no-store' });
+  const body = await reply.json().catch(() => ({}));
+  if (!reply.ok) throw Object.assign(new Error(body.error || `HTTP ${reply.status}`), { status: reply.status });
+  return body;
+}
+const nice = (s) => String(s || '').replace(/[-_]+/g, ' ');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function ago(s) {
+  if (s < 5) return 'just now';
+  if (s < 90) return `${Math.round(s)} s ago`;
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  return `${Math.round(s / 3600)} h ago`;
+}
+const metres = (d) => `${Math.round(d * 10) / 10} m`;
+$('title').textContent = `${nice(zone).replace(/^./, (c) => c.toUpperCase())}`;
+$('namePlaces').href = api('/places');
+if (base) $('namePlaces').parentElement.hidden = true;  // in the family app: naming places is done on the laptop
+
+// ---- the scene: three.js with y up; `space` holds everything in the room map's axes ----
+const canvas = $('view');
+const coarse = matchMedia('(pointer: coarse)').matches;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, coarse ? 1.25 : 1.5));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070a);
+scene.add(new SparkRenderer({ renderer }));
+const camera = new THREE.PerspectiveCamera(60, 1, 0.02, 500);
+camera.rotation.order = 'YXZ';
+const space = new THREE.Group();
+space.quaternion.set(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);  // map (east, north, up) -> three.js (east, up, -north)
+scene.add(space);
+const splatFrame = new THREE.Group();  // the splat's own axes, placed in the map by /care/space's matrix
+space.add(splatFrame);
+const objectAnchors = new THREE.Group();  // labels.json: things recognised in the trained splat, in its axes
+splatFrame.add(objectAnchors);
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+// The wearer: a head with a cone where they look, a line down to about the floor, and today's path.
+const colours = { found: 0x4aa3ff, unsure: 0xffb84d, lost: 0xff6b5b, stale: 0x6f7d8c };
+const wearer = new THREE.Group();
+const coneMat = new THREE.MeshBasicMaterial({ color: colours.found, transparent: true });
+const cone = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.2, 20), coneMat);
+cone.position.y = 0.15;  // the cone's tip along +y: north before the wearer's heading turns it
+const headMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true });
+const head = new THREE.Mesh(new THREE.SphereGeometry(0.05, 20, 14), headMat);
+const stem = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -0.08), new THREE.Vector3(0, 0, -1.45)]),
+  new THREE.LineBasicMaterial({ color: 0x9fd0ff, transparent: true, opacity: 0.55 }));
+const feet = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.2, 32), new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
+feet.position.z = -1.45;
+const wearerTagAt = new THREE.Object3D();
+wearerTagAt.position.z = 0.22;
+wearer.add(cone, head, stem, feet, wearerTagAt);
+wearer.visible = false;
+const pathLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.7 }));
+const placeGroup = new THREE.Group();
+space.add(wearer, pathLine, placeGroup);
+
+// ---- labels: HTML tags that follow points in 3D, so they stay sharp and readable on a phone ----
+const tags = new Map();  // id -> {el, anchor, lift}
+function tag(id, text, kind, anchor, onClick) {
+  let t = tags.get(id);
+  if (!t) {
+    const el = document.createElement('div');
+    el.className = `tag ${kind}`;
+    el.addEventListener('click', (e) => { e.stopPropagation(); onClick && onClick(); });
+    $('tags').appendChild(el);
+    t = { el, anchor };
+    tags.set(id, t);
+  }
+  t.anchor = anchor;
+  if (t.el.textContent !== text) t.el.textContent = text;
+  return t;
+}
+function dropTags(prefix, keep) {
+  for (const [id, t] of tags) if (id.startsWith(prefix) && !keep.has(id)) { t.el.remove(); tags.delete(id); }
+}
+const at = new THREE.Vector3();
+function placeTags() {
+  const w = innerWidth, h = innerHeight;
+  for (const t of tags.values()) {
+    if (!t.anchor || !t.anchor.visible || (t.anchor.parent && !t.anchor.parent.visible) || (t.hidden && t.hidden())) { t.el.style.display = 'none'; continue; }
+    t.anchor.getWorldPosition(at);
+    const far = at.distanceTo(camera.position);
+    at.project(camera);
+    if (at.z > 1 || at.z < -1 || Math.abs(at.x) > 1.1 || Math.abs(at.y) > 1.1) { t.el.style.display = 'none'; continue; }
+    t.el.style.display = 'block';
+    t.el.style.opacity = String(Math.max(0.45, Math.min(1, 2.4 / Math.max(far, 0.1))));
+    t.el.style.transform = `translate(${((at.x + 1) / 2 * w).toFixed(1)}px, ${((1 - at.y) / 2 * h).toFixed(1)}px) translate(-50%, -125%)`;
+    t.el.style.zIndex = String(1000 - Math.round(far * 10));
+  }
+}
+
+// ---- moving around: W A S D (or arrows), Q E down and up, Shift faster, drag to look, right-drag or two fingers to slide ----
+const look = { yaw: 0, pitch: 0 };
+const keys = new Set();
+const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyC', 'ShiftLeft', 'ShiftRight']);
+let mode = 'free';  // 'free', 'follow' (behind the wearer) or 'eyes' (where the wearer stands)
+let flight = null;  // a short flight to a place: {from, to, yaw0, yaw1, pitch0, pitch1, t}
+function setMode(m) {
+  mode = m;
+  $('follow').classList.toggle('on', m === 'follow');
+  $('eyes').classList.toggle('on', m === 'eyes');
+  head.visible = cone.visible = m !== 'eyes';
+}
+function takeOver() { if (mode !== 'free') setMode('free'); flight = null; }
+addEventListener('keydown', (e) => {
+  if (e.target.matches && e.target.matches('select, textarea, input[type=text], input:not([type])')) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (MOVE_KEYS.has(e.code)) {
+    keys.add(e.code);
+    if (!e.code.startsWith('Shift')) takeOver();
+    e.preventDefault();
+  } else if (e.code === 'KeyF') setMode(mode === 'follow' ? 'free' : 'follow');
+  else if (e.code === 'KeyV') setMode(mode === 'eyes' ? 'free' : 'eyes');
+  else if (e.code === 'KeyR') goStart();
+});
+addEventListener('keyup', (e) => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+const pointers = new Map();
+let drag = null;
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.focus();
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  drag = { slide: e.button === 2 || e.button === 1 || e.shiftKey, moved: 0 };
+});
+canvas.addEventListener('pointerup', (e) => { pointers.delete(e.pointerId); if (!pointers.size) drag = null; });
+canvas.addEventListener('pointercancel', (e) => { pointers.delete(e.pointerId); if (!pointers.size) drag = null; });
+const speedNow = () => (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 3.2 : 1.1);  // metres a second
+function slide(dx, dy) {  // move sideways and up with the pointer, in metres
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  camera.position.addScaledVector(right, -dx).add(new THREE.Vector3(0, dy, 0));
+}
+function walk(forward) {
+  const ahead = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  camera.position.addScaledVector(ahead, forward);
+}
+canvas.addEventListener('pointermove', (e) => {
+  const p = pointers.get(e.pointerId);
+  if (!p || !drag) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  if (pointers.size === 2) {  // two fingers: pinch walks, the middle slides
+    const [a, b] = [...pointers.values()];
+    const before = Math.hypot(a.x - b.x, a.y - b.y);
+    p.x = e.clientX; p.y = e.clientY;
+    const after = Math.hypot(a.x - b.x, a.y - b.y);
+    takeOver();
+    walk((after - before) * 0.006);
+    slide(dx * 0.002, dy * 0.002);
+    return;
+  }
+  p.x = e.clientX; p.y = e.clientY;
+  drag.moved += Math.abs(dx) + Math.abs(dy);
+  if (drag.moved < 3) return;
+  takeOver();
+  if (drag.slide) { slide(dx * 0.003, dy * 0.003); return; }
+  const turn = coarse ? 0.006 : 0.004;
+  look.yaw += dx * turn;
+  look.pitch = Math.max(-1.45, Math.min(1.45, look.pitch + dy * turn));
+}, { passive: true });
+canvas.addEventListener('wheel', (e) => { e.preventDefault(); takeOver(); walk(-Math.sign(e.deltaY) * Math.min(0.6, Math.abs(e.deltaY) * 0.0025) * speedNow()); }, { passive: false });
+$('follow').onclick = () => setMode(mode === 'follow' ? 'free' : 'follow');
+$('eyes').onclick = () => setMode(mode === 'eyes' ? 'free' : 'eyes');
+$('start').onclick = () => goStart();
+
+// Map axes -> three.js world, for a point (east, north, up) and for a heading (degrees from north towards east).
+const toWorld = (p) => { space.updateMatrixWorld(true); return space.localToWorld(new THREE.Vector3(p[0], p[1], p[2] || 0)); };
+const yawOf = (headingDeg) => -headingDeg * Math.PI / 180;  // camera yaw that looks along that heading
+function flyTo(pos, yaw, pitch = 0, seconds = 0.9) {
+  setMode('free');
+  flight = { from: camera.position.clone(), to: pos, yaw0: look.yaw, yaw1: look.yaw + Math.atan2(Math.sin(yaw - look.yaw), Math.cos(yaw - look.yaw)),
+    pitch0: look.pitch, pitch1: pitch, t: 0, seconds };
+}
+function lookAtPoint(target, fromDistance = 1.3, lift = 0.35) {  // stand a little away from a point, facing it
+  const here = camera.position.clone();
+  const flat = new THREE.Vector3(here.x - target.x, 0, here.z - target.z);
+  if (flat.length() < 0.05) flat.set(0, 0, 1);
+  flat.setLength(fromDistance);
+  const pos = target.clone().add(flat).add(new THREE.Vector3(0, lift, 0));
+  const d = target.clone().sub(pos);
+  flyTo(pos, Math.atan2(-d.x, -d.z), Math.atan2(d.y, Math.hypot(d.x, d.z)));
+}
+
+// ---- data: the room and its splat (/care/space), the wearer (/where), the day (/day), reminders, places ----
+let room = null, roomKey = '', mesh = null, fix = null, places = [], dayPath = [], live = [];
+let startPose = null;
+function goStart() {
+  if (!startPose) return;
+  flyTo(startPose.pos.clone(), startPose.yaw, startPose.pitch);
+}
+
+async function fetchBytes(url, onProgress) {
+  const reply = await fetch(url, { cache: 'no-store' });
+  if (!reply.ok) throw new Error(`HTTP ${reply.status}`);
+  const total = Number(reply.headers.get('Content-Length')) || 0;
+  if (!reply.body || !reply.body.getReader) return new Uint8Array(await reply.arrayBuffer());
+  const reader = reply.body.getReader();
+  const parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value); got += value.length;
+    onProgress(got, total);
+  }
+  const out = new Uint8Array(got);
+  let o = 0;
+  for (const part of parts) { out.set(part, o); o += part.length; }
+  return out;
+}
+
+function chooser(info) {
+  const which = $('which');
+  const options = [];
+  if (info.kind === 'trained') options.push(['trained', 'Trained splat (Iridis)'], ['map', 'Room map (quick)']);
+  which.hidden = options.length < 2;
+  which.innerHTML = options.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
+  which.value = info.kind;
+}
+$('which').onchange = () => showSplat(room, $('which').value);
+
+async function showSplat(info, kind) {
+  const url = kind === 'map' ? info.room_splat : info.splat;
+  const matrix = kind === 'map' ? null : info.matrix;
+  $('loading').style.display = 'block';
+  $('loadText').textContent = kind === 'map' ? 'Loading the room map…' : 'Loading the trained room…';
+  $('loadBar').style.width = '0';
+  try {
+    const bytes = await fetchBytes(api(url), (got, total) => {
+      $('loadText').textContent = `Loading the room… ${(got / 1e6).toFixed(0)}${total ? ` of ${(total / 1e6).toFixed(0)}` : ''} MB`;
+      if (total) $('loadBar').style.width = `${Math.round(100 * got / total)}%`;
+    });
+    const next = new SplatMesh({ fileBytes: bytes, fileName: 'room.splat' });
+    splatFrame.add(next);
+    await next.initialized;
+    if (mesh) { splatFrame.remove(mesh); mesh.dispose && mesh.dispose(); }
+    mesh = next;
+    // The splat's frame: identity for the room map (it is in map axes); the fitted similarity for a trained splat.
+    const m = new THREE.Matrix4();
+    if (matrix) m.set(...matrix.flat());
+    m.decompose(splatFrame.position, splatFrame.quaternion, splatFrame.scale);
+    objectAnchors.visible = !!matrix && $('showObjects').checked;
+    $('loading').style.display = 'none';
+  } catch (err) {
+    $('loadText').textContent = `Could not load the 3D room: ${err.message || err}`;
+  }
+}
+
+function describeRoom(info, kind) {
+  const t = info.trained || {};
+  const lines = [];
+  if (kind === 'trained') {
+    lines.push(`Trained splat from ${nice(t.session || 'a recording')}: ${(t.gaussians || 0).toLocaleString('en-US')} Gaussians, ${t.psnr ?? '?'} dB.`);
+    const f = info.fit || {};
+    lines.push(`Lined up with the room map from ${f.pairs} matching views, ${Math.round((f.rms_m || 0) * 100)} cm apart on average.`);
+  } else {
+    lines.push(`Room map from ${info.cameras.length} pictures.`);
+    if (info.why) lines.push(info.why);
+  }
+  $('about').textContent = lines.join(' ');
+}
+
+async function objectLabels(info) {
+  objectAnchors.clear();
+  dropTags('o:', new Set());
+  const url = info.kind === 'trained' && info.trained && info.trained.labels;
+  $('objectsLabel').hidden = !url;
+  if (!url) return;
+  try {
+    const got = await getJson(url);
+    const keep = new Set();
+    (got.objects || []).forEach((o, i) => {
+      if (!o.position) return;
+      const a = new THREE.Object3D();
+      a.position.set(...o.position);
+      objectAnchors.add(a);
+      const id = `o:${i}`;
+      keep.add(id);
+      tag(id, o.name, 'object', a, () => lookAtPoint(a.getWorldPosition(new THREE.Vector3()), 0.8, 0.15));
+    });
+  } catch { /* no labels: nothing to draw */ }
+}
+$('showObjects').onchange = () => { objectAnchors.visible = $('showObjects').checked && !!(room && room.kind === 'trained'); };
+$('showPath').onchange = () => { pathLine.visible = $('showPath').checked; };
+
+async function tickSpace() {
+  let info;
+  try {
+    info = await getJson(`/care/space?zone=${encodeURIComponent(zone)}`);
+  } catch (err) {
+    $('loadText').textContent = err.status === 404 ? `No 3D room for "${nice(zone)}" yet. Record the room first.` : `Could not reach the laptop: ${err.message}`;
+    return;
+  }
+  const next = JSON.stringify([info.kind, info.splat, info.matrix, info.room_splat]);
+  if (next === roomKey) return;
+  const first = !roomKey;
+  roomKey = next;
+  room = info;
+  chooser(info);
+  describeRoom(info, info.kind);
+  const cam0 = info.cameras[0] || { position: [0, 0, 0], heading_deg: 0 };
+  const h0 = (cam0.heading_deg || 0) * Math.PI / 180;
+  const back = [cam0.position[0] - 0.6 * Math.sin(h0), cam0.position[1] - 0.6 * Math.cos(h0), (cam0.position[2] || 0) + 0.25];
+  startPose = { pos: toWorld(back), yaw: yawOf(cam0.heading_deg || 0), pitch: -0.12 };
+  if (first) {
+    camera.position.copy(startPose.pos);
+    look.yaw = startPose.yaw; look.pitch = startPose.pitch;
+    if (fix && fresh(fix)) setMode('follow');
+  }
+  await showSplat(info, info.kind);
+  objectLabels(info);
+  drawPlaces();
+}
+
+const fresh = (f) => f && f.age_s != null && f.age_s < 45;
+function wearerPose(f) {  // the steady position when there is one (smoother), else the newest fix
+  const s = f && f.stable;
+  if (s && s.position && s.state !== 'lost') return { position: s.position, heading: s.heading_deg || 0, state: f.state === 'unsure' ? 'unsure' : 'found' };
+  if (f && f.position && f.state !== 'lost' && !f.unusable) return { position: f.position, heading: f.heading_deg || 0, state: f.state };
+  return null;
+}
+const target = { pos: new THREE.Vector3(), heading: 0, has: false };
+function nearestPlace(pose) {
+  let best = null;
+  for (const p of places) {
+    const d = Math.hypot(p.position[0] - pose.position[0], p.position[1] - pose.position[1]);
+    if (!best || d < best.d) best = { name: p.name, d };
+  }
+  return best;
+}
+
+function updateWearer() {
+  const pose = wearerPose(fix);
+  const stale = !fresh(fix);
+  if (!pose) { wearer.visible = false; return; }
+  wearer.visible = true;
+  target.pos.set(pose.position[0], pose.position[1], pose.position[2] || 0);
+  target.heading = pose.heading;
+  if (!target.has) { wearer.position.copy(target.pos); wearer.rotation.z = -pose.heading * Math.PI / 180; target.has = true; }
+  coneMat.color.setHex(stale ? colours.stale : colours[pose.state] || colours.found);
+  const t = tag('wearer', stale ? `Last seen ${clock(fix.at)}` : 'Wearer', 'wearer', wearerTagAt, () => setMode('follow'));
+  t.el.classList.toggle('stale', stale);
+  t.hidden = () => mode === 'eyes';
+}
+
+function drawPath() {
+  const pts = [...dayPath, ...live].map((p) => new THREE.Vector3(p[0], p[1], -1.42));
+  pathLine.geometry.dispose();
+  pathLine.geometry = new THREE.BufferGeometry().setFromPoints(pts.length > 1 ? pts : []);
+}
+
+function drawPlaces() {
+  placeGroup.clear();
+  const keep = new Set();
+  for (const p of places) {
+    const g = new THREE.Group();
+    g.position.set(p.position[0], p.position[1], p.position[2] || 0);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffd228 }));
+    const pole = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1.4)]),
+      new THREE.LineBasicMaterial({ color: 0xffd228, transparent: true, opacity: 0.45 }));
+    const top = new THREE.Object3D();
+    top.position.z = 0.08;
+    g.add(ball, pole, top);
+    placeGroup.add(g);
+    const id = `p:${p.name}`;
+    keep.add(id);
+    tag(id, p.name, 'place', top, () => lookAtPoint(g.getWorldPosition(new THREE.Vector3())));
+  }
+  dropTags('p:', keep);
+  renderPlaces();
+}
+let placesShown = '';
+function renderPlaces() {
+  const pose = wearerPose(fix);
+  const html = places.length ? places.map((p, i) => {
+    const d = pose ? Math.hypot(p.position[0] - pose.position[0], p.position[1] - pose.position[1]) : null;
+    return `<li class="pl"><span class="name">${esc(p.name)}</span><span class="muted small">${d == null ? '' : `${metres(d)} from them`}</span>
+      <button data-i="${i}">Show</button></li>`;
+  }).join('') : '<li class="muted">No named places yet.</li>';
+  if (html === placesShown) return;
+  placesShown = html;
+  $('places').innerHTML = html;
+  $('places').querySelectorAll('button').forEach((b) => {
+    b.onclick = () => { const p = places[Number(b.dataset.i)]; lookAtPoint(toWorld(p.position)); };
+  });
+}
+function mergePlaces(list) {  // the fix's places (they move with the map) win over the room map's
+  const byName = new Map();
+  for (const p of (room && room.places) || []) if (p.position) byName.set(p.name, p);
+  for (const p of list || []) if (p.position) byName.set(p.name, p);
+  const next = [...byName.values()].map((p) => ({ name: p.name, position: p.position }));
+  if (JSON.stringify(next) !== JSON.stringify(places)) { places = next; drawPlaces(); }
+}
+
+let lastDay = null;
+const recent = [];  // [{at, position, heading}] of the last fixes: walking, looking around or standing still
+function activity() {
+  const now = recent[recent.length - 1];
+  const then = recent.find((r) => now.at - r.at <= 8);
+  if (!then || now.at - then.at < 2) return null;
+  const s = now.at - then.at;
+  const speed = Math.hypot(now.position[0] - then.position[0], now.position[1] - then.position[1]) / s;
+  let turned = 0;
+  for (let i = recent.indexOf(then) + 1; i < recent.length; i++) turned += Math.abs((recent[i].heading - recent[i - 1].heading + 540) % 360 - 180);
+  return speed > 0.25 ? 'Walking.' : turned / s > 12 ? 'Looking around.' : 'Standing still.';
+}
+function doingWords() {
+  const out = [];
+  const moving = fix && fresh(fix) && recent.length > 1 && activity();
+  if (moving) out.push(moving);
+  const notable = ((lastDay && lastDay.timeline) || []).filter((e) => ['event', 'question', 'reminder', 'item'].includes(e.kind));
+  const last = notable[notable.length - 1];
+  if (last) out.push(`Last: ${last.text}`);
+  return out;
+}
+function renderNow() {
+  const pose = wearerPose(fix);
+  const dot = $('dot');
+  dot.className = 'dot' + (fix && fresh(fix) ? (pose && pose.state === 'unsure' ? ' unsure' : ' live') : '');
+  if (!fix) {
+    $('nowLine').textContent = 'No position yet.';
+    $('seen').textContent = 'Waiting for the glasses to send a picture.';
+  } else {
+    const near = pose && nearestPlace(pose);
+    const where = !pose ? 'Not sure where they are.'
+      : `In the ${nice(fix.zone || zone)}` + (near ? (near.d < 1.5 ? `, by the ${near.name}.` : `, ${metres(near.d)} from the ${near.name}.`) : '.');
+    $('nowLine').textContent = where;
+    $('seen').textContent = fresh(fix) ? `Live · position from ${ago(fix.age_s)}` : `Last seen at ${clock(fix.at)}, ${ago(fix.age_s)}`;
+  }
+  $('doing').innerHTML = doingWords().map((w) => `<div>${esc(w)}</div>`).join('');
+}
+
+async function tickWhere() {
+  try {
+    fix = await getJson(`/where?zone=${encodeURIComponent(zone)}`);
+  } catch (err) {
+    if (err.status !== 404) $('seen').textContent = `Could not reach the laptop: ${err.message}`;
+    fix = null;
+  }
+  if (fix) {
+    mergePlaces(fix.waypoints);
+    const pose = wearerPose(fix);
+    if (pose && (!recent.length || recent[recent.length - 1].at !== fix.at)) {
+      recent.push({ at: fix.at, position: pose.position, heading: pose.heading });
+      recent.splice(0, Math.max(0, recent.length - 30));
+    }
+    if (pose && fresh(fix)) {
+      const lastPt = live[live.length - 1];
+      if (!lastPt || Math.hypot(lastPt[0] - pose.position[0], lastPt[1] - pose.position[1]) > 0.05) {
+        live.push([pose.position[0], pose.position[1]]);
+        live.splice(0, Math.max(0, live.length - 400));
+        drawPath();
+      }
+    }
+  }
+  updateWearer();
+  renderNow();
+  renderPlaces();
+}
+
+function renderReminders(list) {
+  $('reminders').innerHTML = list.length ? list.map((r) => `<li class="rem"><span class="chip ${esc(r.state)}">${esc(r.state)}</span>
+    <div><div>${esc(r.text)}</div><div class="muted small">${esc(r.time || '')}${r.place ? ` · ${esc(r.place)}` : ''}${r.done_note ? ` · ${esc(r.done_note)}` : ''}</div></div></li>`).join('')
+    : '<li class="muted">None set.</li>';
+}
+async function tickReminders() {
+  try { renderReminders((await getJson('/reminders')).reminders || []); } catch { /* shown as before */ }
+}
+
+let wholeDay = false;
+$('more').onclick = () => { wholeDay = !wholeDay; renderDay(); };
+function renderDay() {
+  const d = lastDay;
+  if (!d) return;
+  $('summary').innerHTML = ((d.summary && d.summary.carer) || []).slice(0, 4).map((s) => `<li>${esc(s)}</li>`).join('');
+  const all = (d.timeline || []).slice().reverse();
+  const shown = wholeDay ? all : all.slice(0, 8);
+  $('timeline').innerHTML = shown.map((e) => `<li class="ev ${esc(e.kind)}"><time>${esc(e.from)}</time>
+    <div><span class="k ${esc(e.kind)}">${esc(e.kind)}</span>${esc(e.text)}</div></li>`).join('');
+  $('more').hidden = all.length <= 8;
+  $('more').textContent = wholeDay ? 'Show less' : `Show the whole day (${all.length})`;
+}
+async function tickDay() {
+  try {
+    lastDay = await getJson('/day');
+    dayPath = (lastDay.path || []).filter((p) => p[3] === zone).map((p) => [p[1], p[2]]);
+    drawPath();
+    renderDay();
+    renderNow();
+  } catch { /* the day log is optional */ }
+}
+
+let seeUrl = null, seeBusy = false;
+async function tickSee() {
+  if (seeBusy || !fix || !fresh(fix)) { if (!fix || !fresh(fix)) $('see').style.display = 'none'; return; }
+  seeBusy = true;
+  try {
+    const reply = await fetch(api(`/frame?zone=${encodeURIComponent(zone)}`), { cache: 'no-store' });
+    if (!reply.ok) throw new Error();
+    const url = URL.createObjectURL(await reply.blob());
+    $('seeImg').src = url;
+    if (seeUrl) URL.revokeObjectURL(seeUrl);
+    seeUrl = url;
+    $('seeWhen').textContent = `What the glasses saw at ${clock(fix.at)}`;
+    $('see').style.display = 'block';
+  } catch { $('see').style.display = 'none'; } finally { seeBusy = false; }
+}
+
+// Panel folding on a phone.
+$('fold').onclick = () => {
+  const folded = $('panel').classList.toggle('folded');
+  $('fold').textContent = folded ? 'Show' : 'Hide';
+  $('fold').setAttribute('aria-expanded', String(!folded));
+};
+
+// ---- every frame: move, follow, animate the wearer, place the tags ----
+let last = performance.now();
+const tmp = new THREE.Vector3();
+renderer.setAnimationLoop((now) => {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  // the wearer glides to the newest position instead of jumping
+  if (target.has) {
+    wearer.position.lerp(target.pos, 1 - Math.exp(-dt * 6));
+    const want = -target.heading * Math.PI / 180;
+    const diff = Math.atan2(Math.sin(want - wearer.rotation.z), Math.cos(want - wearer.rotation.z));
+    wearer.rotation.z += diff * (1 - Math.exp(-dt * 6));
+  }
+  if (flight) {
+    flight.t = Math.min(1, flight.t + dt / flight.seconds);
+    const e = flight.t < 0.5 ? 2 * flight.t * flight.t : 1 - Math.pow(-2 * flight.t + 2, 2) / 2;
+    camera.position.lerpVectors(flight.from, flight.to, e);
+    look.yaw = flight.yaw0 + (flight.yaw1 - flight.yaw0) * e;
+    look.pitch = flight.pitch0 + (flight.pitch1 - flight.pitch0) * e;
+    if (flight.t >= 1) flight = null;
+  } else if ((mode === 'follow' || mode === 'eyes') && wearer.visible) {
+    const w = wearer.getWorldPosition(tmp);
+    const yaw = wearer.rotation.z;  // -heading in radians: the camera yaw that looks the same way (see yawOf)
+    const ahead = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const want = mode === 'eyes' ? w.clone() : w.clone().addScaledVector(ahead, -0.9).add(new THREE.Vector3(0, 0.3, 0));
+    const k = 1 - Math.exp(-dt * 4);
+    camera.position.lerp(want, k);
+    const yawDiff = Math.atan2(Math.sin(yaw - look.yaw), Math.cos(yaw - look.yaw));
+    look.yaw += yawDiff * k;
+    look.pitch += ((mode === 'eyes' ? 0 : -0.22) - look.pitch) * k;
+  } else {
+    const v = speedNow() * dt;
+    const f = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+    const r = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+    const u = (keys.has('KeyE') || keys.has('Space') ? 1 : 0) - (keys.has('KeyQ') || keys.has('KeyC') ? 1 : 0);
+    const turn = (keys.has('ArrowLeft') ? 1 : 0) - (keys.has('ArrowRight') ? 1 : 0);
+    look.yaw += turn * dt * 1.6;
+    // walking stays level, as in a room: forward is where the camera faces, flattened
+    const ahead = new THREE.Vector3(-Math.sin(look.yaw), 0, -Math.cos(look.yaw));
+    const right = new THREE.Vector3(Math.cos(look.yaw), 0, -Math.sin(look.yaw));
+    camera.position.addScaledVector(ahead, f * v).addScaledVector(right, r * v).add(new THREE.Vector3(0, u * v, 0));
+  }
+  camera.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
+  if (wearer.visible) {  // fade the wearer out when the camera comes close, so it never fills the view
+    const near = camera.position.distanceTo(wearer.getWorldPosition(tmp));
+    coneMat.opacity = headMat.opacity = Math.max(0, Math.min(0.95, (near - 0.25) / 0.6));
+  }
+  renderer.render(scene, camera);
+  placeTags();
+});
+
+// ---- polling: fast for the wearer, slower for the rest; paused while the page is hidden ----
+function every(ms, fn) {
+  let busy = false;
+  const run = async () => { if (document.hidden || busy) return; busy = true; try { await fn(); } finally { busy = false; } };
+  run();
+  return setInterval(run, ms);
+}
+await tickWhere();
+every(20000, tickSpace);
+every(1000, tickWhere);
+every(15000, tickDay);
+every(10000, tickReminders);
+every(3000, tickSee);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickWhere(); tickDay(); } });
+window.__care = { camera, look, space, splatFrame, get fix() { return fix; }, get room() { return room; }, get places() { return places; }, wearer };
+</script>
+</body>
+</html>
