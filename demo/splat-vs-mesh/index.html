@@ -171,7 +171,7 @@
   <div class="brand">
     <span class="mark"><img id="mark" src="../../dashboard/themes/kaamos/assets/mark.svg" alt=""></span>
     <div>
-      <h1 id="title">From glasses to <span class="rotor" id="rotor"><span class="on">a Gaussian splat</span><span>a block mesh</span><span>a whole home</span></span></h1>
+      <h1 id="title"><span id="title-from">From glasses</span> to <span class="rotor" id="rotor"><span class="on">a Gaussian splat</span><span>a block mesh</span><span>a whole home</span></span></h1>
       <div class="stats" id="stats" aria-live="polite"></div>
     </div>
   </div>
@@ -198,10 +198,10 @@
     <div class="labels" id="actual-labels"></div><div class="status" id="actual-status">Loading…</div>
   </section>
   <section id="photo-pane" hidden>
-    <div class="pane-head"><span class="step">1</span><div><h2>Real life</h2><p id="photo-words">what the glasses filmed</p></div></div>
+    <div class="pane-head"><span class="step">1</span><div><h2>Real life</h2><p id="photo-words">the photos the splat was made from</p></div></div>
     <div class="photos" id="photos"></div>
     <div class="photo-wait" id="photo-wait"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3 8h3l2-3h8l2 3h3v11H3z"/><circle cx="12" cy="13" r="4"/></svg>
-      <b>Glasses frames go here</b><span>Only the anonymised splat was cleared for sharing. Put the anonymised keyframes in<br><code>venue/photos/</code> (never committed) and they play here.</span></div>
+      <b>Photos go here</b><span>Put the photos the splat was made from in<br><code>room/photos/</code> (never committed) and they play here.</span></div>
     <div class="photo-nav" id="photo-nav" hidden><button type="button" id="photo-prev" aria-label="Previous photo">‹</button><button type="button" id="photo-next" aria-label="Next photo">›</button></div>
     <div class="status" id="photo-status" hidden></div>
   </section>
@@ -299,9 +299,9 @@
   const SCENES = {
     home: {name: 'Example home', dir: 'home/', splat: 'home/home.splat', actual: 'actual.ply', house: true,
       meshes: [['blocks_high.ply', 'High', '7 cm'], ['blocks_medium.ply', 'Medium', '12 cm'], ['blocks_low.ply', 'Low', '30 cm']]},
-    venue: {name: 'Hacking hall', dir: 'venue/', splat: 'venue/venue-kitchen-glasses-anon.splat', photos: 'venue/photos/',
+    venue: {name: 'Hacking hall', dir: 'venue/', splat: 'venue/venue-kitchen-glasses-anon.splat',
       meshes: [['room_blocks_fine.ply', 'High', '7 cm'], ['room_blocks_mid.ply', 'Medium', '12 cm'], ['room_blocks_low.ply', 'Low', '30 cm']]},
-    room: {name: 'Public room', dir: 'room/', splat: 'room/room.splat', hidden: true,
+    room: {name: 'Real room (Mip-NeRF 360)', dir: 'room/', splat: 'room/room.splat', photos: 'room/photos/',
       meshes: [['room_blocks_fine.ply', 'High', '7 cm'], ['room_blocks_mid.ply', 'Medium', '12 cm'], ['room_10k.ply', 'Surface', '~10k'],
         ['room_lowpoly.ply', 'Low', '<1k'], ['room_mesh.ply', 'Voxel', 'coarse', true], ['room_mesh_fine.ply', 'Voxel', 'fine', true]]},
   };
@@ -315,8 +315,9 @@
     $('scenes').append(b);
   }
   if (scene.house) $('splat-words').textContent = 'Gaussian splat · the scanned room only';
-  if (scene.photos) $('splat-words').textContent = 'Gaussian splat · 50 frames, 105 s of training';
+  if (scene.photos) $('splat-words').textContent = 'Gaussian splat trained on those photos · 1.59 M Gaussians';
   if (scene.photos) {
+    $('title-from').textContent = 'From photos'; document.title = 'From photos to the family app';
     $('photo-pane').hidden = false; $('panes').classList.add('three');
     $('panes').after($('night-panel')); $('night-panel').classList.add('night-wide');
     words[2].textContent = 'the family app';
@@ -327,7 +328,10 @@
   // whatever pictures the folder holds (the local server lists it). Shown one after another.
   async function loadPhotos(dir) {
     let list = [];
-    try { const r = await fetch(dir + 'photos.json'); if (r.ok) list = (await r.json()).photos; } catch { /* none */ }
+    try {
+      const r = await fetch(dir + 'photos.json');
+      if (r.ok) { const j = await r.json(); list = j.photos; if (j.credit) $('photo-words').textContent = j.credit; }
+    } catch { /* none */ }
     if (!list.length) {
       try {
         const r = await fetch(dir); if (r.ok) {
@@ -341,11 +345,11 @@
     $('photo-wait').hidden = true; $('photo-nav').hidden = false; $('photo-status').hidden = false;
     const imgs = list.map(({file, caption}) => Object.assign(document.createElement('img'), {src: dir + file, alt: caption || 'A frame from the glasses', loading: 'lazy'}));
     $('photos').append(...imgs);
-    setStat('built', list.length, list.length === 1 ? 'frame filmed' : 'frames filmed');
+    setStat('built', list.length, list.length === 1 ? 'photo' : 'photos');
     let at = -1, timer = 0;
     const show = k => {
       imgs[at]?.classList.remove('on'); at = (k + imgs.length) % imgs.length; imgs[at].classList.add('on');
-      $('photo-status').textContent = `frame ${at + 1} of ${imgs.length}` + (list[at].caption ? ` · ${list[at].caption}` : '');
+      $('photo-status').textContent = `photo ${at + 1} of ${imgs.length}` + (list[at].caption ? ` · ${list[at].caption}` : '');
       clearTimeout(timer); timer = setTimeout(() => show(at + 1), 2500);
     };
     $('photo-prev').addEventListener('click', () => show(at - 1)); $('photo-next').addEventListener('click', () => show(at + 1));
