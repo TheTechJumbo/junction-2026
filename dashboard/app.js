@@ -1,4 +1,5 @@
 import {ApiClient, ApiError, TIMEZONE, localDay, timeLabel, sortedEvents, medicationOpenings} from './client.js';
+import {Home3D, homeSummary} from './home3d.js';
 import {DAYPARTS, dayFraction, dayState, daypart, mood, shiftDay, sunPosition, sunTimes} from './day.js';
 
 const $ = id => document.getElementById(id);
@@ -323,6 +324,7 @@ async function load() {
     if (active !== generation) return;
     showSun($('day').value); $('day-name').textContent = dayName($('day').value);
     render(data);
+    refreshHome();
     status('');
     refreshedAt = new Date();
     $('updated').textContent = demo ? 'Example data, not a real home' : 'Updated just now';
@@ -354,6 +356,30 @@ $('evidence-image').addEventListener('error', () => { cleanupEvidence(); $('evid
 $('theme-button').addEventListener('click', () => $('theme-dialog').showModal());
 $('info-button').addEventListener('click', () => $('info-dialog').showModal());
 $('close-info').addEventListener('click', () => $('info-dialog').close());
+
+// ---------- The home in 3D ----------
+// home3d.js: the mesh, trip hazards to clear up (Now) and last night's walk (Last night).
+const home3d = new Home3D({$, api, plain});
+const live = () => !demo && Boolean(api.token);
+const openHome = (tab, focusFirst = false) => home3d.open({tab, live: live(), day: $('day').value || localDay(), focusFirst});
+$('space-button').addEventListener('click', () => openHome('now'));
+$('tidy-button').addEventListener('click', () => openHome('now', true));
+$('night-button').addEventListener('click', () => openHome('night'));
+$('close-space').addEventListener('click', () => $('space-dialog').close());
+// The hero's two home buttons: things to clear up, and last night in a few words. Today only.
+let homeController;
+async function refreshHome() {
+  homeController?.abort(); homeController = new AbortController();
+  $('hero-home').hidden = true;
+  if (!demo && !api.token) return;
+  if (!demo && $('day').value !== localDay()) return;
+  try {
+    const {clearUp, night} = await homeSummary({api, live: live(), day: $('day').value || localDay(), signal: homeController.signal});
+    $('tidy-text').textContent = clearUp; $('tidy-button').hidden = !clearUp;
+    $('night-text').textContent = night; $('night-button').hidden = !night;
+    $('hero-home').hidden = !clearUp && !night;
+  } catch (error) { if (error.name !== 'AbortError') console.warn('Home summary unavailable', error); }
+}
 window.addEventListener('offline', () => { if (!demo && api.token) { controller?.abort(); generation++; $('refresh').disabled = false; $('content').hidden = true; status('You are offline. Reconnect, then refresh to load this day.', true); } });
 window.addEventListener('online', () => { if (!demo && api.token) load(); });
 setInterval(tick, 30000);

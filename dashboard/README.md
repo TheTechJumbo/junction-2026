@@ -23,3 +23,9 @@ Example day explicitly loads synthetic JSON from `fixtures/`, with a fictional h
 Live API records may include test events previously ingested into that backend.
 The scene is decorative, not a live view of the home. Helsinki time and sunrise coordinates
 are fixed defaults, not a detected wearer location. No alerts is not an assessment of wellbeing.
+- **Home in 3D** (`space.js`, `home3d.js`): **3D** opens the mesh the vision stage builds
+  (`GET /mesh`). **Now** rings things on the floor in the way of the night walks (`GET /hazards`,
+  from `ml/recon_change/hazards.py`): suggestions to clear up, never alerts. **Last night** replays
+  the night's walk (`GET /night?day=`, from `night.py`) as a trail with a time slider. Without a 3D
+  map from home, all three show the example home (`fixtures/`, made by `demo_room.py`), labelled.
+

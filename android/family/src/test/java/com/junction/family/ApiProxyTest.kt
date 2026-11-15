@@ -52,9 +52,14 @@ class ApiProxyTest {
         assertEquals(1, server.requestCount)
     }
 
-    @Test fun onlyTheThreeReadRoutesAreForwarded() {
+    @Test fun onlyTheReadRoutesAreForwarded() {
         assertTrue(ApiProxy.isAllowed("/timeline", "day=2026-11-14"))
         assertTrue(ApiProxy.isAllowed("/evidence/a-b_c.1", null))
+        assertTrue(ApiProxy.isAllowed("/mesh", null))
+        assertFalse(ApiProxy.isAllowed("/mesh", "zone=kitchen"))
+        assertTrue(ApiProxy.isAllowed("/hazards", null))
+        assertTrue(ApiProxy.isAllowed("/night", "day=2026-11-15"))
+        assertFalse(ApiProxy.isAllowed("/night", "day=x&token=y"))
         assertFalse(ApiProxy.isAllowed("/timeline", null))
         assertFalse(ApiProxy.isAllowed("/timeline", "day=2026-11-14&token=x"))
         assertFalse(ApiProxy.isAllowed("/evidence/abc", "token=x"))

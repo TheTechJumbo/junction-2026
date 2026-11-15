@@ -23,6 +23,7 @@
     <div class="topbar-actions">
       <span class="connection" id="connection-label">Not connected</span>
       <button id="theme-button" class="ghost" type="button" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-theme"></use></svg><span>Look</span></button>
+      <button id="space-button" class="ghost" type="button" aria-haspopup="dialog" title="The home in 3D">3D</button>
       <button id="connection-button" class="ghost" type="button">Connect</button>
     </div>
   </header>
@@ -40,6 +41,10 @@
           <li data-stat="events" title="Observations"><svg class="icon" aria-hidden="true"><use href="#i-sensor"></use></svg><strong id="stat-events">–</strong><span class="visually-hidden">observations</span></li>
           <li data-stat="questions" title="Questions asked"><svg class="icon" aria-hidden="true"><use href="#i-question"></use></svg><strong id="stat-questions">–</strong><span class="visually-hidden">questions</span></li>
         </ul>
+        <div class="hero-actions hero-home" id="hero-home" hidden>
+          <button id="tidy-button" class="ghost" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"></use></svg><span id="tidy-text">To clear up</span></button>
+          <button id="night-button" class="ghost" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-moon"></use></svg><span id="night-text">Last night</span></button>
+        </div>
         <div class="hero-actions" id="hero-actions">
           <button id="hero-connect" class="primary" type="button">Connect to home</button>
           <button id="hero-demo" class="ghost" type="button">Example day</button>
@@ -119,6 +124,17 @@
 <dialog id="connect-dialog" aria-labelledby="connect-title"><form id="connect-form"><h2 id="connect-title">Connect to home</h2><p>Enter the access token for your home service.</p><label for="token">Access token</label><input id="token" type="password" autocomplete="off" required><p class="muted">Kept in memory for this session only. Closing the app clears it.</p><div class="dialog-actions"><button type="button" id="cancel-connect" class="ghost">Cancel</button><button type="submit" class="primary">Connect</button></div></form></dialog>
 <dialog id="evidence-dialog" aria-labelledby="evidence-title"><h2 id="evidence-title">Evidence</h2><p id="evidence-status" role="status"></p><img id="evidence-image" alt="The moment attached to this observation" hidden><div class="dialog-actions"><button id="close-evidence" class="primary" type="button">Close</button></div></dialog>
 <dialog id="info-dialog" aria-labelledby="info-title"><h2 id="info-title">Daily note</h2><p id="summary-text" class="summary-text"></p><p class="footnote" id="info-footnote">Sensors record openings. An opening does not confirm that pills were taken or that a door was locked.</p><div class="dialog-actions"><button id="close-info" class="primary" type="button">Close</button></div></dialog>
+<dialog id="space-dialog" class="space-dialog" aria-labelledby="space-title"><h2 id="space-title">Home in 3D</h2>
+<div class="space-tabs" role="tablist" aria-label="What to show"><button id="tab-now" class="ghost" type="button" role="tab" aria-selected="true">Now</button><button id="tab-night" class="ghost" type="button" role="tab" aria-selected="false">Last night</button></div>
+<p id="space-status" role="status"></p><canvas id="space-canvas" class="space-canvas" tabindex="0" aria-label="3D view of the home. Drag or use the arrow keys to turn; scroll, pinch or plus and minus to zoom; double-tap or 0 to reset."></canvas><div id="now-panel" class="space-panel"><ul id="hazard-list" class="hazard-list"></ul></div>
+<div id="night-panel" class="space-panel" hidden>
+<p id="night-summary" class="night-summary"></p>
+<div class="night-controls"><button id="night-back" class="ghost icon-button" type="button" aria-label="One minute back"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><button id="night-play" class="primary" type="button">Play</button><button id="night-forward" class="ghost icon-button" type="button" aria-label="One minute on"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button><output id="night-clock" class="night-clock" for="night-time">--:--</output></div>
+<div class="night-strip" id="night-strip" aria-hidden="true"></div>
+<label for="night-time" class="visually-hidden">Time of night</label><input id="night-time" class="night-time" type="range" min="0" max="1000" value="0" step="1">
+<ul id="trip-list" class="trip-list"></ul>
+</div>
+<p class="muted space-hint">Drag to turn · pinch or scroll to zoom · double-tap to reset</p><div class="dialog-actions"><button id="close-space" class="primary" type="button">Close</button></div></dialog>
 <dialog id="theme-dialog" aria-labelledby="theme-title"><form id="theme-form" method="dialog"><h2 id="theme-title">Choose a look</h2><fieldset><legend class="visually-hidden">Look</legend><div id="theme-options" class="theme-options"></div></fieldset><div class="dialog-actions"><button class="primary" type="submit">Done</button></div></form></dialog>
 </body>
 </html>
