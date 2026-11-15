@@ -554,11 +554,14 @@ class Live:
         self.indexes = {}  # folder -> SplatIndex, "building" or "failed: ..."
         self.lock = threading.Lock()
         self.locating = threading.Lock()
-        self.zones = {}  # zone -> {"key", "filter", "focal", "tries", "prior", "last"}
+        # zone -> {"key", "filter", "focal": {photo size: scale}, "tries": {photo size: inliers by scale}, "prior", "last"}.
+        # The focal length is settled per photo size: the glasses (504 x 896) and the phone's camera can both send to a zone.
+        self.zones = {}
         try:
             saved = json.loads(self.state_file.read_text()) if self.state_file else {}
             for zone, z in saved.items():
-                self.zones[zone] = {"key": z.get("key"), "filter": PoseFilter(z.get("filter")), "focal": z.get("focal"),
+                focal = z.get("focal") if isinstance(z.get("focal"), dict) else {}
+                self.zones[zone] = {"key": z.get("key"), "filter": PoseFilter(z.get("filter")), "focal": focal,
                                     "tries": {}, "prior": None, "last": None}
         except (OSError, ValueError, TypeError, AttributeError):
             pass
@@ -604,7 +607,7 @@ class Live:
     def zone(self, zone, key):
         z = self.zones.get(zone)
         if z is None or z["key"] != key:  # a new trained splat or a new matrix: the old poses are in other axes
-            z = self.zones[zone] = {"key": key, "filter": PoseFilter(), "focal": None, "tries": {}, "prior": None, "last": None}
+            z = self.zones[zone] = {"key": key, "filter": PoseFilter(), "focal": {}, "tries": {}, "prior": None, "last": None}
         return z
 
     def photo(self, zone, folder, matrix, frame, now):
@@ -618,21 +621,23 @@ class Live:
         with self.locating:
             z = self.zone(zone, key)
             prior = z["prior"] if z["prior"] and now - z["prior"]["at"] <= PRIOR_S else None
-            scales = (z["focal"],) if z["focal"] else FOCAL_TRIES
-            got = index.locate(frame, prior, focal_scale=scales)
+            size = f"{frame.shape[1]}x{frame.shape[0]}"
+            settled = z["focal"].get(size)
+            got = index.locate(frame, prior, focal_scale=(settled,) if settled else FOCAL_TRIES)
             out = {"placed": bool(got["ok"]), "why": got.get("why"), "seconds": got.get("seconds"), "matches": got.get("matches"),
                    "inliers": got.get("inliers"), "keyframe": got.get("keyframe"), "focal_scale": got.get("focal_scale"),
-                   "focal": "settled" if z["focal"] else "trying"}
+                   "focal": "settled" if settled else "trying", "size": size}
             if got["ok"]:
-                if not z["focal"]:  # count the inliers each focal length gets, and settle on the best after a few photos
+                if not settled:  # count the inliers each focal length gets, and settle on the best after a few photos
+                    tries = z["tries"].setdefault(size, {})
                     for s, n in (got.get("focal_tries") or {}).items():
-                        z["tries"][s] = z["tries"].get(s, 0) + n
-                    z["tries"]["photos"] = z["tries"].get("photos", 0) + 1
-                    if z["tries"]["photos"] >= FOCAL_PHOTOS:
-                        counts = {s: n for s, n in z["tries"].items() if s != "photos"}
+                        tries[s] = tries.get(s, 0) + n
+                    tries["photos"] = tries.get("photos", 0) + 1
+                    if tries["photos"] >= FOCAL_PHOTOS:
+                        counts = {s: n for s, n in tries.items() if s != "photos"}
                         best = max(counts, key=counts.get)
-                        z["focal"] = 1.0 if counts.get(1.0, 0) >= 0.9 * counts[best] else float(best)
-                        self.log(f"splat pose: {zone} camera focal length x{z['focal']} (inliers by scale: {counts})")
+                        z["focal"][size] = 1.0 if counts.get(1.0, 0) >= 0.9 * counts[best] else float(best)
+                        self.log(f"splat pose: {zone} {size} photos: camera focal length x{z['focal'][size]} (inliers by scale: {counts})")
                 fix = to_map(got, matrix)
                 fix["turn_sd_deg"] = got.get("turn_sd_deg")
                 out["step"] = z["filter"].update(fix, now)
