@@ -67,8 +67,8 @@ jobs:
           rm -rf _site/dashboard/tests _site/dashboard/package.json
           cp ml/recon_change/live/hud.html _site/glasses/hud.html
           rsync -a --exclude 'venue/*.splat' --exclude '__pycache__' --exclude '*.py' --exclude '*.log' demo/splat-vs-mesh _site/demo/
-          cp android/app/build/outputs/apk/debug/app-debug.apk _site/downloads/daylight-glasses.apk
-          cp android/family/build/outputs/apk/debug/family-debug.apk _site/downloads/daylight-family.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk _site/downloads/tuttu-glasses.apk
+          cp android/family/build/outputs/apk/debug/family-debug.apk _site/downloads/tuttu-family.apk
           du -sh _site; find _site -size +20M
       - uses: actions/upload-pages-artifact@v3
         with:

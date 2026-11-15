@@ -30,7 +30,7 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 /**
- * Daylight for the family: the dashboard from `/dashboard`, packaged in the app and shown in a
+ * Tuttu for the family: the dashboard from `/dashboard`, packaged in the app and shown in a
  * WebView, with its data requests made natively (see [ApiProxy]).
  */
 class MainActivity : ComponentActivity() {

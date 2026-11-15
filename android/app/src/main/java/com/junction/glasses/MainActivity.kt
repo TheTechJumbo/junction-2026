@@ -468,7 +468,7 @@ class MainActivity : ComponentActivity() {
 
     /** Asks for a pair's code (its "master code"); with [pair] null, any Meta glasses' code adds a new pair. */
     private fun askGlassesCode(pair: GlassesPair?) {
-        val field = EditText(this).apply { hint = "DL1-…"; isSingleLine = true; isSaveEnabled = false }
+        val field = EditText(this).apply { hint = "TU1-…"; isSingleLine = true; isSaveEnabled = false }
         android.app.AlertDialog.Builder(this)
             .setTitle(pair?.let { "Code for ${it.name}" } ?: "Add Meta glasses")
             .setMessage(pair?.note?.ifBlank { null } ?: "Paste the pairing code the glasses' relay printed (live/share.py), or open its link on this phone.")
@@ -483,10 +483,10 @@ class MainActivity : ComponentActivity() {
         useGlasses(pair)
     }
 
-    /** daylight://pair?c=DL1-… (the site's pairing page, or a link the relay printed). */
+    /** tuttu://pair?c=TU1-… (the site's pairing page, or a link the relay printed). */
     private fun pairFromLink(intent: Intent?) {
         val data = intent?.data ?: return
-        if (data.scheme == "daylight" && data.host == "pair") data.getQueryParameter("c")?.let { addGlasses(it) }
+        if (data.scheme == "tuttu" && data.host == "pair") data.getQueryParameter("c")?.let { addGlasses(it) }
     }
 
     override fun onNewIntent(intent: Intent) {

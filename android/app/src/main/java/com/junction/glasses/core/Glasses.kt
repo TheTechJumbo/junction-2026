@@ -23,12 +23,12 @@ data class GlassesPair(
 }
 
 /**
- * Pairing codes, as `ml/recon_change/live/share.py` prints them: `DL1-` then base64url (no padding) of
+ * Pairing codes, as `ml/recon_change/live/share.py` prints them: `TU1-` then base64url (no padding) of
  * `u=<relay address>&k=<key>&n=<name>`. The key in a shared code is the relay's watch-only key; the
  * wearer's own phone gets the owner code (the full key). Same file in the family app (com.junction.family).
  */
 object Pairing {
-    const val PREFIX = "DL1-"
+    const val PREFIX = "TU1-"
 
     fun encode(url: String, key: String, name: String): String {
         fun e(v: String) = URLEncoder.encode(v, "UTF-8").replace("+", "%20")
@@ -39,7 +39,7 @@ object Pairing {
     /** The pair a code stands for, or null when it is not a code, or its address is not https
      *  (plain http only for this device or the emulator's host, and only when [allowLocalHttp]). */
     fun parse(code: String, allowLocalHttp: Boolean = false): GlassesPair? {
-        val body = code.trim().let { if (it.startsWith("daylight://")) it.substringAfter("c=", "") else it }
+        val body = code.trim().let { if (it.startsWith("tuttu://")) it.substringAfter("c=", "") else it }
         if (!body.startsWith(PREFIX)) return null
         val raw = runCatching { String(Base64.getUrlDecoder().decode(body.removePrefix(PREFIX))) }.getOrNull() ?: return null
         val fields = raw.split('&').mapNotNull { part ->
@@ -95,7 +95,7 @@ class GlassesBook(private val store: KeyValues, private val allowLocalHttp: Bool
         // A code named like a listed pair (Seb's) fills that pair in; any other code adds a new pair.
         val target = id ?: Pairing.DIRECTORY.firstOrNull { it.available && it.name.equals(pair.name, ignoreCase = true) }?.id ?: pair.id
         if (Pairing.DIRECTORY.any { it.id == target && !it.available }) return null
-        save(saved() + (target to code.trim().let { if (it.startsWith("daylight://")) it.substringAfter("c=") else it }))
+        save(saved() + (target to code.trim().let { if (it.startsWith("tuttu://")) it.substringAfter("c=") else it }))
         selected = target
         return pairs().first { it.id == target }
     }

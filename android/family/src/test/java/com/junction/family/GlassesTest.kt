@@ -16,20 +16,20 @@ class GlassesTest {
     }
 
     // Made by share.pairing_code("https://abc-def.trycloudflare.com/", "v1ew&key=1", "Seb's Ray-Ban Meta").
-    private val sebCode = "DL1-dT1odHRwcyUzQSUyRiUyRmFiYy1kZWYudHJ5Y2xvdWRmbGFyZS5jb20maz12MWV3JTI2a2V5JTNEMSZuPVNlYiUyN3MlMjBSYXktQmFuJTIwTWV0YQ"
+    private val sebCode = "TU1-dT1odHRwcyUzQSUyRiUyRmFiYy1kZWYudHJ5Y2xvdWRmbGFyZS5jb20maz12MWV3JTI2a2V5JTNEMSZuPVNlYiUyN3MlMjBSYXktQmFuJTIwTWV0YQ"
 
     @Test fun readsTheCodeTheRelayPrints() {
         val pair = Pairing.parse(sebCode)!!
         assertEquals("https://abc-def.trycloudflare.com", pair.relayUrl)
         assertEquals("v1ew&key=1", pair.key)
         assertEquals("Seb's Ray-Ban Meta", pair.name)
-        assertEquals(pair, Pairing.parse("daylight://pair?c=$sebCode"))
+        assertEquals(pair, Pairing.parse("tuttu://pair?c=$sebCode"))
         assertEquals(pair.copy(), Pairing.parse(Pairing.encode("https://abc-def.trycloudflare.com/", "v1ew&key=1", "Seb's Ray-Ban Meta")))
     }
 
     @Test fun refusesWhatIsNotACodeOrNotHttps() {
         assertNull(Pairing.parse("hello"))
-        assertNull(Pairing.parse("DL1-%%%"))
+        assertNull(Pairing.parse("TU1-%%%"))
         assertNull(Pairing.parse(Pairing.encode("http://relay.example", "k", "x")))
         assertNull(Pairing.parse(Pairing.encode("http://127.0.0.1:8090", "k", "x")))
         assertNotNull(Pairing.parse(Pairing.encode("http://127.0.0.1:8090", "k", "x"), allowLocalHttp = true))

@@ -20,7 +20,7 @@
             </intent-filter>
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
-        <!-- Glasses: the pairs this phone can watch live; pairing links daylight://pair?c=DL1-... open it. -->
+        <!-- Glasses: the pairs this phone can watch live; pairing links tuttu://pair?c=TU1-... open it. -->
         <activity
             android:name=".GlassesActivity"
             android:exported="true"
@@ -31,7 +31,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="daylight" android:host="pair" />
+                <data android:scheme="tuttu" android:host="pair" />
             </intent-filter>
         </activity>
     </application>
