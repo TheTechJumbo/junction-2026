@@ -24,6 +24,8 @@
     border: 1px solid var(--line); border-radius: 9px; padding: 6px 11px; cursor: pointer; }
   #bar button.on { border-color: var(--blue); background: rgba(30, 70, 115, .9); }
   #bar label { display: flex; gap: 6px; align-items: center; }
+  #hint { position: fixed; left: 12px; top: 92px; max-width: min(360px, calc(100% - 24px)); padding: 7px 11px; border-radius: 9px;
+    background: rgba(13, 20, 29, .94); border: 1px solid #ffb84d; color: var(--text); font-size: 13px; pointer-events: none; }
   #help { position: fixed; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; text-shadow: 0 1px 2px #000; pointer-events: none;
     max-width: calc(100% - 400px); }
   #help kbd { font: inherit; font-size: 11px; border: 1px solid #3a4a5c; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--text); }
@@ -118,6 +120,7 @@
   <label title="Today's path"><input type="checkbox" id="showPath" checked> path</label>
   <label title="Things the camera recognised" id="objectsLabel" hidden><input type="checkbox" id="showObjects" checked> objects</label>
 </div>
+<div id="hint" role="status" hidden></div>
 <div id="help"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd><kbd>E</kbd> down / up · <kbd>Shift</kbd> faster ·
   drag to look · right-drag to slide · <kbd>F</kbd> follow · <kbd>V</kbd> their view · click a label to go there</div>
 <aside id="panel" aria-label="What the wearer is doing">
@@ -300,6 +303,26 @@ function setMode(m) {
   head.visible = cone.visible = m !== 'eyes';
 }
 function takeOver() { if (mode !== 'free') setMode('free'); flight = null; }
+let hintTimer = 0;
+function hint(text) {  // a short message under the buttons
+  $('hint').textContent = text;
+  $('hint').hidden = false;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { $('hint').hidden = true; }, 5000);
+}
+function toWearer(m) {  // Follow (behind them) or Their view (where they stand), from the live or the last known spot
+  if (mode === m) return setMode('free');
+  const pose = knownPose();
+  if (!pose) {
+    setMode('free');
+    return hint(room && room.map_at && fix && fix.at < room.map_at
+      ? `Not seen since this room map was made (${clock(room.map_at)}): start the glasses' live camera and they appear here.`
+      : "No position yet: start the glasses' live camera (or the phone's) and they appear here.");
+  }
+  flight = null;
+  setMode(m);
+  if (pose.stale) hint(`Not seen live: showing where they were last seen, at ${clock(pose.at)}.`);
+}
 addEventListener('keydown', (e) => {
   if (e.target.matches && e.target.matches('select, textarea, input[type=text], input:not([type])')) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -307,8 +330,8 @@ addEventListener('keydown', (e) => {
     keys.add(e.code);
     if (!e.code.startsWith('Shift')) takeOver();
     e.preventDefault();
-  } else if (e.code === 'KeyF') setMode(mode === 'follow' ? 'free' : 'follow');
-  else if (e.code === 'KeyV') setMode(mode === 'eyes' ? 'free' : 'eyes');
+  } else if (e.code === 'KeyF') toWearer('follow');
+  else if (e.code === 'KeyV') toWearer('eyes');
   else if (e.code === 'KeyR') goStart();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -357,8 +380,8 @@ canvas.addEventListener('pointermove', (e) => {
   look.pitch = Math.max(-1.45, Math.min(1.45, look.pitch + dy * turn));
 }, { passive: true });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); takeOver(); walk(-Math.sign(e.deltaY) * Math.min(0.6, Math.abs(e.deltaY) * 0.0025) * speedNow()); }, { passive: false });
-$('follow').onclick = () => setMode(mode === 'follow' ? 'free' : 'follow');
-$('eyes').onclick = () => setMode(mode === 'eyes' ? 'free' : 'eyes');
+$('follow').onclick = () => toWearer('follow');
+$('eyes').onclick = () => toWearer('eyes');
 $('start').onclick = () => goStart();
 
 // Map axes -> three.js world, for a point (east, north, up) and for a heading (degrees from north towards east).
@@ -382,10 +405,25 @@ function lookAtPoint(target, fromDistance = 1.3, lift = 0.35) {  // stand a litt
 // ---- data: the room and its splat (/care/space), the wearer (/where), the day (/day), reminders, places ----
 let room = null, roomKey = '', mesh = null, fix = null, places = [], dayPath = [], live = [];  // path points: [t, east, north]
 let named = [];  // /care/space: the named places placed from the trained splat's depth, asked again every few seconds
-let startPose = null;
+function startPose() {
+  if (mesh && splatFrame.userData.trained) {
+    // A trained splat: where its first keyframe was taken (its origin, looking along +z with y down, video_map.py),
+    // through the same transform the splat is drawn with, so the view is the first photo whatever the fit.
+    splatFrame.updateMatrixWorld(true);
+    const pos = splatFrame.localToWorld(new THREE.Vector3(0, 0, 0));
+    const ahead = splatFrame.localToWorld(new THREE.Vector3(0, 0, 1)).sub(pos).normalize();
+    return { pos, yaw: Math.atan2(-ahead.x, -ahead.z), pitch: Math.asin(Math.max(-1, Math.min(1, ahead.y))) };
+  }
+  // The room map: a step behind its first picture's camera, a little higher, looking where it looked.
+  const cam0 = (room && room.cameras && room.cameras[0]) || { position: [0, 0, 0], heading_deg: 0 };
+  const h0 = (cam0.heading_deg || 0) * Math.PI / 180;
+  const back = [cam0.position[0] - 0.6 * Math.sin(h0), cam0.position[1] - 0.6 * Math.cos(h0), (cam0.position[2] || 0) + 0.25];
+  return { pos: toWorld(back), yaw: yawOf(cam0.heading_deg || 0), pitch: -0.12 };
+}
 function goStart() {
-  if (!startPose) return;
-  flyTo(startPose.pos.clone(), startPose.yaw, startPose.pitch);
+  if (!mesh) return hint('The room is still loading.');
+  const p = startPose();
+  flyTo(p.pos, p.yaw, p.pitch);
 }
 
 async function fetchBytes(url, onProgress) {
@@ -438,10 +476,15 @@ async function showSplat(info, kind) {
     const m = new THREE.Matrix4();
     if (matrix) m.set(...matrix.flat());
     m.decompose(splatFrame.position, splatFrame.quaternion, splatFrame.scale);
+    splatFrame.userData.trained = !!matrix;
+    camera.fov = matrix ? ((info.trained && info.trained.fov_deg) || 58) : 60;  // a trained splat looks like its photos
+    camera.updateProjectionMatrix();
     objectAnchors.visible = !!matrix && $('showObjects').checked;
     $('loading').style.display = 'none';
+    return true;
   } catch (err) {
-    $('loadText').textContent = `Could not load the 3D room: ${err.message || err}`;
+    $('loadText').textContent = `Could not load the 3D room: ${err.message || err}. Trying again…`;
+    return false;
   }
 }
 
@@ -515,20 +558,17 @@ async function tickSpace() {
   const next = JSON.stringify([info.kind, info.splat, info.matrix, info.room_splat]);
   if (next === roomKey) return;
   const first = !roomKey;
-  roomKey = next;
   room = info;
   chooser(info);
   describeRoom(info, info.kind);
-  const cam0 = info.cameras[0] || { position: [0, 0, 0], heading_deg: 0 };
-  const h0 = (cam0.heading_deg || 0) * Math.PI / 180;
-  const back = [cam0.position[0] - 0.6 * Math.sin(h0), cam0.position[1] - 0.6 * Math.cos(h0), (cam0.position[2] || 0) + 0.25];
-  startPose = { pos: toWorld(back), yaw: yawOf(cam0.heading_deg || 0), pitch: -0.12 };
-  if (first) {
-    camera.position.copy(startPose.pos);
-    look.yaw = startPose.yaw; look.pitch = startPose.pitch;
-    if (fix && fresh(fix)) setMode('follow');
+  if (!await showSplat(info, info.kind)) return;  // not shown: the next look tries again
+  roomKey = next;
+  if (first) {  // the first view: where the first picture was taken; follow the wearer when they are live
+    const p = startPose();
+    camera.position.copy(p.pos);
+    look.yaw = p.yaw; look.pitch = p.pitch;
+    if (fix && fresh(fix) && wearerPose(fix)) setMode('follow');
   }
-  await showSplat(info, info.kind);
   objectLabels(info);
   loadAbove(info);
   drawPlaces();
@@ -541,6 +581,17 @@ function wearerPose(f) {  // the steady position when there is one (smoother), e
   if (f && f.position && f.state !== 'lost' && !f.unusable) return { position: f.position, heading: f.heading_deg || 0, state: f.state };
   return null;
 }
+let lastSeen = null;  // {position, heading, at}: the last live position this page saw
+function knownPose() {  // the live position, else the last known one (stale: true), else null
+  const since = (room && room.map_at) || 0;  // a position from before this room map is in another map's axes
+  const now = wearerPose(fix);
+  if (now && fix.at >= since) return { ...now, at: fix.at, stale: !fresh(fix) };
+  if (fix && fix.at >= since && Array.isArray(fix.position) && !fix.unusable) return { position: fix.position, heading: fix.heading_deg || 0, state: 'lost', at: fix.at, stale: true };
+  if (lastSeen && lastSeen.at >= since) return { ...lastSeen, state: 'lost', stale: true };
+  const track = trackPoints();
+  const p = track[track.length - 1];
+  return p ? { position: [p[1], p[2], 0], heading: 0, state: 'lost', at: p[0], stale: true } : null;
+}
 const target = { pos: new THREE.Vector3(), heading: 0, has: false };
 function nearestPlace(pose) {
   let best = null;
@@ -552,21 +603,23 @@ function nearestPlace(pose) {
 }
 
 function updateWearer() {
-  const pose = wearerPose(fix);
-  const stale = !fresh(fix);
-  if (!pose) { wearer.visible = false; return; }
+  const pose = knownPose();
+  if (!pose) { wearer.visible = false; dropTags('wearer', new Set()); return; }
+  const stale = pose.stale;
+  if (!stale) lastSeen = { position: pose.position, heading: pose.heading, at: pose.at };
   wearer.visible = true;
   target.pos.set(pose.position[0], pose.position[1], pose.position[2] || 0);
   target.heading = pose.heading;
   if (!target.has) { wearer.position.copy(target.pos); wearer.rotation.z = -pose.heading * Math.PI / 180; target.has = true; }
   coneMat.color.setHex(stale ? colours.stale : colours[pose.state] || colours.found);
-  const t = tag('wearer', stale ? `Last seen ${clock(fix.at)}` : 'Wearer', 'wearer', wearerTagAt, () => setMode('follow'));
+  const t = tag('wearer', stale ? `Last seen ${clock(pose.at)}` : 'Wearer', 'wearer', wearerTagAt, () => toWearer('follow'));
   t.el.classList.toggle('stale', stale);
   t.hidden = () => mode === 'eyes';
 }
 
-function trackPoints() {  // today's positions in this room, oldest first: [t, east, north]
-  return [...dayPath, ...live].sort((a, b) => a[0] - b[0]);
+function trackPoints() {  // today's positions in this room since its room map was made (older ones are in another map's axes)
+  const since = (room && room.map_at) || 0;
+  return [...dayPath, ...live].filter((p) => p[0] >= since).sort((a, b) => a[0] - b[0]);
 }
 const timeAnchors = new THREE.Group();
 space.add(timeAnchors);
@@ -601,7 +654,8 @@ function drawPlaces() {
   for (const p of places) {
     const g = new THREE.Group();
     g.position.set(p.position[0], p.position[1], p.position[2] || 0);
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffd228 }));
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffd228, transparent: true }));
+    ball.userData.fades = true;
     const pole = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1.4)]),
       new THREE.LineBasicMaterial({ color: 0xffd228, transparent: true, opacity: 0.45 }));
     const top = new THREE.Object3D();
@@ -633,7 +687,7 @@ function renderPlaces() {
 function mergePlaces(list) {  // the room map's places, then the fix's, then those placed on the trained splat's depth
   const byName = new Map();
   for (const p of (room && room.places) || []) if (p.position) byName.set(p.name, p);
-  for (const p of list || []) if (p.position) byName.set(p.name, p);
+  if (fix && fresh(fix)) for (const p of list || []) if (p.position) byName.set(p.name, p);
   for (const p of named) if (p.position) byName.set(p.name, p);
   const next = [...byName.values()].map((p) => ({ name: p.name, position: p.position }));
   if (JSON.stringify(next) !== JSON.stringify(places)) { places = next; drawPlaces(); renderWent(); }
@@ -789,7 +843,8 @@ function drawAbove(track) {
     ctx.beginPath(); ctx.arc(xy[0], xy[1], 6, 0, 7); ctx.fill(); ctx.stroke();
   }
   $('aboveNote').textContent = (above ? 'The room from above (trained splat). ' : '') +
-    (track.length ? `Today's path from ${clock(track[0][0])} to ${clock(track[track.length - 1][0])}.` : 'No path yet today.');
+    (track.length ? `Today's path from ${clock(track[0][0])} to ${clock(track[track.length - 1][0])}.`
+      : room && room.map_at ? `No path since this room map was made at ${clock(room.map_at)}.` : 'No path yet today.');
 }
 
 let lastDay = null;
@@ -823,7 +878,10 @@ function renderNow() {
   } else {
     const near = pose && nearestPlace(pose);
     const here = currentVisit();
-    const where = !pose ? 'Not sure where they are.'
+    const last = !pose && knownPose();
+    const lastNear = last && nearestPlace(last);
+    const where = !pose ? (last ? `Last seen at ${clock(last.at)}${lastNear && lastNear.d <= 1.5 ? `, by the ${lastNear.name}` : ''}. Not seen live now.`
+      : room && room.map_at && fix.at < room.map_at ? `Not seen since this room map was made at ${clock(room.map_at)}.` : 'Not sure where they are.')
       : here ? `At the ${here.name}, ${stay(fix.at - here.start)} so far.`
       : `In the ${nice(fix.zone || zone)}` + (near ? (near.d <= VISIT_IN_M ? `, at the ${near.name}.` : `, ${metres(near.d)} from the ${near.name}.`) : '.');
     $('nowLine').textContent = where;
@@ -1002,6 +1060,10 @@ renderer.setAnimationLoop((now) => {
   if (wearer.visible) {  // fade the wearer out when the camera comes close, so it never fills the view
     const near = camera.position.distanceTo(wearer.getWorldPosition(tmp));
     coneMat.opacity = headMat.opacity = Math.max(0, Math.min(0.95, (near - 0.25) / 0.6));
+  }
+  for (const g of placeGroup.children) {  // a place's ball fades out close up too, so it never fills the view
+    const ball = g.children[0];
+    if (ball && ball.userData.fades) ball.material.opacity = Math.max(0, Math.min(0.95, (g.getWorldPosition(tmp).distanceTo(camera.position) - 0.2) / 0.6));
   }
   renderer.render(scene, camera);
   placeTags();
