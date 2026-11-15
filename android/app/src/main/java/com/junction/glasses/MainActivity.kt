@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        book = GlassesBook(prefsStore(getSharedPreferences("glasses", MODE_PRIVATE)), allowLocalHttp = BuildConfig.DEBUG)
         audio = AndroidAudioOutput(this)
         glasses = MetaGlassesAdapter(this, lifecycleScope)
         val column = LinearLayout(this).apply {
@@ -187,6 +188,27 @@ class MainActivity : ComponentActivity() {
             isChecked = true
             setOnCheckedChangeListener { _, on -> screen.speakCues = on }
         })
+        // Your glasses: which pair this phone works with (whose vision relay sees through them).
+        label("Your glasses", 22f)
+        label("Pair the glasses themselves in the Meta AI app. Here, pick whose glasses these are: the pair's code connects its vision relay. Only Seb's pair is live.")
+        val glassesList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }.also { column.addView(it) }
+        refreshGlasses = {
+            glassesList.removeAllViews()
+            val current = book.current()?.id
+            for (pair in book.pairs()) glassesList.addView(Button(this).apply {
+                isAllCaps = false; isEnabled = pair.available
+                text = when {
+                    !pair.available -> "${pair.name} · ${pair.note}"
+                    pair.id == current -> "✓ ${pair.name} · in use"
+                    pair.connected -> "${pair.name} · tap to use"
+                    else -> "${pair.name} · enter its code"
+                }
+                setOnClickListener { if (pair.connected) useGlasses(pair) else askGlassesCode(pair) }
+                setOnLongClickListener { if (pair.connected) { book.forget(pair.id); refreshGlasses(); true } else false }
+            })
+        }
+        button("Add Meta glasses (pairing code)") { askGlassesCode(null) }
+        refreshGlasses()
         val relayUrl = field("Vision relay URL (optional)").apply { if (BuildConfig.DEBUG) setText("http://127.0.0.1:8090") }
         val relayKey = field("Vision relay key", true)
         button("Connect vision relay") {
@@ -244,6 +266,8 @@ class MainActivity : ComponentActivity() {
         } }
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) glasses.initialize()
         updatePermissionStatus()
+        book.current()?.let { useGlasses(it) } // the pair chosen last time
+        pairFromLink(intent)
     }
     private fun cancelConnectionCheck() {
         connectionGeneration++
@@ -428,6 +452,48 @@ class MainActivity : ComponentActivity() {
         diagnosticJob?.cancel(); diagnosticJob = null
     }
     private fun stopTurn() { cancelDiagnostic(); cancelEvidence(); stopRecognition(); displayJob?.cancel(); glasses.stopListening(); controller?.cancel(); audio.stop() }
+    // ---------- Your glasses (core/Glasses.kt) ----------
+    private lateinit var book: GlassesBook
+    private var refreshGlasses: () -> Unit = {}
+
+    /** Works with this pair: its vision relay gives reminders and directions. */
+    private fun useGlasses(pair: GlassesPair) {
+        val url = pair.relayUrl ?: return; val key = pair.key ?: return
+        screen.relay = runCatching { RelayClient(url, key, allowLocalHttp = BuildConfig.DEBUG) }.getOrNull()
+        book.selected = pair.id.takeIf { screen.relay != null }
+        status.text = if (screen.relay == null) "That pair's address is not usable." else "Using ${pair.name}."
+        if (::wearer.isInitialized) wearer.setStatus(pair.name)
+        screen.refresh(); refreshGlasses()
+    }
+
+    /** Asks for a pair's code (its "master code"); with [pair] null, any Meta glasses' code adds a new pair. */
+    private fun askGlassesCode(pair: GlassesPair?) {
+        val field = EditText(this).apply { hint = "DL1-…"; isSingleLine = true; isSaveEnabled = false }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(pair?.let { "Code for ${it.name}" } ?: "Add Meta glasses")
+            .setMessage(pair?.note?.ifBlank { null } ?: "Paste the pairing code the glasses' relay printed (live/share.py), or open its link on this phone.")
+            .setView(field)
+            .setPositiveButton("Connect") { _, _ -> addGlasses(field.text.toString(), pair?.id) }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun addGlasses(code: String, id: String? = null) {
+        val pair = book.connect(code, id)
+        if (pair == null) { status.text = "That is not a pairing code for these glasses."; return }
+        useGlasses(pair)
+    }
+
+    /** daylight://pair?c=DL1-… (the site's pairing page, or a link the relay printed). */
+    private fun pairFromLink(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme == "daylight" && data.host == "pair") data.getQueryParameter("c")?.let { addGlasses(it) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        pairFromLink(intent)
+    }
+
     /** The wearer screen's microphone rings: on while the phone's speech service is listening. */
     private fun listening(on: Boolean) { if (::wearer.isInitialized) wearer.setListening(on) }
     private fun startPhoneListening() {
@@ -480,4 +546,10 @@ class MainActivity : ComponentActivity() {
         recognizer?.destroy(); glasses.close(); audio.close()
         super.onDestroy()
     }
+}
+
+/** SharedPreferences as the glasses list's store. */
+private fun prefsStore(prefs: android.content.SharedPreferences) = object : KeyValues {
+    override fun get(key: String) = prefs.getString(key, null)
+    override fun put(key: String, value: String?) { prefs.edit().apply { if (value == null) remove(key) else putString(key, value) }.apply() }
 }

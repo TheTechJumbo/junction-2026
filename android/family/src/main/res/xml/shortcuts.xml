@@ -1,4 +1,12 @@
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="glasses" android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/glasses_title"
+        android:shortcutLongLabel="@string/glasses_long">
+        <intent android:action="android.intent.action.VIEW"
+            android:targetPackage="com.junction.family"
+            android:targetClass="com.junction.family.GlassesActivity" />
+    </shortcut>
     <shortcut android:shortcutId="change_address" android:enabled="true"
         android:icon="@mipmap/ic_launcher"
         android:shortcutShortLabel="@string/shortcut_address_short"

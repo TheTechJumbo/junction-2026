@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pair glasses · Daylight</title>
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<style>
+  @font-face { font-family: "Josefin Sans"; font-weight: 600; font-display: swap; src: url("dashboard/themes/kaamos/fonts/josefin-sans-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Albert Sans"; font-weight: 400; font-display: swap; src: url("dashboard/themes/kaamos/fonts/albert-sans-latin-400-normal.woff2") format("woff2"); }
+  :root { --sky: #0b1029; --pane: #18213f; --line: #3b4763; --snow: #eef2f6; --soft: #b3bfd4; --lamp: #f2b04a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; color: var(--snow); font: 17px/1.5 "Albert Sans", "Segoe UI", sans-serif;
+    background: radial-gradient(70% 60% at 50% 0%, #22305a, transparent 70%), var(--sky); }
+  main { width: min(480px, 100%); background: var(--pane); border: 1px solid var(--line); border-radius: 26px; padding: 30px 26px; text-align: center; }
+  img { width: 56px; height: 56px; border-radius: 14px; }
+  h1 { font: 600 30px/1.1 "Josefin Sans", sans-serif; margin: 14px 0 6px; }
+  p { color: var(--soft); margin: 0 0 18px; }
+  .name { color: var(--lamp); font-weight: 600; }
+  .button { display: block; width: 100%; padding: 15px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--snow); font: 600 16px/1 inherit; text-decoration: none; cursor: pointer; margin-top: 10px; }
+  .primary { background: var(--lamp); border-color: var(--lamp); color: #1b1407; }
+  code { display: block; word-break: break-all; text-align: left; font: 12.5px/1.5 ui-monospace, Consolas, monospace; background: rgba(0,0,0,.25); padding: 12px; border-radius: 12px; color: var(--soft); margin-top: 18px; }
+  .small { font-size: 13.5px; margin-top: 18px; }
+  a { color: var(--lamp); }
+</style>
+</head>
+<body>
+<main>
+  <img src="dashboard/themes/kaamos/assets/mark.svg" alt="">
+  <h1 id="title">Pair glasses</h1>
+  <p id="words">Open this page from the link a pair of glasses' relay printed.</p>
+  <a id="open" class="button primary" hidden>Open in the Daylight app</a>
+  <button id="copy" class="button" type="button" hidden>Copy the code</button>
+  <code id="code" hidden></code>
+  <p class="small">No app yet? <a href="./#get">Get Daylight for Android</a>. The code is watch-only: it shows what the glasses display, never the camera.</p>
+</main>
+<script>
+  // The code stays in the address's #fragment: browsers never send that part to the server.
+  const code = decodeURIComponent(location.hash.slice(1)).trim();
+  const $ = id => document.getElementById(id);
+  function read(c) {
+    try {
+      const b = c.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+      const q = new URLSearchParams(atob(b + '='.repeat((4 - b.length % 4) % 4)));
+      return {url: q.get('u'), name: q.get('n')};
+    } catch { return null; }
+  }
+  const pair = code.startsWith('DL1-') ? read(code) : null;
+  if (pair && pair.url) {
+    $('title').textContent = 'Watch these glasses';
+    $('words').innerHTML = '';
+    $('words').append('Add ', Object.assign(document.createElement('span'), {className: 'name', textContent: pair.name || 'this pair'}), ' to Daylight and watch what they show, live.');
+    $('open').href = 'daylight://pair?c=' + encodeURIComponent(code); $('open').hidden = false;
+    $('code').textContent = code; $('code').hidden = false;
+    $('copy').hidden = false;
+    $('copy').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(code); $('copy').textContent = 'Copied'; } catch { $('copy').textContent = 'Select the code below to copy it'; }
+    });
+  } else if (code) {
+    $('words').textContent = 'That link does not hold a pairing code. Ask for a fresh one: the relay prints it with live/share.py.';
+  }
+</script>
+</body>
+</html>

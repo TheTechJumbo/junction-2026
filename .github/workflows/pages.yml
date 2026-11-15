@@ -1,0 +1,85 @@
+name: site
+
+# The public site (GitHub Pages): the landing page (site/), the family app's example day (dashboard/?demo),
+# the glasses display's sample room (ml/recon_change/live/hud.html?demo=1), the splat demo, and both
+# Android apps as debug APKs. Nothing private: example data only, and no relay key.
+# Seb's Beacon demo for the Ray-Ban Display (branch feat/rescue-ping-hud) was the repo's Pages site; its
+# files are copied in at the same addresses (demo/index.html, demo/live-splat.html, demo/shared/), so the
+# glasses keep loading it. After a change on that branch, run this workflow by hand (or push to main).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/rescue-ping-hud
+          path: beacon
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '13114758'
+          packages: 'platform-tools platforms;android-36 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build both apps
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug :family:assembleDebug
+      - name: The real room for the 3D demo (public Mip-NeRF 360 splat and photos; not in the repo)
+        working-directory: demo/splat-vs-mesh
+        run: |
+          pip install numpy opencv-python-headless
+          python room_fetch.py
+          python room_convert.py room/room.splat room
+          python night_demo.py room
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/downloads _site/glasses _site/demo
+          cp site/*.html _site/
+          cp -r beacon/demo/. _site/demo/            # Beacon (Seb): demo/index.html, live-splat.html, shared/
+          cp beacon/README.md _site/beacon-README.md
+          touch _site/.nojekyll
+          cp -r dashboard _site/dashboard
+          rm -rf _site/dashboard/tests _site/dashboard/package.json
+          cp ml/recon_change/live/hud.html _site/glasses/hud.html
+          rsync -a --exclude 'venue/*.splat' --exclude '__pycache__' --exclude '*.py' --exclude '*.log' demo/splat-vs-mesh _site/demo/
+          cp android/app/build/outputs/apk/debug/app-debug.apk _site/downloads/daylight-glasses.apk
+          cp android/family/build/outputs/apk/debug/family-debug.apk _site/downloads/daylight-family.apk
+          du -sh _site; find _site -size +20M
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
