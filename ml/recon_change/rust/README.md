@@ -30,7 +30,7 @@ python test_rust.py         # Rust and NumPy give the same answers
 python test_synthetic.py    # the usual checks, now through Rust
 ```
 
-On an equipped host: `bash iridis/build_rust.sh /absolute/path/to/python`. It uses the
+On an equipped host: `bash cluster/build_rust.sh /absolute/path/to/python`. It uses the
 existing toolchain and cached locked crates offline, builds into the selected environment,
 and runs equivalence and synthetic checks. See `../ROLLOUT.md` for preflight and restart.
 The build is for plain x86-64, so a build on the login node runs on the GPU and CPU nodes.

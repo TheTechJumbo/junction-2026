@@ -2,19 +2,19 @@
 # Start the demo's two servers on this laptop, wired to each other: the team's event API (port 8000) and
 # the vision relay (port 8090). See DEMO.md next to this file for the whole walk-through with the glasses.
 #
-#   bash ml/recon_change/run_demo.sh                 the models run on the university cluster (needs the VPN)
+#   bash ml/recon_change/run_demo.sh                 the models run on the GPU cluster (needs the VPN)
 #   bash ml/recon_change/run_demo.sh --local PYTHON  the models run on this machine (PYTHON has torch and vggt)
-#   bash ml/recon_change/run_demo.sh --iridis [stop|status|restart|deploy]
-#                                                    nothing runs here: both servers run on Iridis too (a CPU job,
-#                                                    iridis/servers.slurm) and this laptop only keeps an SSH tunnel to
-#                                                    them on ports 8000 and 8090 (tunnel_iridis.sh)
+#   bash ml/recon_change/run_demo.sh --cluster [stop|status|restart|deploy]
+#                                                    nothing runs here: both servers run on the cluster too (a CPU job,
+#                                                    cluster/servers.slurm) and this laptop only keeps an SSH tunnel to
+#                                                    them on ports 8000 and 8090 (tunnel_cluster.sh)
 #
 # The two secrets (the API token and the relay's access key) are made once and kept in .env.demo at the top of
 # the repo, which Git ignores. This script never prints them; the relay prints its own link when it starts.
 # ZONE=lounge bash ... chooses the room the event API asks about (default: kitchen).
 set -euo pipefail
-if [ "${1:-}" = "--iridis" ]; then
-    exec bash "$(dirname "$0")/tunnel_iridis.sh" "${@:2}"
+if [ "${1:-}" = "--cluster" ]; then
+    exec bash "$(dirname "$0")/tunnel_cluster.sh" "${@:2}"
 fi
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO"
@@ -49,6 +49,6 @@ cd ml/recon_change
 if [ "${1:-}" = "--local" ]; then
     bash run_local.sh "${2:?give the Python that has torch and vggt}" "${3:-$HOME/beacon-local}" --host 0.0.0.0 --port 8090 --token "$RELAY_KEY"
 else
-    # the models on Iridis (VPN): instant fixes here, recordings trained there
-    python -u live/relay.py --host 0.0.0.0 --port 8090 --token "$RELAY_KEY" --quick --train-host "${BEACON_TRAIN_HOST-iridis}"
+    # the models on the GPU cluster (VPN): instant fixes here, recordings trained there
+    python -u live/relay.py --host 0.0.0.0 --port 8090 --token "$RELAY_KEY" --quick --train-host "${BEACON_TRAIN_HOST-cluster}"
 fi

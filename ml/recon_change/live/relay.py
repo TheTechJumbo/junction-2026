@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Relay. Runs on the laptop that holds the Iridis SSH key: HTTP in, one SSH connection out.
+"""Relay. Runs on the laptop that holds the GPU cluster's SSH key: HTTP in, one SSH connection out.
 
     python live/relay.py                    # this laptop only: http://127.0.0.1:8090
     python live/relay.py --host 0.0.0.0     # also reachable from a phone on the same network
 
 It prints the link to open. The link carries an access key, and every request needs that key
-(`?k=...` or an `X-Key` header), because the relay spends GPU time on your Iridis account.
+(`?k=...` or an `X-Key` header), because the relay spends GPU time on your GPU cluster account.
 
     GET  /                        the phone page: record a baseline clip, record a check clip
     POST /baseline?zone=kitchen   body = video of the room as it should be
@@ -44,7 +44,7 @@ It prints the link to open. The link carries an access key, and every request ne
                                   glasses: a zip of frames NNNNNN_<ms>.jpg (or a video). A chunk sent twice counts once.
                                   Every REC_MAP_EVERY new frames the room map is built again from the recording's
                                   keyframes; at final=1, and every REC_TRAIN_EVERY_S while it runs, a splat is trained
-                                  on Iridis (--train-host) and /viewer?live=Z shows it
+                                  on the GPU (--train-host) and /viewer?live=Z shows it
     GET  /recording?zone=Z        the newest session: chunks, frames, gaps, room map updates, training
     GET  /room?zone=kitchen       the room map: its splat (/evidence/.../room.splat), places and baseline cameras
     GET  /frame?zone=kitchen      the newest photo that reached /locate, as it came (the dashboard's camera view)
@@ -98,7 +98,7 @@ so the glasses display needs one address and one key. Without those settings the
 vision path only ever writes events: nothing that answers the wearer waits on this.
 
 Uploaded videos never leave the laptop. The relay picks the sharp frames it needs with OpenCV
-and sends those (about 1 MB) to Iridis. Without OpenCV it sends the video as it is.
+and sends those (about 1 MB) to the GPU cluster. Without OpenCV it sends the video as it is.
 The SSH connection is opened on first use and reopened if it drops.
 """
 import argparse
@@ -243,9 +243,9 @@ except ImportError:  # no NumPy here: the page shows the room map, where the wea
 class Link:
     """One long-lived connection to the gateway, speaking its JSON-line-plus-bytes protocol."""
 
-    def __init__(self, argv, name="Iridis"):
+    def __init__(self, argv, name="the GPU cluster"):
         self.argv, self.proc, self.lock = argv, None, threading.Lock()
-        self.name = name  # where the gateway runs, for error messages: "Iridis" or "the local gateway"
+        self.name = name  # where the gateway runs, for error messages: "the GPU cluster" or "the local gateway"
 
     def _read(self):
         line = self.proc.stdout.readline()
@@ -575,7 +575,7 @@ REPO = "TheTechJumbo/junction-2026"
 
 
 REC_MAP_EVERY = 60         # a recording's room map is built again after this many new frames
-REC_TRAIN_EVERY_S = 600    # and a splat trained on Iridis this often while it runs (and when it ends)
+REC_TRAIN_EVERY_S = 600    # and a splat trained on the GPU this often while it runs (and when it ends)
 REC_VIDEO_MAX = 4 << 30    # a whole video sent as one chunk (the glasses: about 110 MB a minute) may be this big
 REC_VIDEO_FPS = 15         # frames a second taken from such a video (?fps=1..30)
 REC_PART_FRAMES = 120      # and sent on to the gateway in parts of this many frames
@@ -1202,7 +1202,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
 
         threading.Thread(target=run, daemon=True).start()
 
-    # ---- recordings (POST /recording): the room recorded continuously, mapped as it comes, trained on Iridis ----
+    # ---- recordings (POST /recording): the room recorded continuously, mapped as it comes, trained on the GPU ----
     recs_file = evidence_dir / "recordings.json"
     try:
         recs = json.loads(recs_file.read_text())  # {zone: the newest session's progress}
@@ -1247,7 +1247,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         threading.Thread(target=rec_map, args=(zone, session, frames), daemon=True).start()
 
     def rec_train(zone, session):
-        """Train a splat of the recording so far on Iridis and make the room show it (in the background)."""
+        """Train a splat of the recording so far on the GPU and make the room show it (in the background)."""
         import remote_train
         local = os.environ.get("BEACON_ROOT")  # --local: the frames are on this laptop; else the gateway keeps them remotely
         root = Path(local or ".")
@@ -1263,7 +1263,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 got = remote_train.train(root / "recordings" / zone / session / "frames", f"{zone}-{session}", out, host=train_host,
                                          root=remote_root, remote_frames=remote,
                                          log=lambda text: sys.stderr.write(f"training {zone}/{session}: {text}" + chr(10)))
-            except Exception as err:  # noqa: BLE001  Iridis unreachable, the job refused: say so on the page
+            except Exception as err:  # noqa: BLE001  GPU cluster unreachable, the job refused: say so on the page
                 got = {"state": "failed", "error": f"{type(err).__name__}: {err}"[:300]}
             if not trained_result(zone, session, out, got):
                 return
@@ -2142,12 +2142,12 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--ssh-host", default="iridis", help="SSH host alias for the cluster")
+    ap.add_argument("--ssh-host", default="cluster", help="SSH host alias for the cluster")
     ap.add_argument("--remote-root", help="absolute path of the persistent remote checkout")
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets a phone on the same network reach the relay")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--token", default=secrets.token_urlsafe(9), help="access key; a random one is made if not given")
-    ap.add_argument("--train-host", help="train splats of recordings (POST /recording) on this SSH host, e.g. iridis "
+    ap.add_argument("--train-host", help="train splats of recordings (POST /recording) on this SSH host, e.g. cluster "
                     "(live/remote_train.py: video_map.py deployed there with the workers; BEACON_TRAIN_LAUNCH=direct for a "
                     "machine without Slurm)")
     ap.add_argument("--quick", action="store_true", help="place photos instantly by cosine similarity to the room map's "
@@ -2169,7 +2169,7 @@ def main():
     evidence_dir.mkdir(exist_ok=True)
     event_api, api_token = os.environ.get("EVENT_API_URL"), os.environ.get("EVENT_API_TOKEN")
     if not args.local:
-        bg_link = Link(link.argv, name="Iridis (room maps)")
+        bg_link = Link(link.argv, name="the GPU cluster (room maps)")
     handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, splat_every_fix=args.splat_every_fix, bg_link=bg_link,
                            quick=args.quick, train_host=args.train_host, remote_root=args.remote_root)
     server = ThreadingHTTPServer((args.host, args.port), handler)

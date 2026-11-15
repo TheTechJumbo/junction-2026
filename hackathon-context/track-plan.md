@@ -13,7 +13,7 @@ Labels used below:
 | Part | State | Where |
 | --- | --- | --- |
 | Glasses display page: arrow, distance, mini map, questions, reminders, lost items | Works in a browser; **not run on glasses** | `ml/recon_change/live/hud.html` on `jun-22-hud-waypoints` (PR #24, open to `main`) |
-| Position fix and directions (VGGT on a GPU) | Works live through the relay on Iridis: about 4 s on an L4, about 40 s on 32 CPU cores | `locate.py`, `live/relay.py`, `live/gateway.py`, `live/worker.py` |
+| Position fix and directions (VGGT on a GPU) | Works live through the relay on the GPU cluster: about 4 s on an L4, about 40 s on 32 CPU cores | `locate.py`, `live/relay.py`, `live/gateway.py`, `live/worker.py` |
 | 3D change check, Gaussian splat view | Works on test clips; not tested on a real room of ours | `recon_change.py`, `splat.py`, `live/viewer.html` |
 | Lost items (OWLv2) | Deployed but weak: keys found 7 of 56, no false answers on 324 empty photos | `items.py`, `eval/ITEMS_RESULTS.md` |
 | Rust speed-up of the change check | Merged into the vision branch | `ml/recon_change/rust/` (PR #20, #27) |
@@ -40,7 +40,7 @@ took your morning pills at 08:00" no longer matches the product. Fix the pitch w
 | 12 | **Meta: AI Glasses for Everyone, Everyday** | **Already a fit (main)** | The whole product is a first-person, hands-free use case |
 | 28 | MLH: Best Use of ElevenLabs | Cheap (code exists) | Set a key and a voice, test on the phone |
 | 36 | OpenAI: Best Use of Codex | Probably already a fit | Bartek's `codex/` branches and `AGENTS.md` suggest Codex built the backend and Android app; confirm |
-| 38 | Verda: Verda Compute Track | Cheap | Move the GPU worker from Iridis to a Verda GPU machine |
+| 38 | Verda: Verda Compute Track | Cheap | Move the GPU worker to a Verda GPU machine |
 | 21 | Arduino: Best use of Arduino UNO Q | Cheap, but only with a real sensor | Store and INT8 VGGT already run on the board; the pill-box sensor is missing |
 | 26 | Google DeepMind: Best Use of Gemini API | Cheap to make genuine | Adapter exists; give Gemini a real job |
 | 20 | Aiven: Best Use of Aiven | Cheap | Replica code exists; point it at an Aiven PostgreSQL |
@@ -103,7 +103,7 @@ dashboard shows the day. This is Seb's chosen demo: directions and pills, remind
   the keys is not phone mirroring.
 - Technical execution 25%: strong if it runs on glasses; weak if only in a browser. The brief asks
   for handling of "permissions, errors, performance trade-offs, connectivity, and device state
-  changes". We can show: DAT permission flow, "Iridis unreachable" recovery, GPU vs CPU timings,
+  changes". We can show: DAT permission flow, "GPU cluster unreachable" recovery, GPU vs CPU timings,
   speech fallback when `/speak` fails.
 - Real-world value 25%: good. Use the medication-problem figures already in the README, and the
   carer quote (JUN-16).
@@ -112,7 +112,7 @@ dashboard shows the day. This is Seb's chosen demo: directions and pills, remind
   needs the pass above.
 
 **Risk and fallback.** Risk: no glasses slot, or the display path fails. Fallback: phone on a stand
-with `hud.html`, plus a recorded video on glasses. Risk: Iridis VPN drops (it dropped twice on
+with `hud.html`, plus a recorded video on glasses. Risk: the cluster VPN drops (it dropped twice on
 Friday night) and only Seb's laptop can reach it. Fallback: move the worker to Verda (3.4), and use
 `/hud?demo=1`.
 
@@ -150,10 +150,10 @@ Europe. The slide says why: the 5 GB model does not fit on our laptop [Repo: Seb
 2.4 GB free], and on the UNO Q two frames take 271 s.
 
 **Code.** `live/worker.py` and `live/gateway.py` already run as plain Python; Slurm only starts them
-(`iridis/worker.slurm`). `iridis/setup_env.sh` and `setup_items.sh` build the environment.
+(`cluster/worker.slurm`). `cluster/setup_env.sh` and `setup_items.sh` build the environment.
 
 **Work.** Start a Verda GPU instance. Run the setup scripts there. Start `worker.py` and `gateway.py`
-on the same machine. Point the relay's SSH connection at it. Keep Iridis as the second lane. Write
+on the same machine. Point the relay's SSH connection at it. Keep the current cluster as the second lane. Write
 up the process (the HANDOFF already documents most of it) and post the link in Verda's Discord
 [File: required]. 2-4 h.
 
@@ -164,11 +164,11 @@ up the process (the HANDOFF already documents most of it) and post the link in V
 - Working prototype 25% ("is the process documented?"): strong; the benchmarks and HANDOFF exist.
 - Path to scale 25%: needs one slide (one container per household, scale to zero at night).
 
-**Extra benefit [J].** It removes the biggest demo risks: the university VPN, the 2-hour job cap and
+**Extra benefit [J].** It removes the biggest demo risks: the cluster VPN, the 2-hour job cap and
 "only Seb's laptop can reach the cluster". It also gives an honest privacy line: photos go to a GPU
 in Europe that we control. Verda's own list includes "Keep sensitive data in Europe" [File].
 
-**Risk and fallback.** GPU stock or setup time. Fallback: stay on Iridis and do not claim Verda.
+**Risk and fallback.** GPU stock or setup time. Fallback: stay on the current cluster and do not claim Verda.
 
 ### 3.5 Arduino: Best use of Arduino UNO Q. Owner: Ayman
 

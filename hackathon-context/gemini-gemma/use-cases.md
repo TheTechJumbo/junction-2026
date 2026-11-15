@@ -20,7 +20,7 @@ list or our code, **[J]** where it is judgement. Hours are rough estimates.
   claim a medicine was taken or a door locked. Off unless `GEMINI_API_KEY` and `GEMINI_MODEL` are set.
 - `android/.../MetaGlassesAdapter.kt`: the phone app streams the glasses camera (medium quality,
   15 fps) and can take a photo (`capturePhoto`). Nothing on the phone decides which pictures matter.
-- The vision stage sends every photo to the university GPU cluster. Seb's note on JUN-15: the pitch
+- The vision stage sends every photo to our GPU cluster. Seb's note on JUN-15: the pitch
   can say "processed on a private server, no third-party cloud", not "nothing leaves the home".
 - Gemma is not used anywhere.
 
@@ -42,7 +42,7 @@ time and the bigger ones only run when something happens.
 | # | Use case | Where it runs | What the judge sees | Owner | Effort | Verdict |
 |---|---|---|---|---|---|---|
 | M1 | **Camera gate**: for each glasses frame, a small multimodal Gemma decides "is this a key moment?" (pills in hand, door being locked, keys put down). Only those frames are sent on. This is JUN-21. | Android phone | A split screen: the frames the gate saw, and the few it let through. "38 of 40 frames never left the phone." | Ed | 4-6 h | **Best fit**, if it is fast enough on the phone |
-| M2 | **Same gate, on our GPU** if M1 is too slow on the phone: Gemma vision runs on the cluster or a Verda GPU next to VGGT and labels each photo before it is stored. | Iridis or Verda | Photos are labelled by a model on our own server; no third-party cloud. Also stacks with Verda. | Seb | 2-3 h | **Fallback for M1** |
+| M2 | **Same gate, on our GPU** if M1 is too slow on the phone: Gemma vision runs on the cluster or a Verda GPU next to VGGT and labels each photo before it is stored. | the GPU cluster or Verda | Photos are labelled by a model on our own server; no third-party cloud. Also stacks with Verda. | Seb | 2-3 h | **Fallback for M1** |
 | M3 | **Daily note on the box**: a small text Gemma writes Sara's evening note from the local event log, so the log never leaves the home. | UNO Q | "The note was written on this little board." | Ayman | 3-4 h | Only after the real sensor works; speed unmeasured |
 | M4 | **Offline phrasing**: when the link drops, the phone answers from its cached events with a small Gemma rewording the rule-based answer. | Android phone | Airplane mode on, still answers. | Ed | 3 h | Weak: the rules already give the answer; Gemma only rewords it |
 

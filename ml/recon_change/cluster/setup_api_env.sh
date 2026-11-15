@@ -4,7 +4,7 @@
 # too). The packages are the API's runtime dependencies (pyproject.toml) at the versions in requirements-dev.lock,
 # installed with --no-deps so nothing else comes in: about 80 MB from PyPI (opencv-python-headless ~50 MB, numpy
 # ~16 MB, Pillow and psycopg-binary ~5 MB each). The dev tools (pytest, ruff, jsonschema) are left out.
-#   bash iridis/setup_api_env.sh
+#   bash cluster/setup_api_env.sh
 set -euo pipefail
 API_DIR="${SERVERS_API_DIR:-/scratch/$USER/junction-api}"
 UV="${UV:-$HOME/.local/bin/uv}"

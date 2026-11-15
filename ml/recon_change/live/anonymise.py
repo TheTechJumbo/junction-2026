@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Blur faces and people in a picture before it leaves this laptop (for the relay, see relay.py).
 
-The relay sends phone and glasses frames to Iridis (room maps, splats, item labels). Anyone the
+The relay sends phone and glasses frames to the GPU server (room maps, splats, item labels). Anyone the
 camera caught would go with them. This module finds faces and people on the CPU, blurs them, and
 re-encodes the picture from its pixels, so no metadata goes along (no EXIF, GPS, maker notes,
 thumbnails, XMP, ICC profile or comments; the only header is the plain JFIF one).
@@ -49,7 +49,7 @@ Honest limits. This lowers the chance that someone can be recognised; it is not 
   - A pixelated face still carries a few dozen colours. They cannot be turned back into a face, but
     against a short list of known people they are not nothing: use strength="solid" where that
     matters. Clothes, the room itself and sound are not anonymised.
-  - Blurring on Iridis after the upload would be too late: the picture would already have left the
+  - Blurring on the GPU server after the upload would be too late: the picture would already have left the
     laptop. The stronger option is what YuNet starts: learned detectors shipped with the app and run
     here before sending. A learned person detector (for example a small ONNX model) would need a
     model download that Seb approves first; YuNet needed none because it is already in the repo.

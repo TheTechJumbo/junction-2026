@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Garble the colours of a picture with a secret key, so what reaches Iridis is not a viewable photo, while VGGT
+"""Garble the colours of a picture with a secret key, so what reaches the GPU server is not a viewable photo, while VGGT
 (cameras and depth) and gsplat (training a splat) still work on it. Invertible: the key undoes it exactly (up to 8-bit
 rounding), on the pictures and on a trained splat's colours. See PRIVACY.md for what it does and does not protect.
 
     from garble import Garbler, new_key
-    key = new_key()                          # 32 random bytes, one per session; never written to Iridis
+    key = new_key()                          # 32 random bytes, one per session; never written to the GPU server
     g = Garbler(key)
     hidden = g.garble_bgr(picture)           # uint8 BGR in, uint8 BGR out (same size): about 10 ms at 960 x 720
     back = g.ungarble_bgr(hidden)            # the picture again (within a few levels of 255)

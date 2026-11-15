@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""The relay as it runs on Iridis, in the servers job (iridis/servers.slurm): live/relay.py, unchanged, with three
+"""The relay as it runs on the cluster, in the servers job (cluster/servers.slurm): live/relay.py, unchanged, with three
 things added around it. Every relay option works as before; run it with relay.py's own options:
 
-    RELAY_KEY=... python live/relay_iridis.py --local /scratch/$USER/junction-recon --quick --train-host local --host 0.0.0.0
+    RELAY_KEY=... python live/relay_cluster.py --local /scratch/$USER/junction-recon --quick --train-host local --host 0.0.0.0
 
   RELAY_KEY           the access key, read from the environment and passed as --token. It is not on the command line:
                       on a shared compute node every user can read every process's command line (/proc is not hidden
                       there). It is taken out of the environment before the gateway and the training jobs start.
   --train-host local  recordings are trained (live/remote_train.py) on this node itself: its ssh and scp steps run here
-                      as local commands, so iridis/video_map.slurm is submitted with sbatch from the deployed folder
+                      as local commands, so cluster/video_map.slurm is submitted with sbatch from the deployed folder
                       (BEACON_REMOTE_ROOT), with no SSH hop. The recording's frames are used where the gateway put
                       them (BEACON_ROOT/recordings/ZONE/SESSION/frames), not copied.
   RELAY_ANONYMISE=1   the anonymisation hook: every photo and zip of frames that reaches /locate, /recording, /baseline,
@@ -152,7 +152,7 @@ def main():
     for name in ("API_TOKEN", "VISION_RELAY_KEY"):  # the relay itself reads only EVENT_API_TOKEN
         os.environ.pop(name, None)
     if not token or "--token" in sys.argv:
-        sys.exit("relay_iridis.py: give the access key as RELAY_KEY in the environment, not as --token")
+        sys.exit("relay_cluster.py: give the access key as RELAY_KEY in the environment, not as --token")
     import relay
     train_here()
     if os.environ.get("RELAY_ANONYMISE", "") not in ("", "0"):

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Second looks at weak item candidates, and whole-picture passes with more phrases, on one Iridis
+# Second looks at weak item candidates, and whole-picture passes with more phrases, on one
 # L4 GPU (eval/items_second_look.py). Needs the boxes eval/items_eval.slurm saved, and the CLIP
-# weights from iridis/setup_items_more.sh. Work folder as for items_eval.slurm:
+# weights from cluster/setup_items_more.sh. Work folder as for items_eval.slurm:
 #   cd <project>/items && sbatch code/eval/items_second_look.slurm
 #SBATCH --job-name=jun-items-look
 #SBATCH --account=ecsstudents

@@ -1,8 +1,8 @@
 #!/bin/bash
-# The show-it-once test on one Iridis L4 GPU (eval/items_enrol.py detect). Before it, on a login node:
+# The show-it-once test on one L4 GPU (eval/items_enrol.py detect). Before it, on a login node:
 #   python code/eval/items_enrol.py masks --lvis data/lvis_v1_val.json --set data/lvis/set.json --out out/enrol
 #   python code/eval/items_enrol.py make --img data/lvis/img --rooms out/eval-indoor/raw_tiles1.json --out out/enrol
-# and the CLIP and DINOv2 weights (iridis/setup_items_more.sh <folder> openai/clip-vit-large-patch14 facebook/dinov2-base).
+# and the CLIP and DINOv2 weights (cluster/setup_items_more.sh <folder> openai/clip-vit-large-patch14 facebook/dinov2-base).
 #   cd <project>/items && sbatch code/eval/items_enrol.slurm
 #SBATCH --job-name=jun-items-enrol
 #SBATCH --account=ecsstudents

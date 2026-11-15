@@ -2,12 +2,12 @@
 
 ## What was built (all in `ml/recon_change/`)
 - **Recording to splat**: `live/relay.py` POST /recording (zips of frames, or a whole video up to 4 GB, split into frames
-  on the laptop) -> `live/gateway.py` keeps frames on Iridis -> room map (`live/worker.py recording_map`) ->
-  `live/remote_train.py` submits `iridis/video_map.slurm` -> `video_map.py`: VGGT, untrained splat, gsplat training
+  on the laptop) -> `live/gateway.py` keeps frames on the GPU cluster -> room map (`live/worker.py recording_map`) ->
+  `live/remote_train.py` submits `cluster/video_map.slurm` -> `video_map.py`: VGGT, untrained splat, gsplat training
   (PSNR), fly-through, `views.json`+`depths.bin` (photo playback), labels, `birdseye.jpg/json`. Results are fetched to
   `%TEMP%\beacon-evidence\train-<zone>-<session>-<run>\` and linked as the zone's `trained` (GET /room).
 - **Labels** (`video_map.py label_objects`): OWLv2 proposes, CLIP ViT-L/14 confirms, sizes give the map a scale,
-  sightings grouped in 3D per class. `--labels-only OUT` (re-label, ~1 min on Iridis), `--labels-place OUT` (CPU).
+  sightings grouped in 3D per class. `--labels-only OUT` (re-label, ~1 min on the GPU), `--labels-place OUT` (CPU).
 - **3D page** (`live/viewer.html`): trained splat, label tags, bird's-eye map, playback; with `/care/space`'s matrix
   also the wearer, the places, the way to the chosen place, and "+ Set a place" on the bird's-eye map.
 - **Places without new pictures**: dashboard photo tap (POST /waypoint?live=1, photo in the body), map position
@@ -21,7 +21,7 @@
   resume_training. All 13 `live/test_*.py` passed at 03:30.
 
 ## Current state (03:45)
-- Laptop relay pid 34948, started 03:32 with everything on disk (no pending restart). Iridis workers restarted 02:53
+- Laptop relay pid 34948, started 03:32 with everything on disk (no pending restart). GPU cluster workers restarted 02:53
   with the current worker.py, locate.py, gateway.py.
 - **kitchen** = the 02:59 recording `20261115_025911_0a9dfa62` (1347 frames): room map job `011254-dd435f`, trained
   `train-kitchen-20261115_025911_0a9dfa62-1` (21.97 dB, 42 labels), /care/space fit 0.38 m, 0 named places (a
@@ -35,7 +35,7 @@
   "the most recent map", so kitchen shows 02:59. Ask Seb before switching.
 
 ## How to switch kitchen (02:45, or the glasses venue)
-1. On Iridis, back up `baselines/kitchen` to `/scratch/ase1g23/backup/`, then rebuild its pictures from the session's
+1. On the cluster, back up `baselines/kitchen` to `/scratch/ase1g23/backup/`, then rebuild its pictures from the session's
    frames as `worker.recording_map` does (`pick_keyframes(frames, REC_PICTURES)`, `square_up`, <=518 px, `NN.jpg`).
 2. `POST /map?zone=kitchen` (rebuilds the room map, keeps `trained`).
 3. Stop the relay; in `%TEMP%\beacon-evidence\rooms.json` set kitchen's `trained` to the chosen folder (splat, session,
@@ -45,11 +45,11 @@
 ## Commands
 - Relay (from `ml/recon_change`, keys from `.env.demo`): `EVENT_API_URL=http://127.0.0.1:8000/events
   EVENT_API_TOKEN=$API_TOKEN python -u live/relay.py --host 0.0.0.0 --port 8090 --token $RELAY_KEY --quick
-  --train-host iridis` (or `bash run_demo.sh`); logs `%TEMP%\beacon-relay.log`, `.err.log`. Restart only when GET
+  --train-host cluster` (or `bash run_demo.sh`); logs `%TEMP%\beacon-relay.log`, `.err.log`. Restart only when GET
   /recording shows no zone "receiving". A training that is cut off: set its recordings.json state to "running" while
   the relay is stopped, and it is fetched at start.
-- Workers (VPN): `cd ml/recon_change && bash iridis/deploy_from_laptop.sh` (copies, compiles, restarts both workers).
-- Re-label a finished map: `sbatch iridis/video_map.slurm FRAMES --labels-only trained/NAME/out` (from the root).
+- Workers (VPN): `cd ml/recon_change && bash cluster/deploy_from_laptop.sh` (copies, compiles, restarts both workers).
+- Re-label a finished map: `sbatch cluster/video_map.slurm FRAMES --labels-only trained/NAME/out` (from the root).
 - Fetch a finished training: `python live/remote_train.py - NAME OUT --fetch`.
 
 ## Open bugs and next steps (priority order)

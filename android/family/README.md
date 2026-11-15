@@ -21,7 +21,7 @@ First launch asks for the backend address: `https://host[:port]`, or in debug bu
 (emulator). Change it later from the icon's long-press menu, **Change home address**.
 
 **Live 3D tab:** the laptop relay's caretaker page (`/care`): the room as the Gaussian splat trained
-on Iridis, the wearer moving in it, the named places as labels, and what they are doing (where and
+on the GPU server, the wearer moving in it, the named places as labels, and what they are doing (where and
 since when, what changed in view, reminders, today's timeline). Its first use asks for the relay's
 address, access key and room; touch and hold **Live 3D** (or use the icon's **Live 3D settings**) to
 change them. `RelayProxy` forwards only the page's read-only routes under `/relay/` and adds the key

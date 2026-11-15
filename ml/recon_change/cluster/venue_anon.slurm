@@ -1,6 +1,6 @@
 #!/bin/bash
 # A recording's frames anonymised with OWLv2 and anonymise.py (eval/venue_anon.py), then a splat trained from them
-# (video_map.py), for publishing. On one L4:   sbatch iridis/venue_anon.slurm FRAMES OUT [video_map.py options]
+# (video_map.py), for publishing. On one L4:   sbatch cluster/venue_anon.slurm FRAMES OUT [video_map.py options]
 # OUT/frames: the anonymised frames, OUT/anon_report.json, OUT/out: the splat. Environment as video_map.slurm's.
 #SBATCH --job-name=venue-anon
 #SBATCH --account=ecsstudents

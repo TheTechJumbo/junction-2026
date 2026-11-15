@@ -1,13 +1,13 @@
 #!/bin/bash
-# The demo's two servers on a CPU node of Iridis, wired to each other as run_demo.sh wires them on a laptop:
+# The demo's two servers on a CPU node of the cluster, wired to each other as run_demo.sh wires them on a laptop:
 #   event API  backend/ (port 28000 here), from /scratch/$USER/junction-api, with its own venv .venv-api
-#   relay      live/relay.py through live/relay_iridis.py (port 28090 here), in --local mode: its gateway runs here and
+#   relay      live/relay.py through live/relay_cluster.py (port 28090 here), in --local mode: its gateway runs here and
 #              uses this folder (queue/, baselines/, recordings/), the one the GPU workers (worker.slurm) watch, and
-#              recordings are trained by submitting iridis/video_map.slurm from here (no SSH hop)
-# The laptop runs no server: ml/recon_change/tunnel_iridis.sh forwards its ports 8000 and 8090 to these two through the
+#              recordings are trained by submitting cluster/video_map.slurm from here (no SSH hop)
+# The laptop runs no server: ml/recon_change/tunnel_cluster.sh forwards its ports 8000 and 8090 to these two through the
 # login node, and the phone keeps using http://127.0.0.1:8000 and :8090 over adb reverse.
 #
-#   bash iridis/servers.sh start | stop | restart | status | node      (on the login node, from this folder)
+#   bash cluster/servers.sh start | stop | restart | status | node      (on the login node, from this folder)
 #
 # Each job queues its own replacement when it starts (SERVERS_LEFT more after this one, default 2: three days at most),
 # so after the walltime the servers come back by themselves within a minute or two, on another node; the tunnel
@@ -15,7 +15,7 @@
 # State, on scratch so a replacement carries on with it: the event API's database in $API_DIR/.data, the relay's files
 # (rooms.json, recordings.json, trained splats, the day log, evidence) in relay-state/beacon-evidence.
 # Secrets: API_TOKEN and RELAY_KEY from .servers.env (mode 600, copied from the laptop's .env.demo by
-# tunnel_iridis.sh deploy), passed as environment only, never on a command line (other users on a shared node can read
+# tunnel_cluster.sh deploy), passed as environment only, never on a command line (other users on a shared node can read
 # command lines). Logs in servers-logs/ (mode 700), with the key masked out of the links the relay prints.
 #SBATCH --job-name=jun-servers
 #SBATCH --account=student
@@ -45,7 +45,7 @@ key() { grep -m1 "^$1=" "$ROOT/.servers.env" 2>/dev/null | cut -d= -f2-; }
 API_TOKEN="$(key API_TOKEN)"
 RELAY_KEY="$(key RELAY_KEY)"
 if [ -z "$API_TOKEN" ] || [ -z "$RELAY_KEY" ]; then
-    echo "no API_TOKEN or RELAY_KEY in $ROOT/.servers.env: run tunnel_iridis.sh deploy on the laptop"
+    echo "no API_TOKEN or RELAY_KEY in $ROOT/.servers.env: run tunnel_cluster.sh deploy on the laptop"
     exit 1
 fi
 for port in "$API_PORT" "$RELAY_PORT"; do
@@ -60,7 +60,7 @@ done
 if [ "$LEFT" -gt 0 ] && [ -z "$(squeue -u "$USER" -h -n "$SLURM_JOB_NAME" -t PENDING -o %i)" ]; then
     # shellcheck disable=SC2046
     next=$(env $(compgen -e | grep -E '^(SLURM|SBATCH|SRUN)_' | sed 's/^/-u /') SERVERS_LEFT=$((LEFT - 1)) \
-        sbatch --parsable --job-name="$SLURM_JOB_NAME" --dependency=afterany:"$SLURM_JOB_ID" iridis/servers.slurm)
+        sbatch --parsable --job-name="$SLURM_JOB_NAME" --dependency=afterany:"$SLURM_JOB_ID" cluster/servers.slurm)
     echo "replacement queued: job $next (it queues $((LEFT - 1)) more)"
 fi
 
@@ -77,7 +77,7 @@ relay() {
     cd "$ROOT" || return 1
     TMPDIR="$STATE" RELAY_KEY="$RELAY_KEY" EVENT_API_URL="http://127.0.0.1:$API_PORT/events" EVENT_API_TOKEN="$API_TOKEN" \
     BEACON_REMOTE_ROOT="$ROOT" RELAY_ANONYMISE="${RELAY_ANONYMISE:-0}" \
-        .venv-recon/bin/python -u live/relay_iridis.py --local "$ROOT" --quick --train-host local \
+        .venv-recon/bin/python -u live/relay_cluster.py --local "$ROOT" --quick --train-host local \
         --host 0.0.0.0 --port "$RELAY_PORT"
 }
 

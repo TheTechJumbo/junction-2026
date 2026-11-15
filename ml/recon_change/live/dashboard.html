@@ -223,7 +223,7 @@ async function refreshStatus() {
       const st = w.info ? w.info.settings : null;
       $(d).textContent = `${d.toUpperCase()} worker: ` + (w.running
         ? `${w.info ? w.info.device : 'running'}` + (local ? ' (this laptop)' : '') + (st ? ` · ${st.baseline_frames}+${st.new_frames} frames at ${st.long_side}px` : '')
-        : !s.ok ? `${s.worker_at || 'Iridis'} unreachable` : local && d === 'cpu' ? 'not used on this laptop' : 'offline');
+        : !s.ok ? `${s.worker_at || 'the GPU cluster'} unreachable` : local && d === 'cpu' ? 'not used on this laptop' : 'offline');
       $(d).className = 'pill ' + (w.running ? 'on' : local && d === 'cpu' ? '' : 'off');
     }
     $('places').textContent = (s.zones || []).length ? `baselines: ${s.zones.join(', ')}` : 'no baselines yet';
@@ -547,7 +547,7 @@ async function refreshLog() {
     : /peak GPU memory|loaded|ready/.test(l) ? el('b', { textContent: l }) : l, '\n']));
   $('workerLog').scrollTop = $('workerLog').scrollHeight;
 }
-async function refreshRecording() {  // the room's newest recording: chunks, frames, room map updates, Iridis training
+async function refreshRecording() {  // the room's newest recording: chunks, frames, room map updates, GPU training
   if (!live.zone) return;
   const r = await getOr(`/recording?zone=${encodeURIComponent(live.zone)}`);
   if (!r || !r.ok) { $('recNote').textContent = `No recording of "${live.zone}" yet.`; $('recFacts').replaceChildren(); return; }
@@ -558,7 +558,7 @@ async function refreshRecording() {  // the room's newest recording: chunks, fra
   const items = [
     fact('Frames', `${(r.frames || 0).toLocaleString('en-US')}` + ((r.missing || []).length ? ` (missing parts ${r.missing.join(', ')})` : '')),
     fact('Quick 3D map', `${words[r.map_state] || r.map_state}` + (r.map_updates ? `, updated ${r.map_updates}×` : '') + (r.map_error ? ` (${r.map_error})` : '')),
-    fact('Trained 3D (Iridis)', `${words[tr.state] || tr.state || 'not yet'}` + (tr.state === 'done' ? ` · ${tr.psnr} dB from ${tr.keyframes} pictures` : '')
+    fact('Trained 3D (GPU)', `${words[tr.state] || tr.state || 'not yet'}` + (tr.state === 'done' ? ` · ${tr.psnr} dB from ${tr.keyframes} pictures` : '')
       + (tr.state === 'running' && tr.started_at ? ` since ${t(tr.started_at)}` : '') + (tr.error ? ` (${tr.error})` : '')),
   ];
   if (tr.state === 'done' && tr.splat) {

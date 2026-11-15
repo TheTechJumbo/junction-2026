@@ -1,7 +1,7 @@
 #!/bin/bash
 # A private training (live/private_job.py, PRIVACY.md): sealed, garbled frames in, sealed results out; the key reaches
 # this job's memory through srun (vault.push_key) and is never written down. Submitted by live/private_train.py:
-#   sbatch iridis/private_train.slurm DATA [video_map.py options]
+#   sbatch cluster/private_train.slurm DATA [video_map.py options]
 # Environment as video_map.slurm's (gsplat from GSPLAT_ENV).
 #SBATCH --job-name=private-train
 #SBATCH --account=ecsstudents

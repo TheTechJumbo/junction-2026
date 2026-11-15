@@ -1,5 +1,5 @@
 #!/bin/bash
-# Save the reconstruction of every locate benchmark pass once, on one Iridis L4 GPU, so that
+# Save the reconstruction of every locate benchmark pass once, on one L4 GPU, so that
 # changes to locate.py can be scored afterwards on CPU cores (locate_rescore.slurm).
 # Copy locate_eval.py, run_bench.py, locate.py, recon_change.py and this file into
 # <work folder>/loclook/, then submit from the work folder:

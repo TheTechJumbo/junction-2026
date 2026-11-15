@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The GPU side of a private training (live/private_train.py, PRIVACY.md): Iridis is treated as untrusted. Started by
-iridis/private_train.slurm in DATA = ROOT/private/NAME, which holds frames.zip.jv: anonymised, garbled frames, sealed.
+"""The GPU side of a private training (live/private_train.py, PRIVACY.md): the GPU server is treated as untrusted. Started by
+cluster/private_train.slurm in DATA = ROOT/private/NAME, which holds frames.zip.jv: anonymised, garbled frames, sealed.
 
     python live/private_job.py DATA [video_map.py options]
 

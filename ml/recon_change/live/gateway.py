@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gateway. Runs on the Iridis login node, at the far end of the relay's one SSH connection.
+"""Gateway. Runs on the cluster's login node, at the far end of the relay's one SSH connection.
 
 It speaks a tiny protocol on stdin/stdout so that a single connection carries every request:
 a JSON line, then `size` raw bytes. Requests and replies have the same shape.
@@ -48,7 +48,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(os.environ.get("BEACON_ROOT") or Path(__file__).resolve().parent.parent)
-LOCAL = bool(os.environ.get("BEACON_ROOT"))  # the worker runs on this machine (relay.py --local), not on Iridis
+LOCAL = bool(os.environ.get("BEACON_ROOT"))  # the worker runs on this machine (relay.py --local), not on the cluster
 QUEUE, BASELINES, ENROLLED = ROOT / "queue", ROOT / "baselines", ROOT / "enrolled"
 IN, OUT = sys.stdin.buffer, sys.stdout.buffer
 WAIT_S = 180  # give up on a job after this long
@@ -540,7 +540,7 @@ def handle(req, blob):
             return {"ok": False, "error": f"the local {device.upper()} worker is not running (start it with run_local.sh; "
                                           f"its log is {ROOT / f'worker{lane(device)}.log'})"}, b""
         script = "worker_cpu.slurm" if device == "cpu" else "worker.slurm"
-        return {"ok": False, "error": f"the {device.upper()} worker is not running on Iridis (sbatch iridis/{script})"}, b""
+        return {"ok": False, "error": f"the {device.upper()} worker is not running on the GPU cluster (sbatch cluster/{script})"}, b""
 
     job = ROOT / f"queue{lane(device)}" / f"{time.strftime('%H%M%S')}-{uuid.uuid4().hex[:6]}"
     job.mkdir(parents=True)

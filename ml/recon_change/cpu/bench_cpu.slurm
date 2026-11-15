@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run CPU benchmark settings on an Iridis AMD node (no GPU). Submit from the folder that holds
+# Run CPU benchmark settings on an AMD CPU node of the cluster (no GPU). Submit from the folder that holds
 # recon_change.py and cpu/, with the three test clips in cpu/clips/:
 #   sbatch --cpus-per-task=4 --mem=24G cpu/bench_cpu.slurm 4:cpu/plans/c4_294a.txt
 #   sbatch --cpus-per-task=60 --mem=120G cpu/bench_cpu.slurm 32:cpu/plans/a.txt,cpu/plans/b.txt 16:cpu/plans/c.txt 4:cpu/plans/d.txt

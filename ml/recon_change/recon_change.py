@@ -137,7 +137,7 @@ def _float32_block(block, forward, x, *args, **kwargs):
 
 
 def load_model(model_id="facebook/VGGT-1B", device=None):
-    """Load VGGT. On a GPU this takes 13 to 17 s on Iridis, so a live service does it once.
+    """Load VGGT. On a GPU this takes 13 to 17 s on the GPU cluster, so a live service does it once.
     device: "cuda", "cpu", or None to use a GPU when there is one."""
     import torch
     from vggt.models.vggt import VGGT

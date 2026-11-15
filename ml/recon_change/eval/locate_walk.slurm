@@ -1,5 +1,5 @@
 #!/bin/bash
-# Measure locate.py on TUM RGB-D (a person walking with a handheld camera) on one Iridis L4 GPU.
+# Measure locate.py on TUM RGB-D (a person walking with a handheld camera) on one L4 GPU.
 # In <work folder>/walk/: code/ holds locate_walk_eval.py and the locate.py and recon_change.py
 # under test, data/tum/ holds the recordings (fetch_tum.py), out/plan.json comes from
 #   python code/locate_walk_eval.py --data data/tum --plan out/plan.json --make-plan --shared ...

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Record a room normally, then turn the video into a Gaussian splat on the workers' GPU machine (Iridis; video_map.py
+# Record a room normally, then turn the video into a Gaussian splat on the workers' GPU machine (the cluster; video_map.py
 # there, started by live/remote_train.py), and see it on the laptop.
 #
 #   bash ml/recon_change/video_map.sh glasses [NAME]    the newest video the glasses saved on the phone (Meta AI app)
@@ -7,7 +7,7 @@
 #   bash ml/recon_change/video_map.sh FILE.mp4 [NAME]   a video already on the laptop
 #   STEPS=7000 KEYFRAMES=96 bash ... (the defaults)
 #
-# Needs: the phone on USB (adb on PATH or in ~/platform-tools) for glasses/phone, the VPN for Iridis, and the
+# Needs: the phone on USB (adb on PATH or in ~/platform-tools) for glasses/phone, the VPN for the cluster, and the
 # relay running (run_demo.sh) to show the result. The video and the splats stay out of the repo: on the laptop in the
 # system's temporary folder, on the GPU machine in ROOT/trained/video-NAME. Prints the links to open (the key masked).
 set -euo pipefail
@@ -36,7 +36,7 @@ else
     cp "$SRC" "$LOCAL/video.mp4"
 fi
 OUT="$TMPD/beacon-evidence/video-$NAME"
-echo "training on ${BEACON_TRAIN_HOST:-iridis} with the code deployed for the workers (iridis/deploy_from_laptop.sh)"
+echo "training on ${BEACON_TRAIN_HOST:-cluster} with the code deployed for the workers (cluster/deploy_from_laptop.sh)"
 python -u "$HERE/live/remote_train.py" "$LOCAL/video.mp4" "video-$NAME" "$OUT" --steps "${STEPS:-7000}" --keyframes "${KEYFRAMES:-96}" | tail -12
 echo "renders (the splat next to the photo): $OUT/renders"
 cat "$OUT/summary.json" 2>/dev/null | head -30

@@ -1,6 +1,6 @@
 # How well does "where is the wearer?" work on real photos?
 
-Status: **finished.** 885 scored passes on one NVIDIA L4 (Iridis), none failed.
+Status: **finished.** 885 scored passes on one NVIDIA L4, none failed.
 
 What is measured: `locate.py` (commit ea6b5a6, unchanged) on PASLCD: 10 real scenes (5 indoor,
 5 outdoor), each with a reference capture and a later capture on a different camera path with

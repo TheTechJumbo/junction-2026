@@ -1,7 +1,7 @@
 # Caretaker view (/care) and the Daylight Live 3D tab: hand-off (15 Nov, 03:10)
 
 ## What /care shows (`live/care.html`, read per request)
-- `GET /care?zone=kitchen` (key as `?k=` or `X-Key`). The room as the Gaussian splat trained on Iridis, with the
+- `GET /care?zone=kitchen` (key as `?k=` or `X-Key`). The room as the Gaussian splat trained on the GPU cluster, with the
   wearer in it (head, view cone, line to the floor, today's path with times), named places (yellow tags) and
   recognised things (labels.json, OWLv2 + CLIP). W A S D / arrows move, Q E down/up, Shift faster, drag to look,
   right-drag or two fingers to slide, wheel or pinch to walk, F follow, V their view, R reset, click a tag to fly.

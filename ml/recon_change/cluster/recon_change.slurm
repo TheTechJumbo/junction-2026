@@ -1,7 +1,7 @@
 #!/bin/bash
-# Run the reconstruction + change test on one Iridis L4 GPU (24 GB). Submit from the folder
-# that holds recon_change.py, after `bash iridis/setup_env.sh` has run once on a login node:
-#   sbatch iridis/recon_change.slurm --before before.mp4 --after after.mp4 --out out
+# Run the reconstruction + change test on one L4 GPU (24 GB). Submit from the folder
+# that holds recon_change.py, after `bash cluster/setup_env.sh` has run once on a login node:
+#   sbatch cluster/recon_change.slurm --before before.mp4 --after after.mp4 --out out
 # Arguments after the script name go to recon_change.py.
 #SBATCH --job-name=jun-recon
 #SBATCH --account=ecsstudents

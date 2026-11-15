@@ -29,7 +29,7 @@ Android app is the `API_TOKEN` line in `.env.demo`.
 The models, one of:
 
 - **University cluster** (needs the VPN): on the cluster, in `/scratch/$USER/junction-recon`, run
-  `bash iridis/restart_workers.sh`. Jobs last two hours and a replacement is queued behind each.
+  `bash cluster/restart_workers.sh`. Jobs last two hours and a replacement is queued behind each.
 - **This laptop** (no VPN, no cluster): `bash ml/recon_change/run_demo.sh --local /path/to/python`, where
   that Python has GPU PyTorch and VGGT. See "Models on the laptop" below.
 
@@ -90,7 +90,7 @@ What local mode adds on top (all on by default in `run_local.sh`):
 - Fixes use the pictures that look most like the view (`RECON_PICK=similar`), not ones spread evenly.
 
 The item finder on the laptop: its packages and weights (about 640 MB) in a folder made as in
-`iridis/setup_items.sh` (`pkgs/` and `hf/hub/`), then `RECON_ITEMS_ENV=that/folder bash ml/recon_change/run_demo.sh
+`cluster/setup_items.sh` (`pkgs/` and `hf/hub/`), then `RECON_ITEMS_ENV=that/folder bash ml/recon_change/run_demo.sh
 --local PYTHON`. On the RTX 2060 it took about 70 s per photo on the CPU (the default there) and sat at the
 card's limit on the GPU (`RECON_ITEMS_DEVICE=cuda`), so it is off for the live demo for now.
 

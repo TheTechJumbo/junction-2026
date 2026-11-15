@@ -12,18 +12,18 @@ appeared and what is gone.
 - Between the clips, change one thing: move, add or remove an object at least fist-sized.
 - Nobody walking through the shot.
 
-## Run it on Iridis
+## Run it on the GPU cluster
 
 One-off setup (login node; builds the environment and downloads the 5 GB model to scratch):
 
 ```bash
-bash iridis/setup_env.sh
+bash cluster/setup_env.sh
 ```
 
 Then, from the folder that holds `recon_change.py`:
 
 ```bash
-sbatch iridis/recon_change.slurm --before before.mp4 --after after.mp4 --out out
+sbatch cluster/recon_change.slurm --before before.mp4 --after after.mp4 --out out
 ```
 
 A job takes about 40 seconds on an L4 GPU. The verdict is at the end of `slurm-jun-recon-<id>.out`.
@@ -53,19 +53,19 @@ switches it off.
 | UNCLEAR | Changes found, but the control has false alarms of similar size |
 | UNSTABLE | The reconstruction disagrees with itself: move slower, add light, overlap more |
 
-## Live mode: Iridis through a relay
+## Live mode: the GPU cluster through a relay
 
-Iridis GPU nodes cannot be reached from outside, so live checks go through three small parts:
+The cluster's GPU nodes cannot be reached from outside, so live checks go through three small parts:
 
 ```
 phone or server --HTTP--> relay.py (laptop with the SSH key) --one SSH connection-->
 gateway.py (login node) --files on scratch--> worker.py (GPU job, model kept loaded)
 ```
 
-Start the worker on Iridis. It holds one L4 until it stops, and is capped at 2 hours:
+Start the worker on the GPU cluster. It holds one L4 until it stops, and is capped at 2 hours:
 
 ```bash
-sbatch iridis/worker.slurm
+sbatch cluster/worker.slurm
 ```
 
 Start the relay on the laptop. `--host 0.0.0.0` lets a phone on the same network reach it:
@@ -75,7 +75,7 @@ python live/relay.py --host 0.0.0.0
 ```
 
 It prints the link to open. The link carries an access key, and every request needs it,
-because the relay spends GPU time on your Iridis account.
+because the relay spends GPU time on your GPU cluster account.
 
 **On a phone:** open the link. The page (`live/phone.html`) has two steps: record how a place
 should look, then record it again and check. It shows a headline ("1 thing appeared"), a
@@ -105,7 +105,7 @@ pictures, a 3D view, where the time went, which worker ran it, and the repo's pu
 from the reconstruction on a CPU in about 0.05 s (`splat.py`), with what appeared in green and
 what is gone as red ghosts. `live/viewer.html` shows it in the browser.
 
-**CPU worker:** `sbatch iridis/worker_cpu.slurm` starts the same worker on CPU cores only, with
+**CPU worker:** `sbatch cluster/worker_cpu.slurm` starts the same worker on CPU cores only, with
 its own queue. Send a check to it with `&device=cpu`. It uses fewer frames at full size (8+4
 frames, long side 518). The CPU benchmark measured that setting at 34 s per check on 32 AMD EPYC
 cores, with the same answer as the GPU. Smaller frames are faster, but the depth gets too noisy
@@ -183,10 +183,10 @@ next to it:
   last saw them ("last seen at 10:42 near the pill box, about 2 m to your left"), and the arrow
   points there. This needs the item finder in the worker (`items.py`: an open-vocabulary
   detector, OWLv2, looking for `keys, glasses, wallet, phone, remote control`, or the list in
-  `RECON_ITEMS`). It is not in the base environment: run `bash iridis/setup_items.sh` once on
+  `RECON_ITEMS`). It is not in the base environment: run `bash cluster/setup_items.sh` once on
   a login node (it fills `items-env/` next to `.venv-recon` and leaves `.venv-recon` alone),
   then start the worker as usual; for another folder, `RECON_ITEMS_ENV=<folder> sbatch
-  iridis/worker.slurm`.
+  cluster/worker.slurm`.
   A worker without it still gives fixes, and the answer is "I cannot look for your keys yet."
   The finder says nothing rather than guess: no false detection on 324 photos without the
   items, and it misses most things that are small in the picture, so expect it to see keys
@@ -242,12 +242,12 @@ next to it:
   browser's own voice.
 
 - The video stays on the laptop: the relay picks the sharp frames with OpenCV and sends only
-  those (about 1 MB) to Iridis.
+  those (about 1 MB) to the GPU cluster.
 - Baselines are kept on scratch, so they survive a worker restart.
 - The worker handles one request at a time.
-- Stop the worker with `touch STOP` in the folder on Iridis, or `scancel`.
-- Iridis is only reachable through the university VPN. If the VPN drops, the page shows
-  "Iridis unreachable" and recovers by itself when it is back.
+- Stop the worker with `touch STOP` in the folder on the GPU cluster, or `scancel`.
+- The GPU cluster is only reachable through a VPN. If the VPN drops, the page shows
+  "GPU cluster unreachable" and recovers by itself when it is back.
 
 ## What has been tested
 

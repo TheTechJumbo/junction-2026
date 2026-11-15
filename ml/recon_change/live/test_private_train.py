@@ -66,7 +66,7 @@ def main():
         except vault.VaultError:
             pass
         assert zipfile.ZipFile(io.BytesIO(vault.unseal(vkey, sealed))).read(path.name) == data
-        wrong = garble.Garbler(vkey)  # what Iridis could try with the only key it has
+        wrong = garble.Garbler(vkey)  # what the GPU server could try with the only key it has
         assert garble.psnr(wrong.ungarble_bgr(sent), square) < 15
     print(f"private training (laptop half): frame cropped to 600 px, {report['faces']} face blurred, garbled "
           f"({garble.psnr(sent, square):.1f} dB from the photo), back with the key at {garble.psnr(g.ungarble_bgr(sent), square):.1f} dB "

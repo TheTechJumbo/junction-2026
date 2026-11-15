@@ -7,7 +7,7 @@ JUN-28 remains open pending live acceptance. Use public fixtures only; do not up
 
 Use an existing instance and SSH key. Verda's [GPU setup](https://docs.verda.com/cpu-and-gpu-instances/set-up-a-gpu-instance/) and [SSH connection](https://docs.verda.com/cpu-and-gpu-instances/connecting-to-your-verda-server/) instructions describe access and storage. Provisioning is outside this handoff. Put checkout, venv, queue and baselines on the same persistent filesystem; gateway and worker must use the same checkout root (worker derives its root from its file, gateway defaults to the checkout). Preserve existing baselines and avoid concurrent workers on the same queue. Keep caches persistent; set HF_HOME and RECON_ITEMS_CACHE consistently before setup and startup.
 
-The known worker dependencies are Python 3.12, torch 2.3.1 and torchvision 0.18.1 CUDA 12.1, NumPy <2, and VGGT. The following is a concrete starting recipe for an authorized internet-connected setup, not a claim of a verified Verda installation. Use a dedicated venv, preserve the package inventory (`pip freeze`), pin its resolved transitive packages and model snapshot revisions before a live rollout, and retain that inventory for rollback. These direct pins include the existing Iridis item layer. The VGGT revision is the upstream HEAD inspected on 2026-11-14, not yet validated on this host. Do not run the Iridis setup scripts unchanged on Verda.
+The known worker dependencies are Python 3.12, torch 2.3.1 and torchvision 0.18.1 CUDA 12.1, NumPy <2, and VGGT. The following is a concrete starting recipe for an authorized internet-connected setup, not a claim of a verified Verda installation. Use a dedicated venv, preserve the package inventory (`pip freeze`), pin its resolved transitive packages and model snapshot revisions before a live rollout, and retain that inventory for rollback. These direct pins include the existing cluster item layer. The VGGT revision is the upstream HEAD inspected on 2026-11-14, not yet validated on this host. Do not run the Slurm cluster's setup scripts (`cluster/setup_*.sh`) unchanged on a Verda machine.
 
 ```sh
 cd /absolute/persistent/path/ml/recon_change
@@ -34,12 +34,12 @@ From the persistent checkout's `ml/recon_change` directory, install the pinned e
 export CARGO_HOME=/persistent/cargo RUSTUP_HOME=/persistent/rustup
 export PATH="$CARGO_HOME/bin:$PATH"
 cargo fetch --locked --manifest-path rust/Cargo.toml
-bash iridis/build_rust.sh "$(pwd)/.venv-recon/bin/python"
-source iridis/worker_env.sh
+bash cluster/build_rust.sh "$(pwd)/.venv-recon/bin/python"
+source cluster/worker_env.sh
 export HF_HOME=/persistent/huggingface
 export PYTHONPATH="$(pwd)/items/pkgs${PYTHONPATH:+:$PYTHONPATH}"
 export RECON_ITEMS_CACHE="$(pwd)/items/hf/hub"
-.venv-recon/bin/python iridis/preflight.py
+.venv-recon/bin/python cluster/preflight.py
 ```
 
 Build is offline and locked; versions and equivalence test are printed. Preflight is offline, checks imports, Rust, settings, source and local model snapshot inventory; it is not a GPU, model-load or inference test. Deploy a clean committed checkout; the revision and tracked-dirty flag do not detect untracked files. Resolve failures before changing a running process. Validate the actual loaded model and item settings in `worker.json` and with public fixtures after launch.
@@ -63,16 +63,16 @@ Environment=RECON_ITEMS_LOOK_FROM=0.25
 Environment=RECON_ITEMS_JUDGE=openai/clip-vit-large-patch14
 Environment="RECON_ITEMS_JUDGE_LIMITS=keys=0.7,glasses=0.1,wallet=0.1,phone=0.35,remote control=0.5"
 Environment=RECON_ITEMS_CANDIDATES=0.25
-ExecStartPre=/absolute/persistent/path/ml/recon_change/.venv-recon/bin/python iridis/preflight.py
+ExecStartPre=/absolute/persistent/path/ml/recon_change/.venv-recon/bin/python cluster/preflight.py
 ExecStart=/absolute/persistent/path/ml/recon_change/.venv-recon/bin/python -u live/worker.py
 Restart=on-failure
 [Install]
 WantedBy=default.target
 ```
 
-For the item limit containing a space, quote the entire systemd Environment assignment: `Environment="RECON_ITEMS_JUDGE_LIMITS=keys=0.7,glasses=0.1,wallet=0.1,phone=0.35,remote control=0.5"`. The gateway stays SSH stdio: on the relay machine run `python live/relay.py --ssh-host HOST --remote-root /absolute/persistent/path/ml/recon_change` (without `--remote-root` it retains the legacy Iridis path). Host key verification and authorized SSH account remain host responsibilities. The gateway and worker share checkout queue/baselines. Avoid BEACON_ROOT overrides because the worker uses its checkout root.
+For the item limit containing a space, quote the entire systemd Environment assignment: `Environment="RECON_ITEMS_JUDGE_LIMITS=keys=0.7,glasses=0.1,wallet=0.1,phone=0.35,remote control=0.5"`. The gateway stays SSH stdio: on the relay machine run `python live/relay.py --ssh-host HOST --remote-root /absolute/persistent/path/ml/recon_change` (without `--remote-root` it retains the legacy cluster path). Host key verification and authorized SSH account remain host responsibilities. The gateway and worker share checkout queue/baselines. Avoid BEACON_ROOT overrides because the worker uses its checkout root.
 
-On Iridis, **do not use** the legacy `deploy_from_laptop.sh` or `restart_workers.sh`: the latter holds unrelated jobs. Run preflight first. Inspect `squeue -u "$USER" -o '%i %j %T %Z'` and verify the working directory of each current and queued `jun-worker`/`jun-worker-cpu` job belongs to this checkout. In the authorized live window, cancel only those explicitly verified IDs (`scancel ID ...`); wait until all are absent from `squeue` and verify no worker remains. Remove any stale STOP and STOP-cpu markers only after confirming the old workers exited, then `source iridis/worker_env.sh` and submit one each with `sbatch iridis/worker.slurm` and `sbatch iridis/worker_cpu.slurm`. Inspect job state, logs, worker heartbeat and worker.json before considering replacement jobs. Do not hold or cancel unrelated jobs.
+On the Slurm cluster, **do not use** the legacy `deploy_from_laptop.sh` or `restart_workers.sh`: the latter holds unrelated jobs. Run preflight first. Inspect `squeue -u "$USER" -o '%i %j %T %Z'` and verify the working directory of each current and queued `jun-worker`/`jun-worker-cpu` job belongs to this checkout. In the authorized live window, cancel only those explicitly verified IDs (`scancel ID ...`); wait until all are absent from `squeue` and verify no worker remains. Remove any stale STOP and STOP-cpu markers only after confirming the old workers exited, then `source cluster/worker_env.sh` and submit one each with `sbatch cluster/worker.slurm` and `sbatch cluster/worker_cpu.slurm`. Inspect job state, logs, worker heartbeat and worker.json before considering replacement jobs. Do not hold or cancel unrelated jobs.
 
 For public fixtures, set `RELAY_TOKEN` privately and run `python live/benchmark.py --base-url http://127.0.0.1:8090 --zone PUBLIC_ZONE --check /path/public-check.zip --locate /path/public-locate.jpg --repeat 3 --expect-rust on`. Baseline the public zone beforehand through the existing relay protocol. The tool requests a fresh locate, rejects reused results, writes only timing and selected runtime metadata to stdout, follows no redirects, and sends the token in a header. Check reported `rust_enabled`, device and settings; missing metadata cannot prove which worker ran. Record hardware, software versions, model/cache revisions, frame counts, client wall time and server timings for both Rust on and off. Do not interpret local synthetic timings as live GPU timings.
 
@@ -86,7 +86,7 @@ Apple Silicon Mac, 8 logical CPUs, Python 3.12.13, NumPy 2.5.4, Rust 1.100.0, ma
 
 Implementation reviewed by Astra; Terra implemented and tested in isolated branch `codex/rust-rollout-prep`.
 
-- `bash iridis/build_rust.sh /tmp/junction-rollout-venv/bin/python`: offline locked build, `test_rust.py` and `test_synthetic.py` passed after explicit dependency/cache preparation.
+- `bash cluster/build_rust.sh /tmp/junction-rollout-venv/bin/python`: offline locked build, `test_rust.py` and `test_synthetic.py` passed after explicit dependency/cache preparation.
 - `python -m unittest discover -s ml/recon_change -p test_rollout.py -v`: 7 passed, including missing-helper, missing/ABI-incompatible extension, enabled/disabled modes, absent settings/source/Rust and quoted remote path.
 - `python -m unittest discover -s ml/recon_change/live -p test_benchmark.py -v`: passed, including real local HTTP success, fresh locate, invalid metadata, reused response and redirect refusal.
 - `live/test_care_flow.py`, `live/test_day_flow.py`, `live/test_setup_flow.py`, `live/test_view_gate.py`: passed in the isolated local environment.

@@ -128,7 +128,7 @@ desk 4 m away is 6 pixels wide in the detector's picture.
 ## 1. Does one physical thing become one map object?
 
 Objects are what the map shows: confidence 60 % or more. The verdicts are my own count from the
-contact sheets `objects/out/<scene>/inventory_*.jpg` on Iridis (one tile per object: the best box,
+contact sheets `objects/out/<scene>/inventory_*.jpg` on the cluster (one tile per object: the best box,
 label, confidence, photos that saw it). "Wrong name" includes near misses a user would not find
 by asking (a whiteboard eraser as "stapler", a book as "notebook", a filament spool as "fan", a
 tape dispenser as "tissue box") and a picture of a thing (a cup on a poster).

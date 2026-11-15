@@ -16,7 +16,7 @@ parser.add_argument('--expect-rust', choices=('on', 'off'), default='on')
 args = parser.parse_args()
 errors = []
 for name in ('recon_change.py', 'recon_rust.py', 'locate.py', 'items.py', 'objects.py',
-             'watch.py', 'splat.py', 'live/worker.py', 'live/gateway.py', 'iridis/worker_env.sh'):
+             'watch.py', 'splat.py', 'live/worker.py', 'live/gateway.py', 'cluster/worker_env.sh'):
     if not (ROOT / name).is_file():
         errors.append(f'missing source: {name}')
 for name in ('numpy', 'cv2', 'torch', 'vggt', 'huggingface_hub', 'recon_rust') + (('recon_fast',) if args.expect_rust == 'on' else ()):

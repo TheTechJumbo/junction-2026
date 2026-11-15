@@ -3,7 +3,7 @@
 public: OWLv2 (the item finder's detector, already in the cluster's model cache, nothing downloaded) looks for people,
 heads and faces in the whole frame and in 2 x 2 tiles, as well as anonymise.py's own detectors (YuNet, Haar, HOG).
 Every person box is pixelated on its own to about 8 blocks along its longer side, every head and face box (grown by 35%)
-is filled with one flat colour. Run on the GPU (iridis/venue_anon.slurm), on frames that are already on the cluster.
+is filled with one flat colour. Run on the GPU (cluster/venue_anon.slurm), on frames that are already on the cluster.
 
     python eval/venue_anon.py FRAMES OUT_FRAMES [--score 0.15] [--tiles 2]
 
