@@ -249,7 +249,11 @@ export { shape };
 export class Space {
   constructor(canvas) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', {antialias: true, alpha: true});
+    // Phones: a dense screen does not need antialiasing (each pixel is tiny) and drawing at 1.5x instead
+    // of 3x is less than a quarter of the pixels; the difference is hard to see on a moving 3D view.
+    const dense = (window.devicePixelRatio || 1) >= 2, touch = matchMedia('(pointer: coarse)').matches;
+    this.maxScale = touch ? 1.5 : 2;
+    const gl = canvas.getContext('webgl2', {antialias: !dense, alpha: true, powerPreference: 'low-power'});
     if (!gl) throw new Error('This browser cannot show 3D.');
     this.gl = gl;
     this.program = link(gl, VERTEX, FRAGMENT);
@@ -258,7 +262,8 @@ export class Space {
     this.home = null; this.frame = 0; this.spinning = !this.still;
     this.pointers = new Map(); this.pinch = 0; this.layers = new Map();
     this.listen();
-    this.resize = new ResizeObserver(() => this.draw());
+    document.addEventListener('visibilitychange', () => this.loop()); // stop drawing while hidden, carry on when back
+    this.resize = new ResizeObserver(() => this.requestDraw());
     this.resize.observe(canvas);
   }
   /** Show a parsed mesh, framed to fit. */
@@ -285,6 +290,11 @@ export class Space {
     this.home = {target: lo.map((v, k) => (v + hi[k]) / 2), distance: size * 1.4, size};
     this.reset();
   }
+  /** Draw on the next frame: many changes in one frame (a slider step rebuilds several layers) draw once. */
+  requestDraw() {
+    if (this.pending) return;
+    this.pending = requestAnimationFrame(() => { this.pending = 0; this.draw(); });
+  }
   reset() { if (!this.home) return; Object.assign(this.view, {yaw: 0.6, pitch: 0.55, distance: this.home.distance, target: [...this.home.target]}); this.draw(); }
   /** The whole room from higher up, for floor drawings like the night's trail. */
   overview(pitch = 1.05, scale = 0.8) {
@@ -302,53 +312,74 @@ export class Space {
    * depth false draws it over everything (markers that must not hide behind furniture). */
   layer(name, s, {depth = true, blend = false, wave = 0} = {}) {
     const gl = this.gl;
-    this.dropLayer(name);
-    if (!s || !s.positions.length) { this.draw(); return; }
+    if (!s || !s.positions.length) { this.dropLayer(name); this.requestDraw(); return; }
     const positions = Float32Array.from(s.positions), colours = Float32Array.from(s.colours);
     const alphas = s.alphas?.length === positions.length / 3 ? Float32Array.from(s.alphas) : new Float32Array(positions.length / 3).fill(1);
-    const normals = new Float32Array(positions.length); for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
-    const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
-    const buffers = [['position', positions], ['normal', normals], ['colour', colours]].map(([attr, data]) => {
-      const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
-      const at = gl.getAttribLocation(this.program, attr); gl.enableVertexAttribArray(at); gl.vertexAttribPointer(at, 3, gl.FLOAT, false, 0, 0);
-      return buffer;
-    });
-    const alphaBuffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, alphaBuffer); gl.bufferData(gl.ARRAY_BUFFER, alphas, gl.DYNAMIC_DRAW);
-    const at = gl.getAttribLocation(this.program, 'alpha'); gl.enableVertexAttribArray(at); gl.vertexAttribPointer(at, 1, gl.FLOAT, false, 0, 0);
-    buffers.push(alphaBuffer);
-    gl.bindVertexArray(null);
-    this.layers.set(name, {vao, buffers, count: positions.length / 3, depth, blend, wave: this.still ? 0 : wave});
-    this.draw(); this.loop();
+    // A layer keeps its vertex array and buffers: a slider step refills them instead of making new ones
+    // (no garbage for the phone to collect while a night plays). Overlays all face up, so their normal is
+    // one constant (set in draw), not a buffer.
+    let l = this.layers.get(name);
+    if (!l) {
+      const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+      const buffers = [['position', 3], ['colour', 3], ['alpha', 1]].map(([attr, size]) => {
+        const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        const at = gl.getAttribLocation(this.program, attr); gl.enableVertexAttribArray(at); gl.vertexAttribPointer(at, size, gl.FLOAT, false, 0, 0);
+        return buffer;
+      });
+      gl.bindVertexArray(null);
+      l = {vao, buffers};
+      this.layers.set(name, l);
+    }
+    [positions, colours, alphas].forEach((data, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, l.buffers[i]); gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW); });
+    Object.assign(l, {count: positions.length / 3, depth, blend, wave: this.still ? 0 : wave});
+    this.requestDraw(); this.loop();
+  }
+  /** Where a point (viewer axes) is on the canvas, in CSS pixels, as last drawn; null when behind the eye. */
+  project([x, y, z]) {
+    const m = this.viewProjection; if (!m) return null;
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15]; if (w <= 0.01) return null;
+    const cx = (m[0] * x + m[4] * y + m[8] * z + m[12]) / w, cy = (m[1] * x + m[5] * y + m[9] * z + m[13]) / w;
+    return [(cx * 0.5 + 0.5) * this.canvas.clientWidth, (0.5 - cy * 0.5) * this.canvas.clientHeight];
   }
   dropLayer(name) {
     const l = this.layers.get(name); if (!l) return;
     l.buffers.forEach(b => this.gl.deleteBuffer(b)); this.gl.deleteVertexArray(l.vao); this.layers.delete(name);
   }
-  clearLayers() { [...this.layers.keys()].forEach(name => this.dropLayer(name)); this.draw(); }
-  turn(dYaw, dPitch) { this.view.yaw += dYaw; this.view.pitch = Math.min(1.45, Math.max(-0.2, this.view.pitch + dPitch)); this.draw(); }
-  zoom(factor) { if (!this.home) return; this.view.distance = Math.min(this.home.size * 4, Math.max(this.home.size * 0.15, this.view.distance * factor)); this.draw(); }
+  clearLayers() { [...this.layers.keys()].forEach(name => this.dropLayer(name)); this.requestDraw(); }
+  turn(dYaw, dPitch) { this.view.yaw += dYaw; this.view.pitch = Math.min(1.45, Math.max(-0.2, this.view.pitch + dPitch)); this.requestDraw(); }
+  zoom(factor) { if (!this.home) return; this.view.distance = Math.min(this.home.size * 4, Math.max(this.home.size * 0.15, this.view.distance * factor)); this.requestDraw(); }
   start() { this.running = true; this.loop(); }
   stop() { this.running = false; cancelAnimationFrame(this.frame); }
   loop() {
     cancelAnimationFrame(this.frame);
     const waving = [...this.layers.values()].some(l => l.wave > 0);
-    if (!this.running || (!this.spinning && !waving)) return;
-    this.frame = requestAnimationFrame(() => { if (this.spinning) this.view.yaw += 0.0025; this.draw(); this.loop(); });
+    if (!this.running || document.hidden || (!this.spinning && !waving)) return;
+    this.frame = requestAnimationFrame(time => {
+      // A slow sway needs no more than 30 frames a second: half the work (and battery) on a phone.
+      if (this.spinning || time - (this.lastFrame || 0) >= 32) {
+        this.lastFrame = time;
+        if (this.spinning) this.view.yaw += 0.0025;
+        this.draw();
+      }
+      this.loop();
+    });
   }
   draw() {
     const gl = this.gl, canvas = this.canvas;
-    const scale = Math.min(window.devicePixelRatio || 1, 2);
+    const scale = Math.min(window.devicePixelRatio || 1, this.maxScale);
     const width = Math.max(1, Math.round(canvas.clientWidth * scale)), height = Math.max(1, Math.round(canvas.clientHeight * scale));
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
     gl.viewport(0, 0, width, height); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.vao) return;
     const {yaw, pitch, distance, target} = this.view;
     const eye = [target[0] + distance * Math.cos(pitch) * Math.sin(yaw), target[1] + distance * Math.sin(pitch), target[2] + distance * Math.cos(pitch) * Math.cos(yaw)];
-    const near = Math.max(0.01, distance - this.home.size), far = distance + this.home.size * 2;
+    const reach = this.reach || 1; // how far past the mesh there is something to draw (a house around the room)
+    const near = Math.max(0.01, distance - this.home.size * reach), far = distance + this.home.size * 2 * reach;
     const aspect = width / height;
     const fovy = aspect < 1 ? 2 * Math.atan(Math.tan(0.4) / aspect) : 0.8; // a tall phone screen keeps the room's width in view
     const viewProjection = multiply(perspective(fovy, aspect, near, far), lookAt(eye, target, [0, 1, 0]));
     const toEye = normalise(eye.map((v, k) => v - target[k]));
+    this.viewProjection = viewProjection;
     gl.useProgram(this.program); gl.enable(gl.DEPTH_TEST);
     gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'viewProjection'), false, viewProjection);
     gl.uniform3fv(gl.getUniformLocation(this.program, 'light'), normalise([toEye[0] + 0.4, 1.2, toEye[2] + 0.2]));
@@ -363,6 +394,7 @@ export class Space {
     gl.bindVertexArray(this.vao); gl.drawElements(gl.TRIANGLES, this.count, this.indexType, 0);
     gl.disable(gl.CULL_FACE);
     gl.uniform1f(glow, 1);
+    gl.vertexAttrib3f(gl.getAttribLocation(this.program, 'normal'), 0, 1, 0); // overlays all face up
     // Solid layers, then see-through ones (blended, depth-tested but not hiding each other), then markers drawn over everything.
     const order = l => (!l.depth ? 2 : l.blend ? 1 : 0);
     for (const l of [...this.layers.values()].sort((a, b) => order(a) - order(b))) {

@@ -27,6 +27,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="junctionglasses" />
             </intent-filter>
+            <!-- Pairing links: daylight://pair?c=DL1-... (the site's pairing page, or live/share.py) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="daylight" android:host="pair" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

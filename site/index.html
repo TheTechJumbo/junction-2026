@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daylight · memory, with receipts</title>
+<meta name="description" content="Daylight turns Ray-Ban Meta glasses into a calm safety net for people with memory problems, and for the families who look out for them.">
+<meta name="theme-color" content="#0b1029">
+<link rel="icon" href="dashboard/themes/kaamos/assets/mark.svg" type="image/svg+xml">
+<style>
+  @font-face { font-family: "Josefin Sans"; font-weight: 300; font-display: swap; src: url("dashboard/themes/kaamos/fonts/josefin-sans-latin-300-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Josefin Sans"; font-weight: 600; font-display: swap; src: url("dashboard/themes/kaamos/fonts/josefin-sans-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Albert Sans"; font-weight: 400; font-display: swap; src: url("dashboard/themes/kaamos/fonts/albert-sans-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Albert Sans"; font-weight: 600; font-display: swap; src: url("dashboard/themes/kaamos/fonts/albert-sans-latin-600-normal.woff2") format("woff2"); }
+  :root {
+    --sky: #0b1029; --hour: #1d2a4a; --wall: #121a35; --pane: #18213f; --line: #3b4763; --snow: #eef2f6; --soft: #b3bfd4;
+    --lamp: #f2b04a; --lamp-deep: #d9822b; --rose: #d99a9e; --green: #7fd6a0;
+    --display: "Josefin Sans", "Avenir Next", sans-serif; --text: "Albert Sans", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; color: var(--snow); font: 17px/1.55 var(--text); background: var(--wall); }
+  a { color: inherit; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  h1, h2, h3 { font-family: var(--display); font-weight: 600; line-height: 1.05; margin: 0; letter-spacing: .005em; }
+  .eyebrow { font: 600 13px/1 var(--text); letter-spacing: .14em; text-transform: uppercase; color: var(--lamp); }
+  .button { display: inline-flex; align-items: center; gap: 10px; padding: 14px 22px; border-radius: 999px; text-decoration: none; font-weight: 600; border: 1px solid var(--line); transition: transform .15s, background .2s; }
+  .button:hover { transform: translateY(-1px); background: rgba(255,255,255,.06); }
+  .button.primary { background: var(--lamp); color: #1b1407; border-color: var(--lamp); }
+  .button.primary:hover { background: #f6c06a; }
+  .button svg { width: 20px; height: 20px; }
+  :focus-visible { outline: 3px solid var(--lamp); outline-offset: 3px; }
+
+  /* ---------- Hero: the polar night, a lit window, the glasses ---------- */
+  .hero { position: relative; overflow: hidden; padding: 28px 0 90px; background:
+      radial-gradient(60% 50% at 80% 20%, rgba(242,176,74,.18), transparent 70%),
+      radial-gradient(90% 70% at 10% 0%, #22305a 0%, transparent 60%), linear-gradient(var(--sky), var(--wall)); }
+  .stars { position: absolute; inset: 0; background-image: radial-gradient(1.5px 1.5px at 10% 20%, #fff8, transparent), radial-gradient(1px 1px at 30% 8%, #fff6, transparent),
+      radial-gradient(1.5px 1.5px at 55% 15%, #fff7, transparent), radial-gradient(1px 1px at 72% 30%, #fff5, transparent), radial-gradient(1px 1px at 88% 10%, #fff8, transparent),
+      radial-gradient(1px 1px at 20% 40%, #fff4, transparent), radial-gradient(1.5px 1.5px at 42% 32%, #fff5, transparent); opacity: .8; pointer-events: none; }
+  nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; position: relative; }
+  .brand { display: flex; align-items: center; gap: 12px; font: 600 22px/1 var(--display); text-decoration: none; }
+  .brand img { width: 40px; height: 40px; border-radius: 11px; }
+  nav .links { display: flex; gap: 22px; font-size: 15px; color: var(--soft); }
+  nav .links a { text-decoration: none; } nav .links a:hover { color: var(--snow); }
+  .hero-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 40px; align-items: center; margin-top: 64px; position: relative; }
+  .hero h1 { font-size: clamp(44px, 6.4vw, 84px); margin: 16px 0 20px; }
+  .hero h1 em { font-style: normal; color: var(--lamp); }
+  .hero p.lead { font-size: 20px; color: var(--soft); max-width: 32em; margin: 0 0 30px; }
+  .ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+  .glasses { position: relative; }
+  .glasses svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 30px 40px rgba(0,0,0,.45)); }
+  .hud-arrow { transform-origin: 0 0; animation: point 5s ease-in-out infinite; }
+  @keyframes point { 0%, 100% { transform: rotate(-14deg); } 50% { transform: rotate(10deg); } }
+  .say { position: relative; margin: -6px auto 0; width: fit-content; background: rgba(13,20,48,.88); border: 1px solid var(--line); border-radius: 18px; padding: 12px 16px; max-width: 78%; backdrop-filter: blur(6px); }
+  .say b { color: var(--lamp); font-weight: 600; }
+  .say small { display: block; color: var(--soft); font-size: 13px; }
+
+  section { padding: 84px 0; }
+  section h2 { font-size: clamp(32px, 4vw, 48px); margin: 12px 0 14px; }
+  section .sub { color: var(--soft); max-width: 40em; margin: 0 0 36px; font-size: 18px; }
+
+  /* ---------- What it does ---------- */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card { background: linear-gradient(#1d2748, var(--pane)); border: 1px solid rgba(59,71,99,.6); border-radius: 22px; padding: 26px; }
+  .card .icon { width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; background: rgba(242,176,74,.14); color: var(--lamp); margin-bottom: 18px; }
+  .card .icon svg { width: 28px; height: 28px; }
+  .card h3 { font-size: 24px; margin-bottom: 8px; }
+  .card p { color: var(--soft); margin: 0; }
+  .card q { display: block; margin-top: 14px; color: var(--snow); font-style: italic; quotes: "\201C" "\201D"; }
+
+  /* ---------- Your glasses (the picker, as in the apps) ---------- */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+  .phone { width: min(360px, 100%); margin: 0 auto; border-radius: 42px; padding: 14px; background: #02040a; box-shadow: 0 0 0 2px #1d2338, 0 40px 80px rgba(0,0,0,.5); }
+  .screen { border-radius: 30px; background: #0f1830; padding: 22px 18px 26px; }
+  .screen h4 { font: 700 26px/1 var(--text); margin: 0 0 6px; }
+  .screen .hint { color: #a0b0cc; font-size: 13px; margin: 0 0 16px; }
+  .pair { display: flex; align-items: center; gap: 12px; background: #1d2a4a; border-radius: 16px; padding: 13px 14px; margin-bottom: 9px; }
+  .pair i { width: 11px; height: 11px; border-radius: 50%; background: #a0b0cc; flex: none; }
+  .pair.live i { background: var(--green); box-shadow: 0 0 0 0 rgba(127,214,160,.6); animation: live 2s infinite; }
+  @keyframes live { 70% { box-shadow: 0 0 0 9px rgba(127,214,160,0); } 100% { box-shadow: 0 0 0 0 rgba(127,214,160,0); } }
+  .pair b { display: block; font-size: 16px; }
+  .pair span { color: #a0b0cc; font-size: 12.5px; }
+  .pair.off { opacity: .5; }
+  .add { text-align: center; background: var(--lamp); color: #0f1830; font-weight: 700; border-radius: 16px; padding: 13px; margin-top: 12px; }
+  .steps { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  .steps li { counter-increment: s; position: relative; padding: 0 0 22px 56px; }
+  .steps li::before { content: counter(s); position: absolute; left: 0; top: -2px; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--lamp); color: #1b1407; font: 700 17px/1 var(--display); }
+  .steps li > b { display: block; font-size: 19px; margin-bottom: 2px; }
+  .steps span { color: var(--soft); }
+  code { font: 14px/1.4 ui-monospace, Consolas, monospace; background: rgba(255,255,255,.07); padding: 2px 6px; border-radius: 6px; }
+
+  /* ---------- Try it ---------- */
+  .tries { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .try { display: flex; flex-direction: column; text-decoration: none; background: var(--pane); border: 1px solid rgba(59,71,99,.6); border-radius: 22px; overflow: hidden; transition: transform .2s, border-color .2s; }
+  .try:hover { transform: translateY(-3px); border-color: var(--lamp); }
+  .try .art { height: 170px; display: grid; place-items: center; background: radial-gradient(circle at 50% 120%, rgba(242,176,74,.25), transparent 60%), #141d3a; }
+  .try .art svg { width: 70%; height: 80%; }
+  .try div.body { padding: 20px 22px 24px; }
+  .try h3 { font-size: 22px; margin-bottom: 6px; }
+  .try p { margin: 0; color: var(--soft); font-size: 15.5px; }
+  .try .go { margin-top: 12px; color: var(--lamp); font-weight: 600; font-size: 15px; }
+
+  /* ---------- Get the apps ---------- */
+  .get { background: radial-gradient(70% 90% at 50% 0%, rgba(242,176,74,.14), transparent 70%), var(--sky); border-radius: 32px; padding: 54px 40px; text-align: center; }
+  .apks { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 34px auto 18px; max-width: 820px; text-align: left; }
+  .apk { background: var(--pane); border: 1px solid var(--line); border-radius: 22px; padding: 24px; display: flex; flex-direction: column; gap: 10px; }
+  .apk h3 { font-size: 24px; }
+  .apk p { margin: 0; color: var(--soft); font-size: 15.5px; flex: 1; }
+  .apk .button { align-self: flex-start; }
+  .fine { color: var(--soft); font-size: 14px; max-width: 46em; margin: 0 auto; }
+
+  .trust { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .trust div { border-top: 2px solid var(--lamp); padding-top: 14px; }
+  .trust b { display: block; font-family: var(--display); font-size: 20px; margin-bottom: 6px; }
+  .trust span { color: var(--soft); font-size: 15px; }
+  footer { padding: 40px 0 60px; color: var(--soft); font-size: 14px; border-top: 1px solid rgba(59,71,99,.5); }
+  footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  @media (max-width: 860px) {
+    .hero-grid, .split, .apks { grid-template-columns: 1fr; }
+    .cards, .tries { grid-template-columns: 1fr; }
+    .trust { grid-template-columns: 1fr 1fr; }
+    nav .links { display: none; }
+    .get { padding: 40px 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .hud-arrow, .pair.live i { animation: none; } html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="stars"></div>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="#"><img src="dashboard/themes/kaamos/assets/mark.svg" alt="">Daylight</a>
+      <div class="links"><a href="#what">What it does</a><a href="#glasses">Your glasses</a><a href="#try">Try it</a><a href="#get">Get the apps</a></div>
+    </nav>
+    <div class="hero-grid">
+      <div>
+        <span class="eyebrow">For Ray-Ban Meta glasses</span>
+        <h1>Memory, <em>with receipts.</em></h1>
+        <p class="lead">Daylight turns everyday AI glasses into a calm safety net for people with memory problems. They ask; the glasses answer from what the home actually recorded, and point the way. The family sees the day, without having to call.</p>
+        <div class="ctas">
+          <a class="button primary" href="#get"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3v11.2l4.1-4.1 1.4 1.4L12 17l-5.5-5.5 1.4-1.4 4.1 4.1V3zM5 19h14v2H5z"/></svg>Get the apps</a>
+          <a class="button" href="#try">Try it in your browser</a>
+        </div>
+      </div>
+      <div class="glasses" aria-hidden="true">
+        <svg viewBox="0 112 500 190">
+          <defs>
+            <linearGradient id="lens" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2a3a66"/><stop offset=".55" stop-color="#121a35"/><stop offset="1" stop-color="#0b1029"/></linearGradient>
+            <linearGradient id="frame" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b2b30"/><stop offset="1" stop-color="#0d0d10"/></linearGradient>
+            <radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#f2b04a" stop-opacity=".5"/><stop offset="1" stop-color="#f2b04a" stop-opacity="0"/></radialGradient>
+          </defs>
+          <path d="M40 150 Q20 150 18 175" stroke="#111" stroke-width="12" fill="none" stroke-linecap="round"/>
+          <path d="M460 150 Q480 150 482 175" stroke="#111" stroke-width="12" fill="none" stroke-linecap="round"/>
+          <path d="M40 135 h175 q20 0 20 22 v52 q0 70 -75 70 h-40 q-80 0 -86 -76 z" fill="url(#frame)" stroke="#6b7390" stroke-opacity=".7" stroke-width="2"/>
+          <path d="M265 135 h175 q6 0 6 22 l-6 52 q-6 76 -86 76 h-40 q-75 0 -75 -70 v-58 q0 -22 26 -22 z" fill="url(#frame)" stroke="#6b7390" stroke-opacity=".7" stroke-width="2"/>
+          <path d="M215 160 q35 -22 70 0" stroke="#24242a" stroke-width="16" fill="none"/><path d="M215 152 q35 -22 70 0" stroke="#6b7390" stroke-opacity=".6" stroke-width="2" fill="none"/>
+          <path d="M55 150 h150 q14 0 14 16 v42 q0 58 -62 58 h-34 q-66 0 -72 -62 z" fill="url(#lens)"/>
+          <path d="M295 150 h150 l-4 54 q-6 62 -72 62 h-34 q-62 0 -62 -58 v-42 q0 -16 22 -16 z" fill="url(#lens)"/>
+          <path d="M75 158 l55 0 l-42 72" stroke="#fff" stroke-opacity=".08" stroke-width="16" fill="none"/><path d="M310 158 l30 0 l-25 40" stroke="#fff" stroke-opacity=".06" stroke-width="12" fill="none"/>
+          <!-- the display: an arrow to the pill box, 2.4 m -->
+          <circle cx="370" cy="200" r="60" fill="url(#glow)"/>
+          <g transform="translate(370 196)"><g class="hud-arrow"><path d="M0 -30 L16 4 L5 0 L5 26 L-5 26 L-5 0 L-16 4 Z" fill="#f2b04a"/></g></g>
+          <text x="370" y="250" fill="#f2b04a" font-family="Josefin Sans, sans-serif" font-weight="600" font-size="20" text-anchor="middle">2.4 m</text>
+          <circle cx="440" cy="128" r="4" fill="#7fd6a0"/>
+        </svg>
+        <div class="say"><b>“Did I take my pills?”</b><br>The pill box was opened at 08:02. I can't confirm the pills were taken. <small>An answer from what the home recorded, never a guess.</small></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="what">
+  <div class="wrap">
+    <span class="eyebrow">What it does</span>
+    <h2>Help in the moment. Peace of mind at home.</h2>
+    <p class="sub">The person wears the glasses and just asks. A few cheap sensors at home make sure the important things are noticed. The family gets a calm day, and an alert only when something is really off.</p>
+    <div class="cards">
+      <div class="card"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M8 8V6h8v2M12 11v5M9.5 13.5h5"/></svg></div>
+        <h3>Did I take my pills?</h3><p>Answered from when the pill box was really opened, with the time. When it is due, a reminder; the arrow shows the way to the box.</p><q>The pill box was opened at 08:02.</q></div>
+      <div class="card"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg></div>
+        <h3>Where are my keys?</h3><p>The glasses remember where things were last seen, and the display points there: around the furniture, in metres.</p><q>On the hall table, 3 m. Turn left.</q></div>
+      <div class="card"><div class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></div>
+        <h3>A quiet night, or not</h3><p>The family app replays the night in 3D: up twice, 17 minutes out of bed, the front door at 03:11. Trip hazards on the way are marked.</p><q>Up twice · bathroom, front door.</q></div>
+    </div>
+  </div>
+</section>
+
+<section id="glasses" style="background: linear-gradient(transparent, rgba(11,16,41,.6), transparent)">
+  <div class="wrap split">
+    <div>
+      <span class="eyebrow">Your glasses</span>
+      <h2>Pick a pair. Watch it live.</h2>
+      <p class="sub">Both apps list the glasses they can work with. Right now one pair is live: <b>Seb's Ray-Ban Meta</b>, worn at Junction 2026. Any other Ray-Ban Meta glasses join with a pairing code.</p>
+      <ol class="steps">
+        <li><b>Pair the glasses</b><span>In the Meta AI app, as usual. Daylight's glasses app connects through Meta's Device Access Toolkit.</span></li>
+        <li><b>Share them</b><span>The home's vision relay prints a pairing code and link (<code>live/share.py</code>). The code is watch-only: it shows the display, never the camera.</span></li>
+        <li><b>Watch</b><span>In the family app, tap <b>Glasses</b>, choose the pair and enter its code: you see what the glasses show, as it happens.</span></li>
+      </ol>
+    </div>
+    <div class="phone" aria-label="The Glasses list in the family app">
+      <div class="screen">
+        <h4>Glasses</h4>
+        <p class="hint">Watch what a pair of glasses shows, live.</p>
+        <div class="pair live"><i></i><div><b>Seb's Ray-Ban Meta</b><span>Junction 2026 team · Live</span></div></div>
+        <div class="pair off"><i></i><div><b>Anna's Ray-Ban Meta</b><span>Example household · Not set up yet</span></div></div>
+        <div class="pair off"><i></i><div><b>Memory clinic loan pair</b><span>Pilot partner · Not set up yet</span></div></div>
+        <div class="pair off"><i></i><div><b>Meta Ray-Ban Display</b><span>Next pair · Coming soon</span></div></div>
+        <div class="add">+ Add Meta glasses</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="try">
+  <div class="wrap">
+    <span class="eyebrow">Try it now</span>
+    <h2>No glasses needed.</h2>
+    <p class="sub">Three working pieces of Daylight, in your browser, with example data.</p>
+    <div class="tries">
+      <a class="try" href="glasses/hud.html?demo=1">
+        <div class="art"><svg viewBox="0 0 120 100" aria-hidden="true"><rect x="10" y="5" width="100" height="90" rx="10" fill="#000"/><path d="M60 22 L72 50 L64 47 L64 70 L56 70 L56 47 L48 50 Z" fill="#f2b04a"/><text x="60" y="88" fill="#f2b04a" font-size="11" text-anchor="middle" font-family="sans-serif" font-weight="700">2.4 m</text></svg></div>
+        <div class="body"><h3>The glasses display</h3><p>What the wearer sees: the arrow to the pill box, the answers, the reminders. Walk the sample room with the arrow keys.</p><div class="go">Open the display →</div></div></a>
+      <a class="try" href="dashboard/?demo">
+        <div class="art"><svg viewBox="0 0 120 100" aria-hidden="true"><rect x="14" y="10" width="92" height="80" rx="10" fill="#18213f" stroke="#3b4763"/><rect x="24" y="22" width="44" height="7" rx="3" fill="#f2b04a"/><rect x="24" y="36" width="72" height="5" rx="2" fill="#b3bfd4" opacity=".5"/><rect x="24" y="48" width="60" height="5" rx="2" fill="#b3bfd4" opacity=".5"/><circle cx="30" cy="68" r="5" fill="#7fd6a0"/><rect x="40" y="65" width="50" height="6" rx="3" fill="#b3bfd4" opacity=".4"/></svg></div>
+        <div class="body"><h3>The family app</h3><p>An example day at Anna's: the pill box, the front door, the night in 3D, and the calm summary her daughter reads.</p><div class="go">Open the example day →</div></div></a>
+      <a class="try" href="demo/splat-vs-mesh/?scene=room">
+        <div class="art"><svg viewBox="0 0 120 100" aria-hidden="true"><g fill="#f2b04a"><rect x="20" y="58" width="14" height="22"/><rect x="36" y="46" width="14" height="34" opacity=".8"/><rect x="52" y="64" width="14" height="16" opacity=".6"/><rect x="68" y="38" width="14" height="42" opacity=".9"/><rect x="84" y="54" width="14" height="26" opacity=".7"/></g><g fill="#eef2f6" opacity=".5"><circle cx="28" cy="30" r="3"/><circle cx="44" cy="22" r="2"/><circle cx="60" cy="28" r="4"/><circle cx="76" cy="18" r="2"/><circle cx="92" cy="26" r="3"/></g></svg></div>
+        <div class="body"><h3>From photos to a 3D home</h3><p>Real photos, the Gaussian splat made from them, and the block model the family app draws, side by side.</p><div class="go">Open the 3D demo →</div></div></a>
+    </div>
+  </div>
+</section>
+
+<section id="get">
+  <div class="wrap">
+    <div class="get">
+      <span class="eyebrow">Get the apps · Android</span>
+      <h2>Two apps. One calm day.</h2>
+      <div class="apks">
+        <div class="apk"><h3>Daylight for the wearer</h3><p>Runs the Ray-Ban Meta glasses: ask with your voice, hear the answer, follow the arrow. Pick your glasses, and their vision relay, with a code.</p>
+          <a class="button primary" href="downloads/daylight-glasses.apk" download><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3v11.2l4.1-4.1 1.4 1.4L12 17l-5.5-5.5 1.4-1.4 4.1 4.1V3zM5 19h14v2H5z"/></svg>Download APK</a></div>
+        <div class="apk"><h3>Daylight for the family</h3><p>The day at home, the night in 3D, and <b>Glasses</b>: watch Seb's pair live with its code, or add any Meta glasses.</p>
+          <a class="button primary" href="downloads/daylight-family.apk" download><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3v11.2l4.1-4.1 1.4 1.4L12 17l-5.5-5.5 1.4-1.4 4.1 4.1V3zM5 19h14v2H5z"/></svg>Download APK</a></div>
+      </div>
+      <p class="fine">Hackathon builds for Android 12 and later, built from <a href="https://github.com/TheTechJumbo/junction-2026">our code</a> on every change. Your phone will ask to allow installs from your browser. The wearer app needs Ray-Ban Meta glasses and the Meta AI app; the family app works on its own (tap Example to see a day).</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="eyebrow">Built to be trusted</span>
+    <h2 style="margin-bottom:30px">Observations, not guesses.</h2>
+    <div class="trust">
+      <div><b>Receipts, not claims</b><span>"The pill box was opened at 08:02", never "you took your pills". Dosing questions are refused.</span></div>
+      <div><b>Faces blurred at home</b><span>Photos are blurred on the home's own computer before anything else sees them.</span></div>
+      <div><b>Watch-only sharing</b><span>A shared code shows the glasses display. It cannot see the camera, ask questions or change anything.</span></div>
+      <div><b>Says nothing rather than guess</b><span>When it isn't sure where the keys are, it says so.</span></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Daylight · built at Junction 2026 by Ed, Seb, Bartek and Ayman.</span>
+    <span>The 3D demo's real room: Mip-NeRF 360 (Barron et al., 2022). Example data is made up.</span>
+  </div>
+</footer>
+</body>
+</html>

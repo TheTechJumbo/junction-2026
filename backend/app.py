@@ -1,5 +1,6 @@
 """Authenticated local API. Run `uvicorn backend.app:create_app --factory --host 127.0.0.1`."""
 import asyncio
+import gzip
 import hashlib
 import hmac
 import io
@@ -408,37 +409,44 @@ def create_app(settings=None, *, clock=None, engine=None, speech=None, store=Non
         selected, events, questions, alerts = daily(day)
         return Summary(text=engine.summarize(events, alerts, questions, selected, settings.timezone))
 
-    @app.get("/mesh", dependencies=auth)
-    def home_mesh():
-        """The home in 3D: the mesh the vision stage last wrote (ml/recon_change/splat_mesh.py) to
-        <LOCAL_DATA_DIR>/mesh/home.ply, as a binary PLY. 404 until there is one."""
-        path = Path(settings.local_data_dir) / "mesh" / "home.ply"
-        if not path.is_file():
-            raise APIError(404, "not_found", "No 3D map of the home yet.")
-        return Response(path.read_bytes(), media_type="application/octet-stream",
-                        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+    # The home in 3D: what the vision stage wrote to <LOCAL_DATA_DIR>/mesh/. Sent gzipped when the client
+    # takes it (meshes and their JSON shrink to about a quarter: much faster on a phone's connection).
+    # The compressed copy is kept until the file changes.
+    zipped = {}
 
-    def mesh_json(name, missing):
+    def mesh_file(request: Request, name: str, media_type: str, missing: str):
         path = Path(settings.local_data_dir) / "mesh" / name
         if not path.is_file():
             raise APIError(404, "not_found", missing)
-        return Response(path.read_bytes(), media_type="application/json",
-                        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+        headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Vary": "Accept-Encoding"}
+        if "gzip" not in request.headers.get("accept-encoding", "").lower():
+            return Response(path.read_bytes(), media_type=media_type, headers=headers)
+        stat = path.stat()
+        key = (stat.st_mtime_ns, stat.st_size)
+        if zipped.get(name, (None,))[0] != key:
+            zipped[name] = (key, gzip.compress(path.read_bytes(), 6))
+        return Response(zipped[name][1], media_type=media_type, headers={**headers, "Content-Encoding": "gzip"})
+
+    @app.get("/mesh", dependencies=auth)
+    def home_mesh(request: Request):
+        """The home in 3D: the mesh the vision stage last wrote (ml/recon_change/lowpoly.py) to
+        <LOCAL_DATA_DIR>/mesh/home.ply, as a binary PLY. 404 until there is one."""
+        return mesh_file(request, "home.ply", "application/octet-stream", "No 3D map of the home yet.")
 
     @app.get("/hazards", dependencies=auth)
-    def trip_hazards():
+    def trip_hazards(request: Request):
         """Things on the floor in the way of the night walks (ml/recon_change/hazards.py writes
         mesh/hazards.json). Suggestions for the family to clear up, never alerts."""
         if not settings.hazards_enabled:
             raise APIError(404, "not_found", "The trip hazard check is switched off.")
-        return mesh_json("hazards.json", "No trip hazard check yet.")
+        return mesh_file(request, "hazards.json", "application/json", "No trip hazard check yet.")
 
     @app.get("/night", dependencies=auth)
-    def night_walk(day: date | None = None):
+    def night_walk(request: Request, day: date | None = None):
         """The night before `day` (default today), walked (ml/recon_change/night.py writes
         mesh/night-YYYY-MM-DD.json)."""
         selected = day or now().astimezone(zone).date()
-        return mesh_json(f"night-{selected.isoformat()}.json", "No night track for that day.")
+        return mesh_file(request, f"night-{selected.isoformat()}.json", "application/json", "No night track for that day.")
 
     @app.post("/ask", response_model=Answer, dependencies=auth)
     def ask(body: AskRequest):
