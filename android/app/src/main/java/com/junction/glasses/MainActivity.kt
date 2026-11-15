@@ -1431,7 +1431,8 @@ class MainActivity : ComponentActivity() {
             null -> Unit
         }
         // "Find me / where is / where did I put / have you seen <thing>" that is not a named place: the relay looks.
-        if (find is FindCommand.Find) { startFind(find.what); return }
+        // Without a relay the question goes on to the backend as before.
+        if (find is FindCommand.Find && navRelay() != null) { startFind(find.what); return }
         if (screen.ask(text)) return // the wearer demo answers by itself
         if (controller == null) { status.text = "Connect the backend first."; if (::wearer.isInitialized) wearer.setStatus("Not connected"); return }
         lastQuestion = text
