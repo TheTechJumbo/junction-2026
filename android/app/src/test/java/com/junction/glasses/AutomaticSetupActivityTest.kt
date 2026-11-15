@@ -57,6 +57,7 @@ class AutomaticSetupActivityTest {
     private val probeCount = AtomicInteger()
     @Before fun setup() {
         MainActivity.alwaysOnAutoStart = false
+        MainActivity.autoSampling = false
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse =
@@ -71,6 +72,7 @@ class AutomaticSetupActivityTest {
         drain(); server.shutdown()
         MainActivity.automaticSetup = true
         MainActivity.alwaysOnAutoStart = true
+        MainActivity.autoSampling = true
         MainActivity.backendMemoryOverride = null
     }
 

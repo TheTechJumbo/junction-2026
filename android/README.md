@@ -201,6 +201,18 @@ The map and guidance use the **venue zone**, apart from the zone field that reco
 so recordings can go to a test zone while the wearer is guided in the venue. Debug builds set it
 with `--es venue_zone kitchen` (remembered); without it they use the zone field.
 
+### Finding the wearer by itself
+
+While the wearer screen is in front and a relay key is set, the app samples the camera to the relay by
+itself, with no button: the newest frame goes to `POST /locate?zone=<venue zone>`, one at a time.
+- It uses the glasses while their session is up, and the phone camera otherwise (asked for once).
+- It switches camera when the glasses connect or drop. The glasses camera restarts after an idle drop.
+- The screen stays on while sampling.
+- One line above the map says how it is going, e.g. "Found you · glasses · last fix 2 s ago" or
+  "Can't find you: relay not reachable".
+- This is not recording: nothing goes to `/recording` and nothing is kept on the phone.
+- "Stop live camera" in setup turns it off until "Start live camera".
+
 ### Map / 3D
 
 Above the map, a big **Map / 3D** toggle (Map is the default) swaps the flat map for the relay's 3D page

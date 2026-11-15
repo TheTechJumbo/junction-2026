@@ -87,6 +87,8 @@ class MainActivity : ComponentActivity() {
         internal var automaticSetup = true
         /** Tests switch off the always-on recording's automatic start (it would start a foreground service). */
         internal var alwaysOnAutoStart = true
+        /** Sample the camera to the relay by itself while the wearer screen is in front (tests turn it off). */
+        internal var autoSampling = true
         /** Tests replace the Android Keystore memory with a software key; production leaves this null. */
         internal var backendMemoryOverride: BackendMemory? = null
         private val PHONE_PERMISSIONS = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
@@ -101,6 +103,8 @@ class MainActivity : ComponentActivity() {
         private const val FIRST_FRAME_WAIT_MS = 45_000L
         /** How often guidance asks the relay for the way while walking. */
         private const val NAV_POLL_MS = 1_000L
+        /** How often the sampler checks the camera choice and refreshes its status line. */
+        private const val SAMPLER_TICK_MS = 1_000L
         private const val VENUE_PREFS = "venue"
         private const val VENUE_ZONE = "zone"
     }
@@ -167,6 +171,19 @@ class MainActivity : ComponentActivity() {
     private lateinit var recordButton: Button
     private lateinit var recordStatus: TextView
     private var pendingLiveCamera = false
+    // Automatic sampling (core/Sampling.kt): while the wearer screen is in front and a relay key is set, the
+    // live loop runs by itself, sending the newest frame of the glasses (else the phone) to /locate in the
+    // venue zone. No recording and no /recording upload. Stopping the live camera in setup turns it off.
+    private var autoSamplingOn = false
+    private var autoSampleStoppedByUser = false
+    private var askedPhoneCamera = false
+    private var lastLiveReply: com.junction.glasses.live.LocateReply? = null
+    private var lastFixAt: Long? = null
+    private var lastLiveError: String? = null
+    private lateinit var sampleStatus: TextView
+    private val sampler = object : Runnable {
+        override fun run() { ensureAutoSampling(); main.postDelayed(this, SAMPLER_TICK_MS) }
+    }
     private lateinit var videoButton: Button
     private lateinit var uploadStatus: TextView
     private lateinit var sendWhenDone: Switch
@@ -260,6 +277,7 @@ class MainActivity : ComponentActivity() {
             if (isGranted(Manifest.permission.CAMERA)) startLiveCamera() else liveDetails.text = "Camera permission is needed for the live camera."
         }
         if (pendingAlwaysOn) { pendingAlwaysOn = false; startAlwaysOn(auto = false) }
+        ensureAutoSampling()
         pendingMediaAction?.let { action ->
             pendingMediaAction = null
             if (isGranted(mediaPermission())) action() else uploadStatus.text = "Allow access to videos so the app can send glasses videos."
@@ -518,6 +536,10 @@ class MainActivity : ComponentActivity() {
         mapToggle = Button(this).apply { text = "Map"; isAllCaps = false; textSize = 20f; setOnClickListener { setRoomView(false) } }
         roomToggle = Button(this).apply { text = "3D"; isAllCaps = false; textSize = 20f; setOnClickListener { setRoomView(true) } }
         stylePill(mapToggle, true); stylePill(roomToggle, false)
+        sampleStatus = TextView(this).apply {
+            textSize = 15f; setTextColor(WearerPanel.SOFT); setPadding(dp(4), 0, dp(4), dp(6))
+            text = "Finding you…"; contentDescription = "Where the app is in finding you"
+        }
         roomSlot = android.widget.FrameLayout(this).apply {
             addView(navMap, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
         }
@@ -537,6 +559,7 @@ class MainActivity : ComponentActivity() {
                     addView(mapToggle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(0, 0, dp(6), 0) })
                     addView(roomToggle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(6), 0, 0, 0) })
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), 0, dp(20), dp(8)) })
+                addView(sampleStatus, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), 0, dp(20), 0) })
                 addView(roomSlot, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(380)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
                 addView(takeMeThere, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), dp(4), dp(20), dp(4)) })
                 // Small and dim, and it opens only on a long press, so the wearer does not open it by accident.
@@ -609,6 +632,7 @@ class MainActivity : ComponentActivity() {
             navRelayFor = null
             refreshMap()
             if (show3d) setRoomView(true)
+            if (autoSamplingOn) stopLiveCamera("Live camera restarting for the new venue zone.")
         }
         extras.alwaysOn?.let { on ->
             RecordingService.setWanted(this, on)
@@ -628,7 +652,12 @@ class MainActivity : ComponentActivity() {
         relayKey?.let { backendMemory?.saveRelay(relayUrl, it, relayZone) }
         connectWearerRelay()
         renderRelaySettings()
-        if (liveLoop != null) { stopLiveCamera("Live camera restarting with the new relay settings."); startLiveCamera() }
+        if (liveLoop != null) {
+            // An automatic loop is started again by the sampler within a second, with the new settings.
+            val wasAuto = autoSamplingOn
+            stopLiveCamera("Live camera restarting with the new relay settings.")
+            if (!wasAuto) startLiveCamera()
+        }
         if (::alwaysOnButton.isInitialized) maybeAutoStartAlwaysOn()
     }
     /** The wearer screen's reminders and position fixes come from the same relay (its USB address). */
@@ -644,8 +673,11 @@ class MainActivity : ComponentActivity() {
         liveDetails.text = "Relay: $relayUrl" + (relayLanUrl?.let { " (Wi-Fi: $it)" } ?: "") + " · zone $relayZone · key ${if (relayKey.isNullOrBlank()) "not set" else "set"}."
     }
     private fun toggleLiveCamera() {
-        if (liveLoop != null) stopLiveCamera("Live camera is off.") else startLiveCamera()
+        if (liveLoop != null) { autoSampleStoppedByUser = true; stopLiveCamera("Live camera is off. It starts by itself again after Start live camera.") }
+        else { autoSampleStoppedByUser = false; startLiveCamera() }
     }
+    /** Where position fixes go: the venue zone (the map's), else the card's zone. */
+    private fun locateZone(): String = venueZone?.takeIf { RelayClient.isZone(it) } ?: cardZone()
     /** Phone or glasses. A running stream or recording takes its next frame from the new source; no automatic fallback. */
     private fun selectCameraSource(source: CameraSource) {
         cameraSource = source
@@ -688,21 +720,25 @@ class MainActivity : ComponentActivity() {
         }
     }
     /** Starts the send loop: capture the newest frame, post it, wait for the reply, repeat. */
-    private fun startLiveCamera() {
+    private fun startLiveCamera(source: CameraSource = cameraSource, auto: Boolean = false) {
         if (liveLoop != null) return
         if (AlwaysOn.isRecording) { liveDetails.text = "The always-on recording is using the camera and already sends instant fixes. Stop it first."; return }
         if (recordJob != null) { liveDetails.text = "Recording the room; start the live camera after it."; return }
         if (videoRecorder != null) { liveDetails.text = "Recording a video; start the live camera after it."; return }
-        val client = relayClient(liveDetails) ?: return
-        if (cameraSource == CameraSource.PHONE && !isGranted(Manifest.permission.CAMERA)) {
+        val zone = locateZone()
+        val client = relayClient(liveDetails, zone) ?: return
+        if (source == CameraSource.PHONE && !isGranted(Manifest.permission.CAMERA)) {
+            if (auto) return // the sampler asks for the phone camera once by itself
             pendingLiveCamera = true
             permissions.launch(arrayOf(Manifest.permission.CAMERA))
             return
         }
-        val frames = sources()
+        val frames = sources().also { it.select(source) }
+        autoSamplingOn = auto
+        lastLiveError = null
         liveButton.text = "Stop live camera"
-        liveHeadline.text = "Live camera on · ${cameraSource.label} · zone ${zoneField.text.toString().trim()}"
-        liveDetails.text = if (cameraSource == CameraSource.GLASSES) "Connecting the glasses camera…" else "Starting the camera…"
+        liveHeadline.text = "Live camera on · ${source.label} · zone $zone" + if (auto) " (automatic)" else ""
+        liveDetails.text = if (source == CameraSource.GLASSES) "Connecting the glasses camera…" else "Starting the camera…"
         liveLoop = LiveRelayLoop<CameraFrame>(
             scope = lifecycleScope,
             capture = { frames.capture() },
@@ -713,6 +749,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun stopLiveCamera(message: String) {
         pendingLiveCamera = false
+        autoSamplingOn = false
         val wasRunning = liveLoop != null
         liveLoop?.stop(); liveLoop = null
         releaseSources()
@@ -1182,6 +1219,14 @@ class MainActivity : ComponentActivity() {
 
     private fun renderLive(snapshot: LiveSnapshot<CameraFrame>) {
         if (liveLoop == null) return
+        snapshot.reply?.let { reply ->
+            if (reply !== lastLiveReply) {
+                lastLiveReply = reply
+                if (reply.state == "found") lastFixAt = SystemClock.elapsedRealtime()
+            }
+        }
+        lastLiveError = snapshot.error
+        if (::sampleStatus.isInitialized) renderSampleStatus()
         // The camera makes a thumbnail at most twice a second; other frames leave the picture as it is.
         snapshot.lastFrame?.thumbnail?.let { liveThumb.setImageBitmap(it); liveThumb.visibility = android.view.View.VISIBLE }
         val reply = snapshot.reply
@@ -1587,6 +1632,58 @@ class MainActivity : ComponentActivity() {
             })
         }
     }
+    // ---- Automatic sampling ----
+
+    /**
+     * Keeps the live loop running while the app is in front: the glasses while their session is up, else the
+     * phone camera (asked for once). It switches camera when the glasses connect or drop; the glasses
+     * camera restarts by itself after an idle drop (GlassesCamera starts it on the next frame). Called every
+     * second by [sampler] while resumed, and after permission answers.
+     */
+    private fun ensureAutoSampling() {
+        if (::sampleStatus.isInitialized) renderSampleStatus()
+        if (!autoSampling || autoSampleStoppedByUser || !::glasses.isInitialized || !::zoneField.isInitialized) return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        if (relayKey.isNullOrBlank() || AlwaysOn.isRecording || recordJob != null || videoRecorder != null) return
+        val camera = Sampling.camera(glasses.state.value.connection, isGranted(Manifest.permission.CAMERA))
+        if (camera == null) {
+            if (!askedPhoneCamera) { askedPhoneCamera = true; permissions.launch(arrayOf(Manifest.permission.CAMERA)) }
+            return
+        }
+        val source = if (camera == Sampling.Camera.GLASSES) CameraSource.GLASSES else CameraSource.PHONE
+        if (liveLoop == null) startLiveCamera(source, auto = true)
+        else if (autoSamplingOn && liveSources?.selected != source) {
+            liveSources?.select(source) // the loop's next frame comes from the other camera
+            liveHeadline.text = "Live camera on · ${source.label} · zone ${locateZone()} (automatic)"
+        }
+    }
+
+    /** The one line above the map: what is finding the wearer and when the relay last placed them. */
+    private fun renderSampleStatus() {
+        val running = liveLoop != null
+        val camera = when {
+            !running -> null
+            liveSources?.selected == CameraSource.PHONE -> Sampling.Camera.PHONE
+            else -> Sampling.Camera.GLASSES
+        }
+        val idle = when {
+            autoSampleStoppedByUser -> "Not looking: the live camera was stopped in setup"
+            AlwaysOn.isRecording -> "The always-on recording sends the position fixes"
+            recordJob != null || videoRecorder != null -> "Recording; finding you starts again after it"
+            else -> null
+        }
+        val now = SystemClock.elapsedRealtime()
+        sampleStatus.text = Sampling.line(Sampling.Inputs(
+            keySet = !relayKey.isNullOrBlank(),
+            camera = camera,
+            glassesConnected = ::glasses.isInitialized && glasses.state.value.connection == "STARTED",
+            error = lastLiveError,
+            found = lastLiveReply?.state == "found",
+            lastFixAgoS = lastFixAt?.let { (now - it) / 1000 },
+            idle = idle,
+        ))
+    }
+
     // ---- Debug panel (long press on "debug" under the map) ----
 
     /** What the panel shows: addresses, key and token prints, zones, last answers, glasses, recording. Never a secret. */
@@ -1828,6 +1925,7 @@ class MainActivity : ComponentActivity() {
             navRelayFor = null
             refreshMap()
             if (show3d) setRoomView(true)
+            if (autoSamplingOn) stopLiveCamera("Live camera restarting for the new venue zone.")
         }
         // The backend: a new token, or a new address with the remembered token, reconnects it.
         val origin = configuredOrigin
@@ -2032,7 +2130,7 @@ class MainActivity : ComponentActivity() {
         backendInterrupted = connectionCheck != null
         cancelConnectionCheck(); cancelDiagnostic()
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
-        screen.pause(); main.removeCallbacks(mapRefresher)
+        screen.pause(); main.removeCallbacks(mapRefresher); main.removeCallbacks(sampler)
         room3d?.onPause()
         cancelAutomaticRetry()
         stopLiveCamera("Live camera stopped because the app left the screen.")
@@ -2047,6 +2145,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         screen.resume(); main.removeCallbacks(mapRefresher); main.post(mapRefresher)
+        main.removeCallbacks(sampler); main.postDelayed(sampler, SAMPLER_TICK_MS)
         if (show3d) room3d?.onResume()
         if (::glasses.isInitialized) glasses.onResume()
         updatePermissionStatus()
