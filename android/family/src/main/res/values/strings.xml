@@ -8,4 +8,16 @@
     <string name="address_invalid">Use an https:// address with no path, for example https://home.example.org</string>
     <string name="shortcut_address_short">Home address</string>
     <string name="shortcut_address_long">Change home address</string>
+    <string name="tab_today">Today</string>
+    <string name="tab_live">Live 3D</string>
+    <string name="relay_title">Live 3D: the laptop</string>
+    <string name="relay_message">The address of the laptop that runs the relay, its access key, and the room to show. Touch and hold Live 3D to change them later.</string>
+    <string name="relay_address_hint">http://192.168.1.20:8090</string>
+    <string name="relay_key_hint">Access key</string>
+    <string name="relay_key_hint_saved">Access key (one is saved: leave empty to keep it)</string>
+    <string name="relay_key_show">Show the key I type</string>
+    <string name="relay_zone_hint">Room (kitchen)</string>
+    <string name="relay_invalid">Check the address (https://, or a local http:// address in a test build), the access key and the room name.</string>
+    <string name="shortcut_relay_short">Live 3D settings</string>
+    <string name="shortcut_relay_long">Change the Live 3D laptop</string>
 </resources>

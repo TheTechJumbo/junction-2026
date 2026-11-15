@@ -115,7 +115,7 @@ async function refreshStatus() {
     const s = await (await fetch(withKey('/status'), { cache: 'no-store' })).json();
     online = !!(s.ok && s.worker_running);
     zones = s.zones || [];
-    pill.textContent = online ? 'vision online' : s.ok ? 'vision worker offline' : 'Iridis unreachable';
+    pill.textContent = online ? 'vision online' : s.ok ? 'vision worker offline' : 'GPU cluster unreachable';
     pill.className = 'pill ' + (online ? 'on' : 'off');
   } catch {
     online = false;

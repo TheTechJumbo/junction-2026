@@ -1,6 +1,6 @@
 # Route finding laid on real rooms (TUM RGB-D)
 
-Measured on 14 November 2026 on CPU cores of Iridis: the way to five places from each of 472
+Measured on 14 November 2026 on CPU cores of the cluster: the way to five places from each of 472
 position fixes in three rooms, laid on the rooms' true obstacles (Kinect depth). `route.py` had so
 far only been tested on a made-up room (`eval/test_route.py`). Code measured: `route.py` and
 `eval/route_eval.py` as committed with this file.

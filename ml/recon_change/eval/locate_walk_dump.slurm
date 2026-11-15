@@ -1,5 +1,5 @@
 #!/bin/bash
-# Save the reconstruction of every walking-test fix once, on one Iridis L4 GPU, so that changes to
+# Save the reconstruction of every walking-test fix once, on one L4 GPU, so that changes to
 # locate.py can be scored afterwards on CPU cores (locate_walk_rescore.slurm). No scoring here.
 # In <work folder>/walk2/: code/ holds locate_walk_eval.py and recon_change.py and locate.py; the
 # recordings and the plan are read from ../walk (see locate_walk.slurm). Submit from walk2/:

@@ -1,0 +1,4 @@
+<resources>
+    <!-- Programmatic views pick matching colours; the theme follows the system night mode. -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar" />
+</resources>

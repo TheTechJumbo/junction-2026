@@ -1,5 +1,5 @@
 #!/bin/bash
-# One whole position fix with lost items on one Iridis L4 GPU (eval/items_fullpath.py), as the GPU
+# One whole position fix with lost items on one L4 GPU (eval/items_fullpath.py), as the GPU
 # worker runs it: 12 baseline photos, long side 518. Work folder as for items_eval.slurm:
 #   cd <project>/items && sbatch code/eval/items_fullpath_gpu.slurm
 #SBATCH --job-name=jun-items-full

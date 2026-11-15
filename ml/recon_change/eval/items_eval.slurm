@@ -1,7 +1,7 @@
 #!/bin/bash
-# Run the lost-items detector over the test photos on one Iridis L4 GPU (eval/items_eval.py detect).
+# Run the lost-items detector over the test photos on one L4 GPU (eval/items_eval.py detect).
 # Work folder: <project>/items, with this branch's files under code/, the packages and weights from
-# iridis/setup_items.sh under pkgs/ and hf/, and the photos from eval/items_fetch.py under data/lvis.
+# cluster/setup_items.sh under pkgs/ and hf/, and the photos from eval/items_fetch.py under data/lvis.
 #   cd <project>/items && sbatch code/eval/items_eval.slurm
 #SBATCH --job-name=jun-items
 #SBATCH --account=ecsstudents

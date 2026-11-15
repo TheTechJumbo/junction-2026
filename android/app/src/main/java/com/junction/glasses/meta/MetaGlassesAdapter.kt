@@ -1,8 +1,15 @@
 package com.junction.glasses.meta
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.os.SystemClock
+import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
 import com.meta.wearable.dat.core.session.DeviceSession
@@ -32,6 +39,8 @@ import com.meta.wearable.dat.speech.removeSpeech
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.ByteArrayOutputStream
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 /** Session-local state, with no transcript, token or image logging/persistence. */
 data class MetaState(
@@ -47,15 +56,182 @@ data class MetaState(
     val speech: String = "STOPPED",
     val motion: String = "STOPPED",
     val error: String? = null,
+    /** Counts sessions that timed out, reported an error or could not be created; lets callers retry. */
+    val sessionFailures: Int = 0,
+    /** Counts sessions that ran at least [GlassesSessions.STABLE_MS] before the glasses ended them (idle ends). */
+    val sessionEnds: Int = 0,
+    /** Counts sessions the glasses ended within [GlassesSessions.STABLE_MS] of starting, or refused outright. */
+    val sessionDrops: Int = 0,
+    /** Counts sessions that failed because the glasses were asleep: off, folded, in the case or unreachable. */
+    val sessionAsleep: Int = 0,
+    /** Counts sessions refused for a reason retrying cannot fix; [blocker] names the latest one. */
+    val sessionBlocks: Int = 0,
+    /** A [SessionOutcome] name that needs the user (for example GLASSES_APP_UPDATE); cleared when a session starts. */
+    val blocker: String? = null,
+    /** The glasses the current or last session used, as the SDK reports them (name, compatibility, firmware). */
+    val device: String? = null,
 )
 data class MotionReading(val timestampNs: Long, val x: Float, val y: Float, val z: Float)
 
+/** How one glasses session ended. Decided by [GlassesSessions.classify]; no SDK types, so JVM tests cover it. */
+internal enum class SessionOutcome {
+    /** The glasses ended a session that had been running; routine after a few idle minutes. */
+    IDLE_END,
+    /** The glasses ended or refused the session within [GlassesSessions.STABLE_MS] of starting. */
+    DROPPED,
+    /**
+     * The glasses were not awake: taken off, folded, in the case or out of reach (START_ERROR_DEVICE_UNAVAILABLE,
+     * seen on RB Meta 0076 from 23:17 to 23:20 while they were off), or they never answered.
+     */
+    ASLEEP,
+    /** The session could not be created, or a running one failed. */
+    FAILED,
+    /**
+     * DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED: the glasses lack this app's Developer Mode glasses app
+     * ("DevMode DWA") or have an old one. Firmware updates do not install it; Meta AI does.
+     */
+    GLASSES_APP_UPDATE,
+    /** The glasses firmware is too old for this SDK. */
+    FIRMWARE_UPDATE,
+    /** This build's Meta SDK is too old for the glasses. */
+    SDK_UPDATE;
+
+    /** Retrying cannot help: the user has to act in Meta AI or install a newer build. */
+    val needsUser: Boolean get() = this == GLASSES_APP_UPDATE || this == FIRMWARE_UPDATE || this == SDK_UPDATE
+}
+
+/** Pure session-end rules, kept apart from the SDK calls so they are unit tested. */
+internal object GlassesSessions {
+    /** A session shorter than this was dropped, not ended for being idle (idle ends come after minutes). */
+    const val STABLE_MS = 15_000L
+    /** Errors that describe one capability or a soft warning; the session itself keeps running. */
+    private val NOT_FATAL = setOf("DWA_OUT_OF_STU_RANGE", "CAPABILITY_ALREADY_ADDED", "CAPABILITY_NOT_FOUND", "CAPABILITY_DENIED")
+    private val ROUTINE_END = setOf("SESSION_ENDED_BY_DEVICE", "SESSION_IDLE")
+    /** The glasses are off, folded, in the case or out of reach; the SDK may also name it *_UNAVAILABLE. */
+    private val NOT_AWAKE = setOf("DEVICE_DISCONNECTED", "NO_ELIGIBLE_DEVICE")
+    /** What the session start timeout records: the glasses never answered. */
+    const val NO_ANSWER = "NO_ANSWER"
+
+    fun endsSession(error: String): Boolean = error !in NOT_FATAL
+
+    /**
+     * [error] is the SDK's DeviceSessionError name (null when the session just stopped), [startedForMs]
+     * how long it was STARTED (null when it never started), [compatibility] the device's DeviceCompatibility.
+     */
+    fun classify(error: String?, startedForMs: Long?, compatibility: String? = null): SessionOutcome = when {
+        error != null && "DAT_APP" in error -> SessionOutcome.GLASSES_APP_UPDATE
+        error == "INSUFFICIENT_SDK_VERSION" || compatibility == "SDK_UPDATE_REQUIRED" -> SessionOutcome.SDK_UPDATE
+        compatibility == "DEVICE_UPDATE_REQUIRED" -> SessionOutcome.FIRMWARE_UPDATE
+        error != null && (error in NOT_AWAKE || error == NO_ANSWER || error.endsWith("UNAVAILABLE")) -> SessionOutcome.ASLEEP
+        startedForMs == null -> if (error == null || error in ROUTINE_END) SessionOutcome.DROPPED else SessionOutcome.FAILED
+        startedForMs < STABLE_MS -> SessionOutcome.DROPPED
+        error == null || error in ROUTINE_END -> SessionOutcome.IDLE_END
+        else -> SessionOutcome.FAILED
+    }
+
+    fun message(outcome: SessionOutcome, error: String?, description: String?, startedForMs: Long?): String {
+        val reason = listOfNotNull(description?.takeIf { it.isNotBlank() }, error?.takeIf { it != description && it != NO_ANSWER })
+            .joinToString(" · ").ifEmpty { "no reason given" }
+        return when (outcome) {
+            SessionOutcome.GLASSES_APP_UPDATE -> "Enable Developer Mode for these glasses in Meta AI, then tap the glasses " +
+                "(App info → Developer mode → the glasses row): Meta AI installs this app's glasses app in a few seconds. " +
+                "Firmware updates do not install it, and no glasses reset is needed ($error)."
+            SessionOutcome.FIRMWARE_UPDATE -> "The glasses firmware is too old for this app. Update the glasses in Meta AI."
+            SessionOutcome.SDK_UPDATE -> "These glasses need a newer build of this app: its Meta SDK is too old ($reason)."
+            SessionOutcome.IDLE_END -> "Glasses ended the idle session. They reconnect when needed."
+            SessionOutcome.ASLEEP -> "Glasses not awake: unfold or put them on, or open Meta AI. Reconnecting automatically" +
+                (if (error == NO_ANSWER) " (no answer in 20 s)." else " ($reason).")
+            SessionOutcome.DROPPED -> if (startedForMs == null) "Glasses refused the session before it started: $reason."
+                else "Glasses dropped the session ${startedForMs / 1000} s after it started: $reason."
+            SessionOutcome.FAILED -> "Glasses session failed: $reason."
+        }
+    }
+}
+
 /**
- * Meta DAT 1.0.1 adapter. Construct during Activity.onCreate, before STARTED.
- * All commands run on Main. Camera, speech and motion require explicit user actions.
- * Caller stops this adapter when leaving the foreground; no covert/background capture.
+ * Decoded glasses video frames (VideoFrame with compressVideo = false) to pictures. The SDK says only
+ * "YUV pixel data", so the 4:2:0 layout is worked out from the buffer: the row stride from its size,
+ * and planar (I420: U plane, then V) versus semi-planar (NV12: U and V interleaved, as Android
+ * decoders write it) from how much neighbouring chroma bytes differ. Pure byte work is JVM tested.
  */
-class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: CoroutineScope) {
+internal object YuvFrames {
+    /** [semiPlanar] is null when this frame's chroma is too flat (grey) to tell; callers keep a decided one. */
+    class Layout(val stride: Int, val semiPlanar: Boolean?)
+
+    /** Null when the buffer cannot hold a 4:2:0 frame of [width] x [height]. */
+    fun layout(data: ByteArray, width: Int, height: Int): Layout? {
+        if (width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0) return null
+        val size = data.size
+        if (size < width * height * 3 / 2) return null
+        // Padded rows: size = stride * height * 3 / 2 with stride >= width.
+        val stride = if ((size * 2) % (height * 3) == 0 && size * 2 / (height * 3) >= width) size * 2 / (height * 3) else width
+        val ySize = stride * height
+        if (size - ySize < stride * height / 2) return null
+        // Interleaved U/V: neighbours (U to V) differ more than bytes two apart (U to U); planar: less.
+        var adjacent = 0L; var apart = 0L; var samples = 0L
+        val rows = height / 2
+        val step = maxOf(1, rows / 32)
+        for (row in 0 until rows step step) {
+            val base = ySize + row * stride
+            var i = 0
+            while (i + 2 < width && base + i + 2 < size) {
+                adjacent += kotlin.math.abs((data[base + i].toInt() and 0xFF) - (data[base + i + 1].toInt() and 0xFF))
+                apart += kotlin.math.abs((data[base + i].toInt() and 0xFF) - (data[base + i + 2].toInt() and 0xFF))
+                samples++; i += 2
+            }
+        }
+        val semiPlanar = when {
+            samples == 0L || adjacent + apart < samples * 2 -> null
+            adjacent * 2 >= apart * 3 -> true
+            adjacent <= apart -> false
+            else -> null
+        }
+        return Layout(stride, semiPlanar)
+    }
+
+    fun describe(layout: Layout): String =
+        "${when (layout.semiPlanar) { true -> "NV12"; false -> "I420"; null -> "chroma too flat to tell" }}, stride ${layout.stride}"
+
+    /** The frame as NV21 (Y, then V/U interleaved), the layout android.graphics.YuvImage takes. */
+    fun toNv21(data: ByteArray, width: Int, height: Int, stride: Int, semiPlanar: Boolean): ByteArray {
+        val out = ByteArray(width * height * 3 / 2)
+        for (row in 0 until height) System.arraycopy(data, row * stride, out, row * width, width)
+        val ySize = stride * height
+        val half = stride / 2
+        val vPlane = ySize + stride * height / 4
+        var o = width * height
+        for (row in 0 until height / 2) {
+            for (col in 0 until width / 2) {
+                if (semiPlanar) {
+                    val i = ySize + row * stride + col * 2
+                    out[o++] = data[i + 1]; out[o++] = data[i]
+                } else {
+                    out[o++] = data[vPlane + row * half + col]; out[o++] = data[ySize + row * half + col]
+                }
+            }
+        }
+        return out
+    }
+
+    fun toBitmap(data: ByteArray, width: Int, height: Int, stride: Int, semiPlanar: Boolean): Bitmap? {
+        val nv21 = toNv21(data, width, height, stride, semiPlanar)
+        val jpeg = ByteArrayOutputStream().use { out ->
+            if (!YuvImage(nv21, ImageFormat.NV21, width, height, null).compressToJpeg(Rect(0, 0, width, height), 92, out)) return null
+            out.toByteArray()
+        }
+        return BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+    }
+}
+
+/**
+ * Meta DAT 1.0.1 adapter. Construct during Activity.onCreate, before STARTED. All commands run on Main.
+ * The session lives in [parentScope] (GlassesHub's, for the whole app process), so it can outlive an
+ * Activity while the always-on recording runs in its foreground service. The Activity is needed only
+ * for what opens Meta AI or a consent dialog ([attach] it in onCreate, [detach] in onDestroy): with
+ * none attached those say "open the app"; the session, camera frames and reconnects still work.
+ * Without the always-on recording the caller stops this adapter when leaving the foreground.
+ */
+class MetaGlassesAdapter(activity: ComponentActivity, parentScope: CoroutineScope) {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val observerErrors = CoroutineExceptionHandler { _, _ -> fail("Glasses connection interrupted. Reconnect to continue.") }
     private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.Main.immediate + observerErrors)
@@ -76,8 +252,10 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     private var cameraCollectors: Job? = null
     private var motionHandle: Motion? = null
     private var registrationPending = false
-    val isExternalFlowPending: Boolean get() = registrationPending || permissionResult != null
-    fun onResume() { registrationPending = false; refreshPermissions() }
+    /** Meta AI was opened to install the glasses app or firmware; cleared when this Activity resumes. */
+    private var metaAiPagePending = false
+    val isExternalFlowPending: Boolean get() = registrationPending || metaAiPagePending || permissionResult != null
+    fun onResume() { registrationPending = false; metaAiPagePending = false; refreshPermissions() }
     private var permissionRefresh: Job? = null
     fun suspendLifecycle() { if (!isExternalFlowPending) disconnect() }
     private var permissionResult: CompletableDeferred<PermissionStatus>? = null
@@ -87,12 +265,64 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     private var listeningRequested = false
     private var cameraGeneration = 0L
     private var motionRequested = false
-    private val permissionLauncher = activity.registerForActivityResult(Wearables.RequestPermissionContract()) {
-        permissionResult?.complete(it.getOrDefault(PermissionStatus.Denied))
-        permissionResult = null
+    /** The Activity in front, for Meta AI hand-offs and consent dialogs; null while only the service runs. */
+    private var activity: ComponentActivity? = null
+    private var permissionLauncher: ActivityResultLauncher<Permission>? = null
+    init { attach(activity) }
+
+    /** Uses [activity] for Meta AI pages and consent dialogs. Call in its onCreate (before STARTED). */
+    fun attach(activity: ComponentActivity) {
+        if (this.activity === activity) return
+        permissionLauncher?.unregister()
+        this.activity = activity
+        permissionLauncher = activity.registerForActivityResult(Wearables.RequestPermissionContract()) {
+            permissionResult?.complete(it.getOrDefault(PermissionStatus.Denied))
+            permissionResult = null
+        }
+    }
+
+    /** [activity] is going away while the session stays (always-on recording). */
+    fun detach(activity: ComponentActivity) {
+        if (this.activity !== activity) return
+        permissionLauncher?.unregister(); permissionLauncher = null
+        permissionResult?.cancel(); permissionResult = null
+        registrationPending = false; metaAiPagePending = false
+        this.activity = null
     }
 
     private fun fail(message: String) { mutableState.update { it.copy(error = message) } }
+    /** Records how a session ended, with the time, so the card says why the glasses dropped. */
+    private fun record(outcome: SessionOutcome, message: String) {
+        val text = "${LocalTime.now().format(CLOCK)} · $message"
+        lastFailedEndAt = if (outcome == SessionOutcome.IDLE_END) null else SystemClock.elapsedRealtime()
+        mutableState.update {
+            when (outcome) {
+                SessionOutcome.IDLE_END -> it.copy(error = text, sessionEnds = it.sessionEnds + 1)
+                SessionOutcome.DROPPED -> it.copy(error = text, sessionDrops = it.sessionDrops + 1)
+                SessionOutcome.ASLEEP -> it.copy(error = text, sessionAsleep = it.sessionAsleep + 1)
+                SessionOutcome.FAILED -> it.copy(error = text, sessionFailures = it.sessionFailures + 1)
+                else -> it.copy(error = text, sessionBlocks = it.sessionBlocks + 1, blocker = outcome.name)
+            }
+        }
+    }
+    private fun sessionFailed(message: String) = record(SessionOutcome.FAILED, message)
+    /**
+     * When the last session failed, dropped or was refused (elapsedRealtime); null after an idle end or a
+     * start. On-demand connects (camera, listening, the live camera's retries) wait [ON_DEMAND_GAP_MS] after
+     * it, so a caller retrying every 2 s cannot override the automatic reconnect pacing or a refusal.
+     */
+    private var lastFailedEndAt: Long? = null
+    private var reconnecting: Job? = null
+    private var sessionStarted = false
+    /** elapsedRealtime when the current session reached STARTED; null before that. */
+    private var startedAt: Long? = null
+    /** The first session-ending SDK error of the current session, by enum name, and its description. */
+    private var sessionError: String? = null
+    private var sessionErrorText: String? = null
+    /** False until the current session reports a state other than STOPPED, so its initial value is not an end. */
+    private var sessionActive = false
+    /** Waits briefly after STOPPED for the error that explains it (the SDK may send it after the state). */
+    private var stopGrace: Job? = null
     private fun runCommand(block: suspend CoroutineScope.() -> Unit) = scope.launch {
         try { block() } catch (e: CancellationException) { throw e }
         catch (_: Exception) { fail("Glasses operation failed. Check permissions and reconnect.") }
@@ -100,7 +330,8 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
 
     fun initialize() {
         if (state.value.initialized) return
-        Wearables.initialize(activity).onSuccess {
+        val host = activity ?: run { fail("Open the app to start the glasses."); return }
+        Wearables.initialize(host).onSuccess {
             mutableState.update { it.copy(initialized = true, error = null) }
             refreshPermissions()
             runCommand { Wearables.registrationState.collect { value -> mutableState.update { it.copy(registration = value.name) } } }
@@ -111,8 +342,9 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
 
     fun register() {
         if (!state.value.initialized) { fail("Initialize glasses first."); return }
+        val host = activity ?: run { fail("Open the app to register with Meta AI."); return }
         registrationPending = true
-        Wearables.startRegistration(activity)
+        Wearables.startRegistration(host)
     }
 
     fun connect() {
@@ -122,25 +354,160 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         if (session != null) return
         Wearables.createSession(AutoDeviceSelector()).onSuccess { connected ->
             session = connected
+            sessionStarted = false; startedAt = null; sessionError = null; sessionErrorText = null; sessionActive = false
+            stopGrace?.cancel(); stopGrace = null
             val owner = SupervisorJob(job)
             sessionJob = owner
             val listeners = CoroutineScope(scope.coroutineContext + owner)
             sessionScope = listeners
             mutableState.update { it.copy(connection = "CONNECTING", error = null) }
+            Log.i(TAG, "session created")
+            listeners.launch { connected.deviceInfo.collect { info ->
+                val firmware = info.firmwareInfo?.let { " · firmware $it" } ?: ""
+                val device = "${info.name} · ${enumName(info.compatibility)}$firmware"
+                if (device != state.value.device) Log.i(TAG, "device $device")
+                mutableState.update { it.copy(device = device) }
+            } }
             listeners.launch {
                 connected.state.collect { status ->
+                    Log.i(TAG, "state ${status.name}")
                     mutableState.update { it.copy(connection = status.name) }
+                    if (status != DeviceSessionState.STOPPED) sessionActive = true
+                    if (status == DeviceSessionState.STARTED && startedAt == null) {
+                        sessionStarted = true; startedAt = SystemClock.elapsedRealtime(); lastFailedEndAt = null
+                        mutableState.update { it.copy(blocker = null) }
+                    }
                     if (status == DeviceSessionState.STARTED && state.value.displayEnabled && display == null) attachDisplay(connected, listeners)
-                    if (status == DeviceSessionState.STOPPED) disconnect()
+                    if (status == DeviceSessionState.STOPPED && sessionActive && stopGrace == null) {
+                        stopGrace = scope.launch { delay(STOP_GRACE_MS); finishSession(connected) }
+                    }
                 }
             }
-            listeners.launch { connected.errors.collect { fail("Glasses session failed: ${it.description}"); disconnect() } }
+            listeners.launch { connected.errors.collect { error ->
+                val name = enumName(error)
+                Log.i(TAG, "error $name")
+                if (!GlassesSessions.endsSession(name)) { fail("Glasses: ${error.description}"); return@collect }
+                if (sessionError == null) { sessionError = name; sessionErrorText = "${error.description}" }
+                finishSession(connected)
+            } }
             connected.start()
             listeners.launch {
                 delay(20_000)
-                if (state.value.connection != "STARTED") { fail("Glasses connection timed out. Put on the glasses and retry."); disconnect() }
+                if (!sessionStarted && session === connected) {
+                    Log.i(TAG, "start timed out")
+                    record(SessionOutcome.ASLEEP, GlassesSessions.message(SessionOutcome.ASLEEP, GlassesSessions.NO_ANSWER, null, null))
+                    disconnect()
+                }
             }
-        }.onFailure { _, _ -> fail("Cannot create glasses session. Check pairing and SDK/device compatibility.") }
+        }.onFailure { _, _ -> sessionFailed("Cannot create glasses session. Check pairing and SDK/device compatibility.") }
+    }
+
+    /**
+     * Ends [connected] once, saying why: the SDK error if one came, else how long it ran. A session the
+     * glasses refuse or drop within seconds is not an idle end, so it never feeds the quiet reconnect loop.
+     */
+    private fun finishSession(connected: DeviceSession) {
+        if (session !== connected) return
+        stopGrace?.cancel(); stopGrace = null
+        val startedFor = startedAt?.let { SystemClock.elapsedRealtime() - it }
+        val compatibility = try { enumName(connected.deviceInfo.value.compatibility) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+        val outcome = GlassesSessions.classify(sessionError, startedFor, compatibility)
+        Log.i(TAG, "session ended: $outcome, error=${sessionError ?: "none"}, started for ${startedFor ?: "never"} ms, compatibility=$compatibility")
+        record(outcome, GlassesSessions.message(outcome, sessionError, sessionErrorText, startedFor))
+        disconnect()
+    }
+
+    /**
+     * Opens Meta AI's page that installs or updates this app's Developer Mode glasses app: the fix for
+     * DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED (no glasses reset needed). Reconnect after returning.
+     */
+    fun openGlassesAppUpdate() {
+        if (!state.value.initialized) { fail("Initialize glasses first."); return }
+        val host = activity ?: run { fail("Open the app to install the glasses app in Meta AI."); return }
+        metaAiPagePending = true
+        Log.i(TAG, "opening Meta AI glasses app update")
+        try {
+            Wearables.openDATGlassesAppUpdate(host).onFailure { _, _ ->
+                metaAiPagePending = false
+                fail("Could not open Meta AI. In Meta AI open App info → Developer mode and tap the glasses to install the glasses app.")
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { metaAiPagePending = false; fail("Could not open Meta AI. In Meta AI open App info → Developer mode and tap the glasses.") }
+    }
+
+    /**
+     * The Connect / reconnect button: drops any stale or stuck session and the recorded refusal, then
+     * starts a fresh session, never adding one on top of an old one. Taps in a row restart it once.
+     */
+    fun reconnect() {
+        Log.i(TAG, "manual reconnect")
+        reconnecting?.cancel()
+        val hadSession = session != null
+        disconnect()
+        lastFailedEndAt = null
+        mutableState.update { it.copy(blocker = null) }
+        reconnecting = scope.launch {
+            // Give the SDK a moment to release the old session before asking for a new one.
+            if (hadSession) delay(RECONNECT_GAP_MS)
+            connect()
+        }
+    }
+
+    /** False for a while after a failed, dropped or refused session, and while a refusal needs the user. */
+    private fun onDemandConnectAllowed(): Boolean {
+        if (state.value.blocker != null) return false
+        val failedAt = lastFailedEndAt ?: return true
+        return SystemClock.elapsedRealtime() - failedAt >= ON_DEMAND_GAP_MS
+    }
+
+    /** The message for an on-demand feature that found no session, keeping a recorded reason visible. */
+    private fun notConnected(feature: String) {
+        if (lastFailedEndAt == null && state.value.blocker == null) fail("Connect glasses before $feature.")
+    }
+
+    /** Opens Meta AI's glasses firmware update page (DeviceCompatibility DEVICE_UPDATE_REQUIRED). */
+    fun openFirmwareUpdate() {
+        if (!state.value.initialized) { fail("Initialize glasses first."); return }
+        val host = activity ?: run { fail("Open the app to update the glasses in Meta AI."); return }
+        metaAiPagePending = true
+        try {
+            Wearables.openFirmwareUpdate(host).onFailure { _, _ ->
+                metaAiPagePending = false; fail("Could not open Meta AI. Update the glasses firmware in Meta AI.")
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { metaAiPagePending = false; fail("Could not open Meta AI. Update the glasses firmware in Meta AI.") }
+    }
+
+    /**
+     * Connects when needed and waits up to [timeoutMs] for STARTED, so features keep working after the
+     * glasses ended an idle session. False when not registered or the session does not start in time.
+     */
+    suspend fun ensureStarted(timeoutMs: Long = 20_000): Boolean {
+        if (session != null && state.value.connection == "STARTED") return true
+        if (session == null && !onDemandConnectAllowed()) return false
+        connect()
+        if (session == null) return false
+        val reached = withTimeoutOrNull(timeoutMs) {
+            state.first { it.connection == "STARTED" || it.connection == "DISCONNECTED" }
+        }
+        return reached?.connection == "STARTED" && session != null
+    }
+
+    /**
+     * Asks Meta AI for glasses camera and then microphone consent through the same path camera and
+     * listening use, skipping any already granted. Starts no camera or microphone stream. [onFinished]
+     * runs on Main once both answers are settled, whatever they are; not if this adapter closes first.
+     */
+    fun requestConsent(onFinished: () -> Unit) {
+        if (!state.value.initialized) { onFinished(); return }
+        scope.launch {
+            for (permission in listOf(Permission.CAMERA, Permission.MICROPHONE)) {
+                try { permission(permission) }
+                catch (_: CancellationException) { ensureActive() }
+                catch (_: Exception) { fail("Glasses consent request failed. Camera and microphone ask again when used.") }
+            }
+            onFinished()
+        }
     }
 
     /** Audio-first by default. Changing mode tears down the old hardware session. */
@@ -182,38 +549,70 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         permissionRefresh?.cancel()
         permissionRefresh = scope.launch {
             for (permission in listOf(Permission.CAMERA, Permission.MICROPHONE)) {
-                val status = try {
-                    Wearables.checkPermissionStatus(permission).getOrNull()
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { null }
+                val status = checkPermission(permission)?.status
                 ensureActive()
                 recordPermission(permission, status)
             }
         }
     }
 
+    private class PermissionCheck(val status: PermissionStatus?)
+
+    /**
+     * The SDK's consent check, off the main thread: it can block on a native lock while the glasses
+     * app does not answer (ANR at 23:50:56: main thread stuck in checkPermissionStatus → LocalChannel.close
+     * after "Heartbeat timeout — DWA unavailable"). Null when no answer came within [PERMISSION_CHECK_MS];
+     * a blocked check then keeps only its IO thread, never the caller.
+     */
+    private suspend fun checkPermission(permission: Permission): PermissionCheck? {
+        val check = scope.async(Dispatchers.IO) {
+            PermissionCheck(try { Wearables.checkPermissionStatus(permission).getOrNull() }
+                catch (e: CancellationException) { throw e } catch (_: Exception) { null })
+        }
+        return withTimeoutOrNull(PERMISSION_CHECK_MS) { check.await() }
+    }
+
+    /** elapsedRealtime of the last consent request that came back not granted, per permission. */
+    private val consentRefusedAt = mutableMapOf<Permission, Long>()
+
     private suspend fun permission(permission: Permission): Boolean {
-        val existing = Wearables.checkPermissionStatus(permission).getOrNull()
+        val check = checkPermission(permission)
+            ?: run { Log.i(TAG, "consent check timed out"); fail("Glasses not answering. Put them on or tap Connect / reconnect glasses."); return false }
+        val existing = check.status
         recordPermission(permission, existing)
         if (existing == PermissionStatus.Granted) return true
         if (permissionResult != null) { fail("Complete the pending glasses permission request first."); return false }
+        // A caller retrying every few seconds (the live glasses camera) must not reopen Meta AI each time.
+        val refusedAt = consentRefusedAt[permission]
+        if (refusedAt != null && SystemClock.elapsedRealtime() - refusedAt < CONSENT_RETRY_MS) {
+            fail("Glasses ${enumName(permission).lowercase()} consent was not given. Allow it in Meta AI; asking again in a minute.")
+            return false
+        }
+        val launcher = permissionLauncher ?: run {
+            fail("Open the app to allow the glasses ${enumName(permission).lowercase()} in Meta AI."); return false
+        }
         val result = CompletableDeferred<PermissionStatus>()
         permissionResult = result
         return try {
-            permissionLauncher.launch(permission)
+            Log.i(TAG, "asking Meta AI for ${enumName(permission)} consent")
+            launcher.launch(permission)
             val status = withTimeoutOrNull(60_000) { result.await() }
             recordPermission(permission, status)
-            status == PermissionStatus.Granted
+            val granted = status == PermissionStatus.Granted
+            if (granted) consentRefusedAt.remove(permission) else consentRefusedAt[permission] = SystemClock.elapsedRealtime()
+            granted
         } finally { if (permissionResult === result) permissionResult = null }
     }
 
     fun startCamera() = runCommand {
         if (camera != null || cameraStarting) return@runCommand
-        val connected = session?.takeIf { state.value.connection == "STARTED" }
-            ?: run { fail("Connect glasses before starting the camera."); return@runCommand }
         cameraStarting = true
         val generation = ++cameraGeneration
         try {
+            // Connect on demand: the glasses end idle sessions by themselves.
+            val connected = (if (ensureStarted()) session else null)
+                ?: run { notConnected("starting the camera"); return@runCommand }
+            if (generation != cameraGeneration) return@runCommand
             if (!permission(Permission.CAMERA)) { fail("Glasses camera permission was not granted."); return@runCommand }
             if (session !== connected || generation != cameraGeneration) return@runCommand
             connected.addCamera(StreamConfiguration(videoQuality = VideoQuality.MEDIUM, frameRate = 15)).onSuccess { added ->
@@ -224,6 +623,18 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
                 val collectors = CoroutineScope(scope.coroutineContext + collectorJob)
                 collectors.launch { added.stream.state.collect { status -> mutableState.update { it.copy(camera = status.name) } } }
                 collectors.launch { added.stream.errorStream.collect { fail("Glasses camera failed: ${it.description}") } }
+                // The newest decoded video frame, copied off the SDK buffer, for instant live frames.
+                latestFrame.value = null; frameSemiPlanar = null
+                collectors.launch(Dispatchers.Default) {
+                    added.stream.videoStream.collect { frame ->
+                        if (frame.isCompressed || frame.isCodecConfig) return@collect
+                        val buffer = frame.buffer.duplicate()
+                        val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
+                        if (latestFrame.value == null) Log.i(TAG, "first video frame ${frame.width}x${frame.height}, ${bytes.size} bytes, " +
+                            (YuvFrames.layout(bytes, frame.width, frame.height)?.let { YuvFrames.describe(it) } ?: "not 4:2:0"))
+                        latestFrame.value = StreamFrame(bytes, frame.width, frame.height, frame.presentationTimeUs)
+                    }
+                }
                 cameraDeadline?.cancel()
                 cameraDeadline = scope.launch {
                     delay(60_000)
@@ -239,7 +650,60 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         cameraGeneration++
         cameraCollectors?.cancel(); cameraCollectors = null
         camera?.stop(); session?.removeCamera(); camera = null
+        latestFrame.value = null
         mutableState.update { it.copy(camera = "STOPPED") }
+    }
+
+    private class StreamFrame(val data: ByteArray, val width: Int, val height: Int, val timeUs: Long)
+    private val latestFrame = MutableStateFlow<StreamFrame?>(null)
+    /** Presentation time of the last frame handed out, so each live frame is a new one. */
+    private var servedFrameUs = Long.MIN_VALUE
+    /** The stream's chroma layout once a colourful frame showed it; NV12 (Android decoders) until then. */
+    @Volatile private var frameSemiPlanar: Boolean? = null
+
+    private fun frameBitmap(frame: StreamFrame): Bitmap? {
+        val layout = YuvFrames.layout(frame.data, frame.width, frame.height) ?: return null
+        if (frameSemiPlanar == null && layout.semiPlanar != null) {
+            frameSemiPlanar = layout.semiPlanar
+            Log.i(TAG, "video frame layout ${YuvFrames.describe(layout)}")
+        }
+        return YuvFrames.toBitmap(frame.data, frame.width, frame.height, layout.stride, frameSemiPlanar ?: true)
+    }
+
+    /**
+     * Live camera source: the newest frame of the glasses video stream (15 frames/s), so a caller can take
+     * one every 0.1 s; it waits at most [FRAME_WAIT_MS] for a frame newer than the last one handed out.
+     * Falls back to a photo capture (up to 10 s) only when no video frame comes. The camera keeps
+     * running; each call restarts the 60 s unused-camera deadline. Memory only. Null when the camera is
+     * not streaming or nothing arrives in time.
+     */
+    suspend fun captureLiveBitmap(): Bitmap? {
+        val active = camera ?: return null
+        if (active.stream.state.value != StreamState.STREAMING) return null
+        cameraDeadline?.cancel()
+        cameraDeadline = scope.launch {
+            delay(60_000)
+            if (camera === active) stopCamera()
+        }
+        val frame = withTimeoutOrNull(FRAME_WAIT_MS) { latestFrame.first { it != null && it.timeUs > servedFrameUs } }
+        if (frame != null) {
+            servedFrameUs = frame.timeUs
+            val picture = try { withContext(Dispatchers.Default) { frameBitmap(frame) } }
+                catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            if (picture != null) return picture
+        }
+        return try {
+            val photo = withTimeoutOrNull(10_000) { active.stream.capturePhoto().getOrNull() } ?: return null
+            withContext(Dispatchers.Default) {
+                when (photo) {
+                    is PhotoData.Bitmap -> photo.bitmap
+                    is PhotoData.HEIC -> ImageDecoder.decodeBitmap(ImageDecoder.createSource(photo.data.duplicate())) { decoder, _, _ ->
+                        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    }
+                }
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
     }
 
     /** JPEG in memory only. Caller must enforce its own event/evidence consent gate. */
@@ -270,12 +734,14 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
 
     fun startListening() = runCommand {
         if (speechStarting) return@runCommand
-        val connected = session?.takeIf { state.value.connection == "STARTED" }
-            ?: run { fail("Connect glasses before listening."); return@runCommand }
         speechStarting = true
         listeningRequested = true
         val generation = ++listenGeneration
         try {
+            // Connect on demand: the glasses end idle sessions by themselves.
+            val connected = (if (ensureStarted()) session else null)
+                ?: run { notConnected("listening"); return@runCommand }
+            if (generation != listenGeneration || !listeningRequested) return@runCommand
             if (!permission(Permission.MICROPHONE)) { fail("Glasses microphone permission was not granted."); return@runCommand }
             if (session !== connected || generation != listenGeneration || !listeningRequested) return@runCommand
             if (speech == null) connected.addSpeech().onSuccess { added ->
@@ -355,6 +821,8 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
     catch (_: Exception) { false }
 
     fun disconnect() {
+        reconnecting?.cancel(); reconnecting = null
+        stopGrace?.cancel(); stopGrace = null
         cameraDeadline?.cancel(); cameraDeadline = null
         listeningRequested = false; motionRequested = false; listenGeneration++; cameraGeneration++
         permissionResult?.cancel(); permissionResult = null
@@ -367,5 +835,21 @@ class MetaGlassesAdapter(private val activity: ComponentActivity, parentScope: C
         mutableMotion.value = null
         mutableState.update { it.copy(connection = "DISCONNECTED", camera = "STOPPED", display = if (it.displayEnabled) "UNAVAILABLE" else "NOT_REQUIRED", speech = "STOPPED", motion = "STOPPED") }
     }
-    fun close() { disconnect(); job.cancel(); permissionLauncher.unregister() }
+    fun close() { disconnect(); job.cancel(); permissionLauncher?.unregister(); permissionLauncher = null; activity = null }
+
+    private companion object {
+        /** Logcat tag for session states, SDK error names and outcomes. No audio, images, tokens or addresses. */
+        const val TAG = "GlassesSession"
+        const val STOP_GRACE_MS = 750L
+        const val RECONNECT_GAP_MS = 500L
+        const val ON_DEMAND_GAP_MS = 10_000L
+        const val PERMISSION_CHECK_MS = 5_000L
+        /** Longest wait for a new video frame before falling back to a photo capture. */
+        const val FRAME_WAIT_MS = 1_000L
+        /** After a consent request comes back not granted, Meta AI is not opened again for this long. */
+        const val CONSENT_RETRY_MS = 60_000L
+        val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+        /** The constant's name for SDK enums (DeviceSessionError, DeviceCompatibility); toString otherwise. */
+        fun enumName(value: Any?): String = (value as? Enum<*>)?.name ?: value.toString()
+    }
 }

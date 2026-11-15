@@ -16,10 +16,10 @@ fast sensor path must work without it.
 
 - **Phone page and relay** on Seb's laptop (`python live/relay.py --host 0.0.0.0`). The link
   carries an access key that only Seb has. The phone must be on the same Wi-Fi as the laptop.
-- **GPU worker** on Iridis (`sbatch iridis/worker.slurm`, capped at 2 hours per start).
+- **GPU worker** on the GPU cluster (`sbatch cluster/worker.slurm`, capped at 2 hours per start).
 - A check takes about 15 s: baseline once per place, then a new clip, then a headline, events,
   and before/now pictures.
-- Only Seb's laptop can reach Iridis: it needs his SSH key and the university VPN, and the VPN
+- Only Seb's laptop can reach the GPU cluster: it needs his SSH key and the VPN, and the VPN
   has dropped twice tonight. Another person's agent cannot run this part.
 
 ## Pull requests
@@ -48,7 +48,7 @@ conflicts with the CPU worker changes in the same file.
 - Not tested: a real object moved between two real clips, indoor video, glasses footage, a real
   phone recording through the phone page.
 - Seb's laptop (4 cores, 16 GB, 2.4 GB free) cannot hold the 5 GB model, so CPU runs happen on
-  Iridis CPU nodes (`amd_student` partition, 64-core nodes).
+  the cluster's CPU nodes (64-core nodes).
 
 ## Next steps, in order
 
@@ -68,8 +68,8 @@ conflicts with the CPU worker changes in the same file.
 - You can: review and merge the pull requests, coordinate on Linear, build the dashboard and
   viewer (they only need the relay's HTTP API and a `.splat` file), run CPU experiments on your
   own machine, and write the demo script.
-- You cannot: start the relay or the Iridis worker. Ask Seb.
-- Ground rules that held up: every agent gets its own clone and its own folder on Iridis; only
+- You cannot: start the relay or the GPU worker. Ask Seb.
+- Ground rules that held up: every agent gets its own clone and its own folder on the cluster; only
   one agent edits `recon_change.py` at a time; no data, weights or keys in git; check an agent's
   numbers yourself before repeating them.
 
@@ -85,16 +85,16 @@ Branch `jun-22-hud-waypoints` (on top of `jun-22-cpu-splat-ui`):
 
 Tested live on the L4: a photo from the same room is found (match 0.96) in 5 to 6 s; a photo of another place comes back as lost (match 0.0); bad uploads no longer stop the worker. The display page, places page, dashboard and 3D viewer were checked in a browser.
 
-Not tested: a real room (the only baseline is the VGGT kitchen example, a table top), the glasses, the phone compass between fixes, and locate on the CPU worker (it still runs the old code; restart it with `sbatch iridis/worker_cpu.slurm`).
+Not tested: a real room (the only baseline is the VGGT kitchen example, a table top), the glasses, the phone compass between fixes, and locate on the CPU worker (it still runs the old code; restart it with `sbatch cluster/worker_cpu.slurm`).
 
 Rough edges: distances assume a typical viewing distance of 2 m; the viewer legend overlaps in a narrow frame; the dashboard has no link to `/places` yet.
 
 Agent results, reported but not yet checked by the orchestrator:
 - PR 4 (`jun-22-eval-benchmark`): PASLCD benchmark with real changes. Precision 0.92, recall 0.24; large objects found 67 percent of the time, small ones 5 percent; 10 of 10 unchanged pairs clean.
 - PR 5 (`jun-22-max-quality`): a look-alike check that removes the remaining false alarms on video. More frames did not help.
-- CPU speed agent: still running at the time of writing (branch `jun-22-cpu-speed`, Iridis folder `cpu/`).
+- CPU speed agent: still running at the time of writing (branch `jun-22-cpu-speed`, cluster folder `cpu/`).
 
-Next: review PR 4 and 5 and merge them into the stack, take a CPU setting from the CPU agent, record a real room with the glasses or a phone, name three places, rehearse the demo. GPU worker job 2217918 ends about 03:15 UTC; restart it with `sbatch iridis/worker.slurm`.
+Next: review PR 4 and 5 and merge them into the stack, take a CPU setting from the CPU agent, record a real room with the glasses or a phone, name three places, rehearse the demo. The GPU worker job ends about 03:15 UTC; restart it with `sbatch cluster/worker.slurm`.
 
 ## Update, Sat 14 Nov about 06:00 UTC
 
@@ -113,7 +113,7 @@ Live on the cluster with that branch, tested end to end through the relay:
 | Photo of another place | lost (0.0), 5 s | lost (0.0), 35 s |
 
 Both workers have a 2 hour cap. Started 05:39 UTC as jobs 2218938 (GPU) and 2218939 (CPU).
-Restart with `sbatch iridis/worker.slurm` and `sbatch iridis/worker_cpu.slurm`.
+Restart with `sbatch cluster/worker.slurm` and `sbatch cluster/worker_cpu.slurm`.
 
 Agents running now, each with a draft PR to open within 20 minutes:
 - `jun-25-locate-eval`: how reliable the position fix is on real captures (found rate, wrong-room
@@ -212,8 +212,8 @@ Offline tests, all passing: `test_synthetic.py`, `eval/test_items.py`,
 How to run it:
 
     # cluster, in /scratch/$USER/junction-recon (the item finder's packages and weights are in items/)
-    RECON_ITEMS_ENV=items sbatch iridis/worker.slurm        # GPU lane
-    RECON_ITEMS_ENV=items sbatch iridis/worker_cpu.slurm    # CPU lane
+    RECON_ITEMS_ENV=items sbatch cluster/worker.slurm        # GPU lane
+    RECON_ITEMS_ENV=items sbatch cluster/worker_cpu.slurm    # CPU lane
     # laptop, in ml/recon_change (EVENT_API_* are optional: without them only pills answers are missing)
     EVENT_API_URL=http://127.0.0.1:8000/events EVENT_API_TOKEN=<token> python live/relay.py --host 0.0.0.0
 
@@ -236,13 +236,13 @@ Still not done: a real room of ours, real items, the glasses, a real sensor even
 Deployed and tested live on the GPU lane at 12:09 UTC: change check 15 to 16 s, position fix 3.9 s,
 a painted-in phone found and placed, and the lounge scene with 20 marked spots: 19 right, 1 wrong.
 
-- **Start or restart the workers with** `bash iridis/restart_workers.sh` from the project folder on the
-  cluster. It sources `iridis/worker_env.sh` (the item finder's settings), holds other queued GPU jobs
+- **Start or restart the workers with** `bash cluster/restart_workers.sh` from the project folder on the
+  cluster. It sources `cluster/worker_env.sh` (the item finder's settings), holds other queued GPU jobs
   for the minute it takes, and queues replacements behind the new workers. A plain `sbatch` without
   those settings still works but runs the item finder at its old, weaker settings.
 - **Files the cluster needs** from `ml/recon_change/`: `recon_change.py`, `recon_rust.py` (the change
   check imports it; without the Rust build it falls back to NumPy), `locate.py`, `items.py`, `watch.py`,
-  `splat.py`, `live/worker.py`, `live/gateway.py`, `iridis/*`. Forgetting `recon_rust.py` took the
+  `splat.py`, `live/worker.py`, `live/gateway.py`, `cluster/*`. Forgetting `recon_rust.py` took the
   workers down for three minutes at 12:08 UTC.
 - **Item finder**: a limit per item plus a second opinion from CLIP on weak boxes finds 201 of 303
   labelled items (was 97), 3 wrong answers in 140, none on 162 held-out item-free photos. Keys over
@@ -270,10 +270,10 @@ Merged into `jun-22-hud-waypoints` and pushed (all twelve offline tests pass on 
   answer is rarely "steady", so visits would go missing.
 - PR 32, object map (`objects.py`): merged as code with its results, not wired into the worker or relay.
 
-**The cluster still runs the previous version.** The university VPN dropped during the afternoon, and
+**The cluster still runs the previous version.** The VPN dropped during the afternoon, and
 the workers' two-hour jobs have ended. When the VPN is back, from `ml/recon_change` on the laptop:
 
-    bash iridis/deploy_from_laptop.sh
+    bash cluster/deploy_from_laptop.sh
 
 It copies the files (including `recon_rust.py`), checks that they import, and restarts both workers
 with the item finder's settings. Then restart the relay. Nothing from PRs 28 to 32 has run live.
@@ -282,3 +282,146 @@ Finding to design around (PR 31): a position fix does not jump, it goes stale. A
 an arrow drawn from the last fix is right 46% of the time between photos; at one photo a second, with
 the steadying, 90%. Guiding a walking person needs about one photo a second or motion sensing in
 between.
+
+## HAND-OFF, Sat 14 Nov 17:55 UTC: start here
+
+Seb is moving to a new chat. Everything is pushed; nothing lives only on a laptop folder. Clone the repo
+fresh and read `ml/recon_change/DEMO.md` (how to run the demo) and this section.
+
+**Where the code is**
+- `main` has the whole vision stage up to the cheap gate (PR 42).
+- `jun-22-hud-waypoints` is one commit ahead of `main` (105fe7d): local mode (`relay.py --local`,
+  `run_local.sh`), `live/simulate.py`, `run_demo.sh`, `DEMO.md`, half-size VGGT weights on a small
+  graphics card. Not yet in a pull request to `main`, because the local models were never run.
+
+**What Seb asked for last, not done**
+1. Install the Android app on his phone (connected by USB) and run the demo with the glasses.
+   - The laptop has no `adb` and no Android SDK. `adb` (Android platform-tools, from Google) has to be
+     installed first; ask Seb before downloading it. Java is JDK 25; the app wants Java 17 to build, so
+     take the debug APK from the repo's Android workflow run on GitHub instead of building.
+   - Then `adb install -r app-debug.apk`, `adb reverse tcp:8000 tcp:8000`, `adb reverse tcp:8090 tcp:8090`,
+     and the steps in `DEMO.md`. The API token to type into the app is `API_TOKEN` in `.env.demo`,
+     which `run_demo.sh` makes. Never print it in a chat or commit it.
+   - The app talks to the event API only: voice questions work through the glasses; the arrow,
+     reminders, lost items and the day page are on the relay's pages (`/hud`, `/places`, `/dayview`).
+2. Run the models on the laptop (RTX 2060, 6 GB; 17 GB RAM). A separate environment was being
+   installed (PyTorch 2.3.1 cu121, then VGGT, then 5 GB of weights into the Hugging Face cache). The
+   commands are in `DEMO.md`, "Models on the laptop". Never started: whether VGGT fits in 6 GB with
+   half-size weights and 5 baseline photos is unknown. First test: `bash run_local.sh <python>`, record
+   a baseline, send a photo, watch `worker.log` for the peak GPU memory line.
+
+**What is running, and will stop**
+- Cluster workers with the item finder and the spot check: started 16:31 UTC, replacements queued, so
+  they end about 20:30 UTC. Restart with `bash cluster/restart_workers.sh` on the cluster (VPN needed);
+  deploy new code first with `bash cluster/deploy_from_laptop.sh` from `ml/recon_change`.
+- The relay and a local copy of the event API were running on Seb's laptop from the old chat's
+  folder. A new chat should start its own with `bash ml/recon_change/run_demo.sh` from a fresh clone
+  (stop the old ones first: they hold ports 8000, 8090 and 8091).
+
+**Unfinished pieces, each a draft pull request**
+- PR 43 `jun-26-people-in-frame`: know when a person or a hand is in the frame so they are not treated
+  as part of the room. Stopped part-way; check what is in the branch before continuing.
+- PR 40 `jun-25-phone-side-vit`: position from a small model on the phone against a map made once.
+  Stopped part-way; it had a plan and code but no numbers at 17:30 UTC.
+- A replay of a real handheld walk through the whole live system, scored against ground truth, was
+  proposed and never started. It would be the first test of the gates on real video.
+- PR 11 `jun-22-recall`: left unmerged on purpose (tuned on the benchmark it is scored on).
+
+**Numbers to carry over** (details in `eval/*_RESULTS.md`)
+- Position fix: a "found" fix is right to 3 cm and 1 degree (median); 84% of same-room views found; no
+  wrong room accepted; 4 s on the cluster GPU, 33 to 39 s on 32 CPU cores, 2 to 5 minutes on 4 cores.
+- An arrow from a photo a few seconds old is right about half the time while the wearer moves.
+- Item finder: 201 of 303 labelled items found, keys only reliable within about 0.9 m.
+- Spot check: 74% of small changes at about 9% false alarms; live on the lounge scene 19 of 20 right.
+- Cheap gate: the same view is answered in under 0.1 s without the model; never tested on real video.
+
+**Not tested anywhere**: a real room of ours, real items, the glasses' camera, a real sensor event.
+
+**Correction, 18:00 UTC.** The laptop set-up stopped early: only PyTorch 2.3.1 cu121 got installed in the
+separate environment (with numpy 2.x, which must be replaced by `numpy<2`). OpenCV, VGGT and the 5 GB of
+weights are not there. Run the remaining commands from `DEMO.md`, "Models on the laptop". The relay and the
+event API on Seb's laptop have also stopped: nothing is listening on ports 8000, 8090 or 8091.
+
+**Update, 20:30 UTC: local mode works on the laptop.** The environment is complete (`~/venv-local`: PyTorch
+2.3.1 cu121, `numpy<2`, VGGT, weights in the Hugging Face cache) and `adb` is in `~/platform-tools`.
+- On the RTX 2060 the first runs failed or spilled into shared RAM. Three fixes, all in `recon_change.load_model`
+  and only below 10 GB: the trunk at half size but the camera and depth heads in float32, DINOv2's blocks in
+  float32 (float16 overflowed to NaN on real pictures), and the depth head 2 frames at a time. A fix is now
+  6 frames at 518x294, 1.5 s of inference and about 2 s in all, at 3.5 GB peak. Numbers in `DEMO.md`.
+- `bash ml/recon_change/verify_demo.sh` checks every stage on a synthetic room in its own zone: 16 passed,
+  0 failed, 1 skipped (the item finder, off on the 6 GB card; `RECON_ITEMS_ENV` turns it on, on the CPU).
+- Real room: Seb's hall is the baseline of zone `kitchen`. The phone sends frames from the Android app's new
+  live camera (branch `android-autostart`, not merged: `android/` is Ed's to review). The relay rebuilds the
+  room map (`/viewer?live=kitchen`) and shows frames, fixes and the worker log on `/dashboard`.
+- The glasses were returned. Found before that: the app disconnects them whenever it leaves the screen, and
+  the glasses end an idle session after about 3.5 minutes without a camera or microphone stream ("Session
+  ended by device"). `android-autostart` reconnects for both, untested on hardware.
+
+## HAND-OFF, Sun 15 Nov ~01:40 UTC (03:40 local): start here
+
+Written so someone else (or a new chat) can finish without us. Per-area details are in
+`ml/recon_change/handoff/*.md` (one file per workstream). Never print or commit `.env.demo`.
+
+**Paste this into a new chat:** "Continue the Junction 2026 vision + glasses work for Seb. Repo
+github.com/TheTechJumbo/junction-2026. Check out `jun-26-recording-splat` and read the last section of
+`ml/recon_change/HANDOFF.md` plus `ml/recon_change/handoff/*.md`. Rules: ask before downloads; never print or
+commit keys/tokens (`.env.demo`), data, images, recordings or weights; merge with merge commits; `android/` is
+Ed's: changes stay on a branch for his review; the GPU cluster is treated as untrusted (see handoff/privacy.md)."
+
+**Branches and PRs** (all pushed)
+- PR #46 `jun-22-hud-waypoints` -> `main`: local mode on a 6 GB laptop, live room map, verify demo. Mergeable,
+  verified (verify_demo 15/0/2). Merge first, with a merge commit.
+- PR #47 `jun-26-recording-splat` -> `jun-22-hud-waypoints` (stacked): record a room -> Gaussian splat trained
+  on the GPU cluster, whole-video uploads, fly-throughs, labels (deduped), playback, anonymiser, caretaker page (/care),
+  places (live/auto), /navigate, privacy work in progress. Retarget to `main` after #46 merges.
+- `claude/glasses-dc-fix-038490` (no PR; Ed to review): the Android app. Ed's wearer screen first, our setup
+  behind the gear, auto setup, glasses reconnect fixes, live camera / Record room / Record video, opt-in
+  always-on recording, wearer map + "take me to", debug panel (459ed3a). See handoff/android-app.md.
+- `claude/caretaker-app` (5c54032): the caretaker page's history; its files are folded into PR #47.
+- `android-autostart`: superseded by `claude/glasses-dc-fix-038490`.
+- `main` also gained PR #55 (wearer-guidance) from a teammate at 01:30 local; not yet merged into our branches.
+
+**What runs where (now)**
+- Laptop (Seb's, Windows): event API `scripts/run_local.py --port 8000` (from run_demo.sh) and the relay
+  `python -u live/relay.py --host 0.0.0.0 --port 8090 --token <RELAY_KEY> --quick --train-host cluster`
+  started from `ml/recon_change` with env `EVENT_API_URL=http://127.0.0.1:8000/events`,
+  `EVENT_API_TOKEN=<API_TOKEN>`; logs `%TEMP%\beacon-relay.log` / `.err.log`. Both keys are in `.env.demo`
+  (RELAY_KEY rotated 02:51 local; old copy `.env.demo.bak-before-rotate`, git-ignored).
+- GPU cluster (`ssh cluster`, VPN): GPU worker `jun-worker` (L4) and `jun-worker-cpu`, each with a replacement queued;
+  gsplat training jobs (`video-map`, `private-train`) launched by the relay; a test servers job
+  `jun-servers-test` (the API + relay on a compute node, synthetic zones only). Code under
+  `/scratch/ase1g23/junction-recon`, deployed with `cluster/deploy_from_laptop.sh`.
+- Phone (Pixel, USB): `adb reverse tcp:8000 tcp:8000` and `tcp:8090 tcp:8090` (adb in
+  `C:\Users\User\platform-tools`). Apps: glasses app `com.junction.glasses` (build f15eadd installed; 459ed3a with
+  debug panel + venue_zone not installed yet), Ed's family app "Daylight" (Live 3D tab shows /care; set the
+  key by touch-and-hold).
+- Relay pages (add `?k=<RELAY_KEY>`): /dashboard, /care?zone=Z, /viewer?live=Z, /places, /dayview.
+
+**Zones**
+- `kitchen`: the demo venue, changed several times tonight. 02:45: a stray always-on recording
+  (aon-20261115-024529) replaced its map (Seb first kept it, later asked to "restore kitchen now"). 03:12: the
+  app uploaded Seb's 02:59 glasses video (session 20261115_025911_0a9dfa62, 1347 frames) to kitchen, and the
+  map was rebuilt from it at 03:13; its training was still running at 03:40. Check `GET /room?zone=kitchen` and
+  handoff/relay-and-recording.md for what it points at, and ask Seb which venue he wants before switching. Seb's original glasses venue is intact:
+  `%TEMP%\beacon-evidence\train-kitchen-glasses-20261115-001625-1\` (24.59 dB, 1.73M Gaussians), cluster
+  backups in `/scratch/ase1g23/backup/`. Places must be named again on whichever pictures kitchen ends up with.
+- `validate-room`: the validation zone (Seb's latest glasses video; training job may need fetching).
+- `always-on-test`: where the app now records by default, so stray taps can't touch kitchen.
+
+**Open items, in priority order**
+1. DONE at 03:32 local: the bundled relay restart (pid 34948) loaded everything on disk, fetched
+   validate-room's training (22.14 dB) and linked kitchen to the newest recording, Seb's 02:59 glasses video
+   (train-kitchen-20261115_025911_0a9dfa62-1, 21.97 dB). Switching kitchen to another recording is described in
+   handoff/relay-and-recording.md. Restarts cut uploads in flight: check /recording first.
+2. Name kitchen's places again (the glasses session has the procedure); then test "take me to" end to end.
+3. Install the app build with the debug panel + venue_zone (one Meta AI approval).
+4. Privacy: Seb wants the GPU cluster treated as untrusted (blur + keyed garble + encryption at rest, outputs encrypted).
+   Modules exist; the trusted side (phone vs laptop) is Seb's decision. The move of the API and relay onto
+   the cluster is built and tested but PAUSED until that is decided (handoff/cluster-servers.md).
+5. Publish the anonymised venue splat (Git LFS, .splat only) once Seb confirms.
+6. Merge #46, then #47; get Ed's review of the app branch.
+
+**Lessons that cost time**: relay restarts kill uploads and pending training fetches; UI automation over adb
+can tap buttons by accident (the 02:45 recording); every CI build has a new debug key, so installs need an
+uninstall and a new Meta AI approval; glasses need Developer Mode per pair and drop idle sessions after
+~3.5 min; the laptop GPU throttles at 80+ °C, so the models run on the GPU cluster.

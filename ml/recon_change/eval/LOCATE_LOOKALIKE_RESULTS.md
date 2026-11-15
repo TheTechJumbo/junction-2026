@@ -21,7 +21,7 @@ reconstructions: **before** = `locate.py` as it was (depth only, found 0.5, lost
 | Lowest other-lighting match: before -> after | 0.53 -> 0.53 | 0.54 -> 0.54 | 0.46 -> 0.45 |
 | Position error, % of the baseline cameras' spread, median (worst): before and after | 0.4 (1.7) | 0.4 (1.9) | 0.4 (1.5) |
 | Heading error, degrees, median (worst): before and after | 0.4 (1.6) | 0.5 (1.6) | 0.7 (1.6) |
-| `locate` time, one process on an Iridis CPU node: before -> after | 0.30 -> 0.46 s | 0.16 -> 0.25 s | 0.11 -> 0.21 s |
+| `locate` time, one process on a cluster CPU node: before -> after | 0.30 -> 0.46 s | 0.16 -> 0.25 s | 0.11 -> 0.21 s |
 | Model time on the L4 (unchanged) | 3.2 s | 1.5 s | 1.0 s |
 
 1. **Wrong room: no "found" and no "unsure" at any baseline size** (540 queries). The highest
@@ -164,7 +164,7 @@ What weakens the split, plainly:
 - "Before" and "after" were both scored from the saved reconstructions, by `locate_eval.py`.
   The sweep's own number for the chosen rule agrees with what `locate.py` answers in all 945
   passes (largest difference 0.01, from rounding).
-- Time: `locate.locate` alone, 63 passes (every 15th), one process with 4 cores on an Iridis CPU
+- Time: `locate.locate` alone, 63 passes (every 15th), one process with 4 cores on a cluster CPU
   node, old and new one after the other. With 15 processes side by side the numbers were 0.33 -> 0.52,
   0.18 -> 0.31 and 0.12 -> 0.23 s.
 - Offline check: `python eval/test_locate_lookalike.py` (synthetic room, no GPU). A query whose

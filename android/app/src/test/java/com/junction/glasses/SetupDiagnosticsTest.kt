@@ -39,6 +39,9 @@ class SetupDiagnosticsTest {
     // Backend probes are answered in queue order; the wearer screen's own /timeline refresh is answered apart.
     private val probes = LinkedBlockingQueue<MockResponse>()
     @Before fun setup() {
+        MainActivity.automaticSetup = false // manual setup controls only; see AutomaticSetupActivityTest
+        MainActivity.alwaysOnAutoStart = false
+        MainActivity.autoSampling = false
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse =
@@ -54,6 +57,9 @@ class SetupDiagnosticsTest {
     @After fun cleanup() {
         if (!backgrounded) owner.pause().stop()
         owner.destroy(); server.shutdown(); drain()
+        MainActivity.automaticSetup = true
+        MainActivity.alwaysOnAutoStart = true
+        MainActivity.autoSampling = true
     }
     @Test fun connectionRequiresAuthenticatedResponseAndCanRecheckWithoutRetypingToken() {
         probes.add(page())
@@ -164,5 +170,52 @@ class SetupDiagnosticsTest {
     private fun descendants(view: View): Sequence<View> = sequence {
         yield(view)
         if (view is ViewGroup) for (i in 0 until view.childCount) yieldAll(descendants(view.getChildAt(i)))
+    }
+
+    @Test fun holdingDebugOpensAPanelWithKeyPrintsAndNoSecrets() {
+        field("relayKey").set(activity, "synthetic-relay-key")
+        val debug = descendants(activity.window.decorView).filterIsInstance<TextView>()
+            .first { it.contentDescription?.toString()?.startsWith("Debug panel") == true }
+        assertTrue(debug.performLongClick())
+        drain()
+        val dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        assertNotNull(dialog)
+        assertTrue(dialog.isShowing)
+        val report = descendants(dialog.window!!.decorView).filterIsInstance<TextView>()
+            .first { it.text.toString().contains("Relay key print") }.text.toString()
+        assertTrue(report.contains("Relay key print: ${KeyPrint.of("synthetic-relay-key")}"))
+        assertTrue(report.contains("Glasses:"))
+        assertTrue(report.contains("Chunks waiting on the phone"))
+        assertFalse(report.contains("synthetic-relay-key"))
+        assertFalse(report.contains("synthetic-setup-token"))
+        dialog.dismiss(); drain()
+    }
+
+    @Test fun theDebugPanelChangesSettingsWithoutEverShowingAKey() {
+        field("relayKey").set(activity, "synthetic-relay-key")
+        descendants(activity.window.decorView).filterIsInstance<TextView>()
+            .first { it.contentDescription?.toString()?.startsWith("Debug panel") == true }.performLongClick()
+        drain()
+        val panel = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        descendants(panel.window!!.decorView).filterIsInstance<Button>().first { it.text.toString() == "Change settings" }.performClick()
+        drain()
+        val settings = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        assertNotSame(panel, settings)
+        val fields = descendants(settings.window!!.decorView).filterIsInstance<EditText>().toList()
+        assertEquals(7, fields.size)
+        assertTrue("keys and tokens are never filled in", fields.none { it.text.toString().contains("synthetic") })
+        fields[1].setText("http://192.168.1.20:8090")
+        fields[3].setText("test-zone")
+        fields[4].setText("venue-a")
+        fields[5].setText("") // leave the backend alone
+        settings.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+        drain()
+        assertEquals("http://192.168.1.20:8090", field("relayLanUrl").get(activity))
+        assertEquals("test-zone", field("relayZone").get(activity))
+        assertEquals("synthetic-relay-key", field("relayKey").get(activity))
+        assertEquals("venue-a", activity.getSharedPreferences("venue", android.content.Context.MODE_PRIVATE).getString("zone", null))
+        val note = descendants(panel.window!!.decorView).filterIsInstance<TextView>().map { it.text.toString() }
+        assertTrue(note.toString(), note.any { it.startsWith("Saved: relay, map zone") })
+        panel.dismiss(); drain()
     }
 }

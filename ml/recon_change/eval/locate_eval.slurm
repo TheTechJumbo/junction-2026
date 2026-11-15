@@ -1,5 +1,5 @@
 #!/bin/bash
-# Measure locate.py on PASLCD on one Iridis L4 GPU. Copy locate_eval.py, run_bench.py, this file
+# Measure locate.py on PASLCD on one L4 GPU. Copy locate_eval.py, run_bench.py, this file
 # and the locate.py and recon_change.py under test into <work folder>/loceval/, fetch the poses on
 # the login node (python loceval/fetch_poses.py --out loceval/poses), then submit from the work
 # folder (the PASLCD photos are the ones fetch_paslcd.py put under bench/data):

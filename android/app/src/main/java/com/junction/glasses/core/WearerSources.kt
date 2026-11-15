@@ -28,9 +28,16 @@ private val http: OkHttpClient by lazy {
 /** Runs [request], hands the JSON body (at most 256 KB) to [decode], and reports success or a body-free failure. */
 private fun <T> fetchJson(request: Request, decode: (String) -> T, callback: (Result<T>) -> Unit): Cancelable {
     val call = http.newCall(request)
+    // The relay is the one that takes X-Key; the event API takes a bearer token.
+    val label = (if (request.header("X-Key") != null) "relay " else "backend ") +
+        "${request.url.encodedPath} · ${request.url.host}:${request.url.port}"
     call.enqueue(object : Callback {
-        override fun onFailure(call: Call, e: IOException) { callback(Result.failure(BackendFailure(if (call.isCanceled()) "cancelled" else "network"))) }
+        override fun onFailure(call: Call, e: IOException) {
+            if (!call.isCanceled()) HttpTrace.record(label, 0, System.currentTimeMillis(), e.javaClass.simpleName)
+            callback(Result.failure(BackendFailure(if (call.isCanceled()) "cancelled" else "network")))
+        }
         override fun onResponse(call: Call, response: Response) {
+            HttpTrace.record(label, response.code, System.currentTimeMillis())
             callback(response.use { r ->
                 try {
                     if (!r.isSuccessful) throw BackendFailure("http", r.code)

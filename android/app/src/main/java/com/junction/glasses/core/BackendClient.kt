@@ -23,9 +23,11 @@ class HttpBackendClient(baseUrl: String, private val token: String, allowLocalHt
     private val base = baseUrl.toHttpUrl().also {
         require(it.username.isEmpty() && it.password.isEmpty() && it.query == null && it.fragment == null) { "Use a server URL without credentials, query or fragment" }
         require(it.encodedPath == "/") { "Use the server origin without a path" }
-        require(it.isHttps || (allowLocalHttp && it.host in setOf("localhost", "127.0.0.1", "::1", "10.0.2.2"))) { "HTTPS required except explicit local development" }
+        require(it.isHttps || LocalHosts.cleartextAllowed(it.host, allowLocalHttp)) { "HTTPS required except explicit local development" }
     }
     init { require(token.isNotBlank() && !token.contains('\n') && !token.contains('\r')) { "A valid session token is required" } }
+    /** The first 6 hex of the token's SHA-256, for the debug panel: shows a mismatch, never the token. */
+    val tokenPrint: String get() = KeyPrint.of(token)
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
     /** Read-only authenticated probe; never creates question logs or sensor events. */
@@ -101,9 +103,14 @@ class HttpBackendClient(baseUrl: String, private val token: String, allowLocalHt
     private fun <T> execute(request: Request, limit: Int, expectedType: String,
         callback: (Result<T>) -> Unit, decode: (ByteArray) -> T): Cancelable {
         val call = http.newCall(request)
+        val label = "backend ${request.url.encodedPath} · ${request.url.host}:${request.url.port}"
         call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) { callback(Result.failure(BackendFailure(if (call.isCanceled()) "cancelled" else "network"))) }
+            override fun onFailure(call: Call, e: IOException) {
+                if (!call.isCanceled()) HttpTrace.record(label, 0, System.currentTimeMillis(), e.javaClass.simpleName)
+                callback(Result.failure(BackendFailure(if (call.isCanceled()) "cancelled" else "network")))
+            }
             override fun onResponse(call: Call, response: Response) {
+                HttpTrace.record(label, response.code, System.currentTimeMillis())
                 val result = response.use { r ->
                     try {
                         if (!r.isSuccessful) throw BackendFailure("http", r.code)

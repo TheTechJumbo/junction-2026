@@ -183,8 +183,11 @@ function showList() {
   $('list').innerHTML = '';
   for (const p of places) {
     const row = document.createElement('li');
-    const name = document.createElement('a'); name.href = '#'; name.textContent = `${p.name} (picture ${p.frame + 1})`;
-    name.onclick = e => { e.preventDefault(); $('frame').value = p.frame; showPicture(); };
+    const name = document.createElement('a'); name.href = '#';
+    // a place in a picture, or one with a map position of its own (named on a live photo, on the map, or found)
+    name.textContent = p.frame === undefined ? `${p.name} (${{ live: 'named on a live photo', map: 'set on the map', auto: 'found by the glasses' }[p.source] || 'map position'})`
+                                             : `${p.name} (picture ${p.frame + 1})`;
+    name.onclick = e => { e.preventDefault(); if (p.frame === undefined) return; $('frame').value = p.frame; showPicture(); };
     const remove = document.createElement('button'); remove.textContent = 'Remove';
     remove.onclick = async () => { await ask(`/waypoint?zone=${zone}&name=${encodeURIComponent(p.name)}&delete=1`, { method: 'POST' }); loadPlaces(); };
     row.append(name, remove); $('list').append(row);

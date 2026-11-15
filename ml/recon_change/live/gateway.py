@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gateway. Runs on the Iridis login node, at the far end of the relay's one SSH connection.
+"""Gateway. Runs on the cluster's login node, at the far end of the relay's one SSH connection.
 
 It speaks a tiny protocol on stdin/stdout so that a single connection carries every request:
 a JSON line, then `size` raw bytes. Requests and replies have the same shape.
@@ -20,6 +20,12 @@ a JSON line, then `size` raw bytes. Requests and replies have the same shape.
   {"op": "enroll", "name": "keys", "size": N} + N bytes: one photo of the item
   {"op": "enroll", "name": "keys", "delete": true}             the whole item ("n": 1 too: that photo only)
   {"op": "enrolled_image", "name": "keys", "n": 0}             one of its photos
+  {"op": "worker_log", "lines": 60}                            the end of the worker's log (worker.log)
+  {"op": "map", "zone": "kitchen"}                             the room map: the baseline in one pass, as room.splat
+  {"op": "recording", "zone": "z", "session": "s", "seq": 3, "final": false, "size": N} + N bytes: one chunk of a
+                                                               recording (a zip of frames NNNNNN_<ms>.jpg, or a video)
+  {"op": "recording_status", "zone": "z"}                      the zone's newest recording session
+  {"op": "recording_map", "zone": "z", "session": "s"}         its keyframes become the zone's pictures, then its room map
 
 It only moves files: it drops the clip into queue/<job>/ for the GPU worker (see worker.py)
 and waits for the result. Named places are a small JSON file next to the zone's baseline
@@ -42,6 +48,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(os.environ.get("BEACON_ROOT") or Path(__file__).resolve().parent.parent)
+LOCAL = bool(os.environ.get("BEACON_ROOT"))  # the worker runs on this machine (relay.py --local), not on the cluster
 QUEUE, BASELINES, ENROLLED = ROOT / "queue", ROOT / "baselines", ROOT / "enrolled"
 IN, OUT = sys.stdin.buffer, sys.stdout.buffer
 WAIT_S = 180  # give up on a job after this long
@@ -78,6 +85,33 @@ def worker_state(device):
     return {"running": running, "age_s": age, "info": info}
 
 
+def job_options(req):
+    """What else a job may ask, checked: grow (may a fix add its photo to the zone's pictures), point (a spot picked on
+    the photo, u and v from 0 to 1), look_for (up to 8 more names for the item finder) and spots (picture spots
+    {frame, u, v} to place, op "spots")."""
+    told = {"grow": req.get("grow") is not False}
+    point = req.get("point")
+    if isinstance(point, dict):
+        try:
+            u, v = float(point["u"]), float(point["v"])
+            if 0 <= u <= 1 and 0 <= v <= 1:
+                told["point"] = {"u": u, "v": v}
+        except (KeyError, TypeError, ValueError):
+            pass
+    names = [" ".join(str(n).split())[:40] for n in req.get("look_for") or [] if isinstance(n, str)]
+    told["look_for"] = [n for n in names if re.fullmatch(r"[\w '-]{1,40}", n)][:8]
+    spots = []
+    for s in (req.get("spots") or [])[:600] if isinstance(req.get("spots"), list) else []:
+        try:
+            frame, u, v = int(s["frame"]), float(s["u"]), float(s["v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= frame < 1000 and 0 <= u <= 1 and 0 <= v <= 1:
+            spots.append({"frame": frame, "u": u, "v": v})
+    told["spots"] = spots
+    return told
+
+
 def places_of(zone):
     try:
         return json.loads((BASELINES / zone / "waypoints.json").read_text())
@@ -102,7 +136,20 @@ def handle_places(op, zone, req):
     if not name:
         return {"ok": False, "error": "a place needs a name"}, b""
     places = [p for p in places_of(zone) if p["name"] != name]
-    if not req.get("delete"):
+    if not req.get("delete") and req.get("position") is not None:  # a map position of its own: named live, or found
+        try:
+            position = [float(c) for c in req["position"]][:3]
+        except (TypeError, ValueError):
+            position = []
+        if len(position) != 3 or not all(math.isfinite(c) and abs(c) < 1000 for c in position):
+            return {"ok": False, "error": "position must be three numbers (east, north, up in map metres)"}, b""
+        place = {"name": name, "position": [round(c, 3) for c in position],
+                 "source": "auto" if req.get("auto") else "map" if req.get("source") == "map" else "live"}
+        for key in ("views", "score"):
+            if isinstance(req.get(key), (int, float)) and math.isfinite(req[key]):
+                place[key] = round(float(req[key]), 3)
+        places.append(place)
+    elif not req.get("delete"):
         frame, u, v = int(req["frame"]), float(req["u"]), float(req["v"])
         if not (0 <= frame < frames and 0 <= u <= 1 and 0 <= v <= 1):
             return {"ok": False, "error": "frame must be a baseline picture, u and v between 0 and 1"}, b""
@@ -287,6 +334,88 @@ def as_jpeg(data):
     return jpeg.tobytes()
 
 
+RECORDINGS = ROOT / "recordings"
+SESSION_NAME = r"[A-Za-z0-9_-]{1,64}"
+FRAME_FILE = re.compile(r"\d{6}_\d{10,14}\.jpg")
+VIDEO_FPS = 2.0  # a video sent as a chunk is kept at this many frames a second
+
+
+def handle_recording(op, req, blob):
+    """A room recorded continuously by the phone or the glasses: chunks of frames, stored once each under
+    recordings/<zone>/<session>/frames/ (a chunk sent again after a retry changes nothing), with state.json:
+    the chunks received in order, the frames so far, the gaps, and whether the session has ended (final)."""
+    zone = req["zone"]
+    if op == "recording_status":
+        states = []
+        for f in (RECORDINGS / zone).glob("*/state.json"):
+            try:
+                states.append(json.loads(f.read_text()))
+            except (OSError, ValueError):
+                pass
+        if not states:
+            return {"ok": False, "error": f"No recording of '{zone}' yet."}, b""
+        return {"ok": True, **max(states, key=lambda s: s.get("last_at", 0))}, b""
+    session = str(req.get("session", ""))
+    seq = req.get("seq")
+    if not re.fullmatch(SESSION_NAME, session) or not isinstance(seq, int) or isinstance(seq, bool) or not 0 <= seq < 1_000_000:
+        return {"ok": False, "error": "POST /recording?zone=ROOM&session=NAME&seq=N (N from 0)"}, b""
+    folder = RECORDINGS / zone / session
+    (folder / "frames").mkdir(parents=True, exist_ok=True)
+    (folder / "chunks").mkdir(exist_ok=True)
+    try:
+        state = json.loads((folder / "state.json").read_text())
+    except (OSError, ValueError):
+        state = {"zone": zone, "session": session, "chunks": [], "final": False, "first_at": time.time()}
+    duplicate = seq in state["chunks"]
+    added = 0
+    if not duplicate and blob:
+        if blob[:2] == b"PK":
+            try:
+                with zipfile.ZipFile(io.BytesIO(blob)) as bundle:
+                    for name in bundle.namelist():
+                        base = name.rsplit("/", 1)[-1]
+                        target = folder / "frames" / base
+                        if FRAME_FILE.fullmatch(base) and not target.exists():
+                            data = bundle.read(name)
+                            if data[:2] == b"\xff\xd8":  # JPEG only
+                                target.write_bytes(data)
+                                added += 1
+            except zipfile.BadZipFile:
+                return {"ok": False, "error": "That chunk is not a readable zip of frames."}, b""
+        else:  # a video: kept at VIDEO_FPS frames a second, named like the app's frames
+            tools = opencv()
+            if tools is None:
+                return {"ok": False, "error": "A video chunk needs OpenCV next to the gateway."}, b""
+            cv2, _ = tools
+            video = folder / "chunks" / f"{seq:06d}.mp4"
+            video.write_bytes(blob)
+            cap = cv2.VideoCapture(str(video))
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            step, n, start_ms = max(1, round(fps / VIDEO_FPS)), 0, int(time.time() * 1000)
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if n % step == 0:
+                    target = folder / "frames" / f"{seq:03d}{n // step:03d}_{start_ms + int(1000 * n / fps)}.jpg"
+                    if cv2.imwrite(str(target), frame, [cv2.IMWRITE_JPEG_QUALITY, 90]):
+                        added += 1
+                n += 1
+            cap.release()
+            video.unlink(missing_ok=True)  # the frames are what is kept
+        (folder / "chunks" / f"{seq:06d}.done").write_text(str(added))
+        state["chunks"] = sorted(set(state["chunks"]) | {seq})
+    if req.get("final"):
+        state.update(final=True, final_at=state.get("final_at") or time.time())
+    state["frames"] = sum(1 for _ in (folder / "frames").glob("*.jpg"))
+    state["last_at"] = time.time()
+    top = max(state["chunks"], default=-1)
+    state["missing"] = [s for s in range(top + 1) if s not in state["chunks"]][:50]
+    write_json(folder / "state.json", state)
+    return {"ok": True, "session": session, "seq": seq, "frames_total": state["frames"], "added": added, "duplicate": duplicate,
+            "final": state["final"], "chunks": len(state["chunks"]), "missing": state["missing"]}, b""
+
+
 def item_folder(name):
     """The folder of an enrolled item ("Remote control" -> enrolled/remote_control), or None if the
     name is not a plain one. No other text from a request ever becomes part of a path."""
@@ -360,6 +489,26 @@ def remembered(req):
     return spots
 
 
+def worker_log(device, lines):
+    """The last lines of the worker's log: worker.log in the data folder (run_local.sh writes it there), or on
+    the cluster the newest Slurm output file of a worker job next to the code."""
+    lines = lines if isinstance(lines, int) and not isinstance(lines, bool) and 0 < lines <= 400 else 60
+    found = ROOT / f"worker{lane(device)}.log"
+    if not found.exists():
+        outputs = sorted(ROOT.glob("slurm-*worker*.out"), key=lambda f: f.stat().st_mtime)
+        found = outputs[-1] if outputs else None
+    if found is None:
+        return {"ok": False, "error": "no worker log here"}
+    with open(found, "rb") as log:  # read only the end: a worker that ran for hours has a long log
+        log.seek(0, os.SEEK_END)
+        start = max(0, log.tell() - 200 * lines)
+        log.seek(start)
+        text = log.read().decode("utf-8", "replace")
+    if start:
+        text = text.partition("\n")[2]  # the first line was cut in the middle
+    return {"ok": True, "file": found.name, "local": LOCAL, "lines": text.splitlines()[-lines:]}
+
+
 def handle(req, blob):
     op = req.get("op")
     device = "cpu" if req.get("device") == "cpu" else "gpu"
@@ -368,6 +517,8 @@ def handle(req, blob):
         zones = sorted(p.name for p in BASELINES.glob("*") if any(p.glob("*.jpg")))
         workers = {d: worker_state(d) for d in ("gpu", "cpu")}
         return {"ok": True, "worker_running": any(w["running"] for w in workers.values()), "workers": workers, "zones": zones}, b""
+    if op == "worker_log":  # the end of the worker's log, for the dashboard
+        return worker_log(device, req.get("lines")), b""
     if op in ("enrolled", "enroll", "enrolled_image"):  # items belong to the home: no zone
         return handle_enrolled(op, req, blob)
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", str(req.get("zone", ""))):
@@ -376,20 +527,36 @@ def handle(req, blob):
         return handle_places(op, req["zone"], req)
     if op in ("scale", "watch", "watches"):
         return handle_setup(op, req["zone"], req)
-    if op not in ("baseline", "check", "locate"):
+    if op in ("recording", "recording_status"):
+        return handle_recording(op, req, blob)
+    if op == "recording_map" and not re.fullmatch(SESSION_NAME, str(req.get("session", ""))):
+        return {"ok": False, "error": "bad request: session"}, b""
+    if op not in ("baseline", "check", "locate", "map", "spots", "recording_map", "detect"):  # detect: find me X, live
         return {"ok": False, "error": "bad request: unknown op"}, b""
-    if not blob:
+    if op == "detect":  # an older worker runs an op it does not know as a change check: only one that says it can
+        try:
+            ops = json.loads((ROOT / f"worker{lane(device)}.json").read_text()).get("ops") or []
+        except (OSError, ValueError, AttributeError):
+            ops = []
+        if "detect" not in ops:
+            return {"ok": False, "error": "the worker cannot detect yet: deploy live/worker.py and restart it"}, b""
+    if not blob and op not in ("map", "spots", "recording_map"):  # made from the zone's own pictures or recording: nothing is sent
         return {"ok": False, "error": "empty clip"}, b""
     if age is None or age > STALE_S:
+        if LOCAL:
+            return {"ok": False, "error": f"the local {device.upper()} worker is not running (start it with run_local.sh; "
+                                          f"its log is {ROOT / f'worker{lane(device)}.log'})"}, b""
         script = "worker_cpu.slurm" if device == "cpu" else "worker.slurm"
-        return {"ok": False, "error": f"the {device.upper()} worker is not running on Iridis (sbatch iridis/{script})"}, b""
+        return {"ok": False, "error": f"the {device.upper()} worker is not running on the GPU cluster (sbatch cluster/{script})"}, b""
 
     job = ROOT / f"queue{lane(device)}" / f"{time.strftime('%H%M%S')}-{uuid.uuid4().hex[:6]}"
     job.mkdir(parents=True)
     clip = "clip.zip" if blob[:2] == b"PK" else "clip.mp4"  # a zip of frames from the relay, or a video
-    (job / clip).write_bytes(blob)
+    if blob:
+        (job / clip).write_bytes(blob)
     (job / "request.json").write_text(json.dumps({"op": op, "zone": req["zone"], "file": clip, "view": bool(req.get("view")),
-                                                  "remembered": remembered(req)}))
+                                                  "remembered": remembered(req), "session": str(req.get("session", "")),
+                                                  **job_options(req)}))
     (job / "READY").touch()  # last, so the worker never sees a half-written job
 
     deadline = time.time() + WAIT_S
