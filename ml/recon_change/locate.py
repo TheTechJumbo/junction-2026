@@ -351,7 +351,8 @@ def spot(r, place):
 def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sample=6000, seed=0, look=True, need=2,
            known=None, up="surface", rescue=True):
     """r holds baseline frames (indices `base`) and the wearer's frames (indices `new`, oldest
-    first). places: [{"name", "frame" (index into r), "u", "v"}].
+    first). places: [{"name", "frame" (index into r), "u", "v"}], or [{"name", "position"}] for a place that has a map
+    position of its own (named on a live photo, or found by the item finder): it is used as it is.
     typical_m: the assumed median viewing distance of the baseline (None = TYPICAL_M), used for
     metres unless `known` gives one true distance: {"a": place name, "b": place name, "metres"}.
     up: "surface" takes up from the largest level surface (see surface_up), "cameras" from the
@@ -365,7 +366,7 @@ def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sam
     (world position, radius, RGB colour), and the trusted-pixel mask."""
     valid = rc.valid_mask(r, conf_pct)
     near = rc.nearest_in_window(r.depth, 7)
-    spots = [spot(r, place) for place in places]
+    spots = [spot(r, place) if "frame" in place else None for place in places]
     seen = {q: rc.unproject(r.depth[q], r.K[q], r.E[q])[valid[q]] for q in base}  # each baseline frame's trusted points
     room = build_frame(r, base, valid, typical_m, up, known, {p["name"]: x for p, x in zip(places, spots) if x is not None}, seen)
     try:
@@ -418,9 +419,15 @@ def locate(r, base, new, places=(), typical_m=None, conf_pct=25.0, tol=0.06, sam
 
     waypoints = []
     for place, world in zip(places, spots):
-        if world is None or not usable:
+        if not usable:
             continue
-        at = on_map(world)[0]
+        if world is not None:
+            at = on_map(world)[0]
+        elif place.get("position") is not None:  # a map position of its own
+            at = np.asarray(place["position"], float)
+            world = from_map(room, at)[0]
+        else:
+            continue
         east_m, north_m = at[0] - here[0], at[1] - here[1]
         bearing = (np.degrees(np.arctan2(east_m, north_m)) - heading + 180) % 360 - 180  # 0 ahead, + to the right
         waypoints.append({"name": place["name"], "distance_m": round(float(np.hypot(east_m, north_m)), 1),

@@ -10,13 +10,38 @@
   canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   #note { position: fixed; left: 10px; bottom: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
   #key { position: fixed; right: 10px; top: 8px; color: #93a1b2; pointer-events: none; text-shadow: 0 1px 2px #000; }
+  #play { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); display: none; gap: 10px; align-items: center;
+    background: rgba(13,19,27,.85); border: 1px solid #223040; border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+  #play button { font: inherit; color: #e8eef5; background: #12202d; border: 1px solid #4fc3ff; border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  #play input[type=range] { width: min(40vw, 420px); }
+  #play label { display: flex; gap: 4px; align-items: center; color: #93a1b2; }
+  #playStart { position: fixed; right: 12px; bottom: 34px; display: none; font: inherit; color: #e8eef5; background: #12202d;
+    border: 1px solid #4fc3ff; border-radius: 8px; padding: 7px 14px; cursor: pointer; }
   #key b.g { color: #3cdc78; } #key b.r { color: #ff6b5b; }
+  #bird { position: fixed; left: 10px; top: 8px; width: 240px; display: none; background: rgba(5,7,10,.88);
+    border: 1px solid #223040; border-radius: 10px; padding: 6px; cursor: zoom-in; }
+  #bird.big { width: min(60vw, 640px); cursor: zoom-out; }
+  #bird canvas { width: 100%; height: auto; border-radius: 6px; }
+  #bird div { color: #93a1b2; font-size: 12px; margin: 0 2px 4px; display: flex; gap: 8px; align-items: center; }
+  #bird button { font: inherit; font-size: 12px; color: #e8eef5; background: #12202d; border: 1px solid #4fc3ff;
+    border-radius: 6px; padding: 2px 8px; cursor: pointer; margin-left: auto; }
+  #bird.setting canvas { cursor: crosshair; } #bird.setting button { background: #4fc3ff; color: #05070a; }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
 <div id="note">Loading…</div>
 <div id="key"><b class="g">green</b> appeared · <b class="r">red</b> gone · <b style="color:#4aa3ff">blue</b> wearer · drag to orbit</div>
+<div id="bird" title="The splat from straight above"><div><span id="birdSay">From above · click to enlarge</span>
+  <button id="birdSet" hidden title="Click the map where the wearer should go, then name it">＋ Set a place</button></div><canvas></canvas></div>
+<button id="playStart">▶ Play the recording</button>
+<div id="play">
+  <button id="playPause">⏸</button>
+  <input type="range" id="playAt" min="0" max="1" step="0.01" value="0" aria-label="Where in the recording">
+  <label>speed <select id="playSpeed"><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+  <label><input type="checkbox" id="playAll"> all surfaces</label>
+  <label><input type="checkbox" id="playSplat"> 3D splat</label>
+</div>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
@@ -55,7 +80,237 @@ function resize() {
 }
 addEventListener('resize', resize);
 resize();
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+const onFrame = [];  // more to do every frame (the playback below)
+renderer.setAnimationLoop((now) => { onFrame.forEach(f => f(now)); controls.update(); renderer.render(scene, camera); });
+
+// ---- playback: the recording's keyframes as photo-textured surfaces (video_map.py: views.json, depths.bin, kfNNN.jpg).
+// Each keyframe is a grid of triangles at its own depth (a quarter of its pixels, none across a depth jump) with its photo
+// laid on it, so from where it was taken it is as sharp as the photo. The camera follows the recorded path and fades
+// from each keyframe's surface to the next; paused, it is a 3D space to orbit, with every surface or the trained splat.
+let playing = null;
+// ---- labels (video_map.py labels.json): the named things found in the keyframes, as name tags at their place in 3D ----
+let labelGroup = null, labelsSeen = '';  // the labels file last drawn: drawn again only when it changes
+function labelSprite(text, size, colour = '#ffd228') {  // size: its height as a share of the view's (the same near or far)
+  const c = document.createElement('canvas'), g = c.getContext('2d'), px = 44;
+  g.font = `600 ${px}px system-ui, sans-serif`;
+  c.width = Math.ceil(g.measureText(text).width) + 28; c.height = px + 22;
+  g.font = `600 ${px}px system-ui, sans-serif`;
+  g.fillStyle = 'rgba(5, 7, 10, 0.78)'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = colour; g.fillText(text, 14, px + 2);
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sprite.renderOrder = 20;
+  sprite.scale.set(size * c.width / c.height, size, 1);
+  return sprite;
+}
+// ---- from above (video_map.py --birdseye: birdseye.jpg and .json next to the trained splat): the splat seen from
+// straight above with its ceiling left out, as a map in the top left corner, with the labels, the recorded path and
+// where the view is and looks. Click it to make it bigger.
+// extra: what the live view adds in the splat's axes (wearer, places, the way to the chosen place); onPick: set a place
+const bird = { info: null, image: null, labels: [], drawn: 0, extra: null, onPick: null };
+const birdBox = document.getElementById('bird'), birdCanvas = birdBox.querySelector('canvas');
+const birdSay = document.getElementById('birdSay'), birdSet = document.getElementById('birdSet');
+birdBox.onclick = (e) => {
+  if (e.target === birdSet) return;
+  if (birdBox.classList.contains('setting') && e.target === birdCanvas && bird.info && bird.onPick) {
+    const b = bird.info, r = birdCanvas.getBoundingClientRect();  // the picture fills the canvas: each side scales alone
+    const x = b.x0 + (e.clientX - r.left) / (b.px_per_unit * r.width / b.size[0]);  // along right and ahead, splat units
+    const y = b.y1 - (e.clientY - r.top) / (b.px_per_unit * r.height / b.size[1]);
+    const h = b.floor + 0.6 * (b.eye - b.floor);  // a little under eye height: a tag to see, the arrow uses east and north
+    const at = [0, 1, 2].map(i => b.right[i] * x + b.ahead[i] * y + b.up[i] * h);
+    birdBox.classList.remove('setting');
+    if (at.every(Number.isFinite)) bird.onPick(at);
+    return;
+  }
+  birdBox.classList.toggle('big'); bird.drawn = 0;
+};
+birdSet.onclick = () => { birdBox.classList.toggle('setting'); birdBox.classList.add('big'); bird.drawn = 0;
+  birdSay.textContent = birdBox.classList.contains('setting') ? 'Click where the wearer should go' : 'From above · click to enlarge'; };
+// A file next to another, in the same folder and with the same ?k=: the results of one training sit together.
+const besides = (url, name) => url.split('?')[0].replace(/[^/]*$/, name) + (url.includes('?') ? url.slice(url.indexOf('?')) : '');
+async function showBird(splatUrl) {  // the bird's-eye files next to this splat
+  const sibling = (name) => besides(splatUrl, name);
+  bird.info = null;
+  birdBox.style.display = 'none';
+  try {
+    const reply = await fetch(sibling('birdseye.json'), { cache: 'no-store' });
+    if (!reply.ok) return;
+    const info = await reply.json();
+    const image = new Image();
+    image.onload = () => { bird.image = image; bird.info = info; bird.drawn = 0; birdBox.style.display = 'block'; };
+    image.src = sibling(info.image || 'birdseye.jpg');
+  } catch (err) { /* no bird's-eye view: the 3D view alone */ }
+}
+function hideBird() { bird.info = null; birdBox.style.display = 'none'; }
+onFrame.push((now) => {
+  const b = bird.info;
+  if (!b || now - bird.drawn < 100) return;
+  bird.drawn = now;
+  const W = birdCanvas.clientWidth, s = W / b.size[0], H = Math.round(b.size[1] * s), r = devicePixelRatio || 1;
+  if (birdCanvas.width !== Math.round(W * r) || birdCanvas.height !== Math.round(H * r)) {
+    birdCanvas.width = Math.round(W * r); birdCanvas.height = Math.round(H * r); birdCanvas.style.height = `${H}px`;
+  }
+  const g = birdCanvas.getContext('2d'), dot = (a, c) => a[0] * c[0] + a[1] * c[1] + a[2] * c[2];
+  const at = (p) => [(dot(p, b.right) - b.x0) * b.px_per_unit * s, (b.y1 - dot(p, b.ahead)) * b.px_per_unit * s];
+  g.setTransform(r, 0, 0, r, 0, 0);
+  g.drawImage(bird.image, 0, 0, W, H);
+  if (b.path && b.path.length > 1) {  // the recorded path
+    g.strokeStyle = 'rgba(147,161,178,.7)'; g.lineWidth = 1; g.beginPath();
+    b.path.forEach(([u, v], i) => (i ? g.lineTo : g.moveTo).call(g, u * s, v * s));
+    g.stroke();
+  }
+  g.font = '600 11px system-ui, sans-serif';
+  for (const o of bird.labels) {
+    const [u, v] = at(o.position);
+    g.fillStyle = '#ffd228'; g.beginPath(); g.arc(u, v, 3, 0, 2 * Math.PI); g.fill();
+    g.fillStyle = 'rgba(5,7,10,.75)'; const w = g.measureText(o.name).width; g.fillRect(u + 5, v - 8, w + 6, 14);
+    g.fillStyle = '#ffd228'; g.fillText(o.name, u + 8, v + 3);
+  }
+  const x = bird.extra;
+  if (x) {  // the live view's: the way to the chosen place, the places, the wearer (all in the splat's axes)
+    if (x.way && x.way.length > 1) {
+      g.strokeStyle = '#5ee0ff'; g.lineWidth = 2.5; g.setLineDash([6, 4]); g.beginPath();
+      x.way.forEach((p, i) => { const [u, v] = at(p); (i ? g.lineTo : g.moveTo).call(g, u, v); });
+      g.stroke(); g.setLineDash([]);
+    }
+    for (const q of x.places) {
+      const [u, v] = at(q.at), chosen = q.name === x.target;
+      g.fillStyle = chosen ? '#5ee0ff' : '#ffd228'; g.beginPath(); g.arc(u, v, chosen ? 6 : 4, 0, 2 * Math.PI); g.fill();
+      g.strokeStyle = '#05070a'; g.lineWidth = 1.5; g.stroke();
+      g.font = '700 12px system-ui, sans-serif';
+      const w = g.measureText(q.name).width;
+      g.fillStyle = 'rgba(5,7,10,.8)'; g.fillRect(u + 7, v - 9, w + 6, 16);
+      g.fillStyle = chosen ? '#5ee0ff' : '#ffd228'; g.fillText(q.name, u + 10, v + 3);
+    }
+    if (x.wearer) {
+      const [u, v] = at(x.wearer.at), d = x.wearer.dir, a = Math.atan2(-dot(d, b.ahead), dot(d, b.right));
+      g.fillStyle = '#ffffff'; g.beginPath(); g.moveTo(u + 11 * Math.cos(a), v + 11 * Math.sin(a));
+      g.lineTo(u + 7 * Math.cos(a + 2.4), v + 7 * Math.sin(a + 2.4)); g.lineTo(u + 7 * Math.cos(a - 2.4), v + 7 * Math.sin(a - 2.4));
+      g.closePath(); g.fill(); g.strokeStyle = '#4aa3ff'; g.lineWidth = 2; g.stroke();
+    }
+  }
+  // the view: the camera in the splat's axes (the scene is turned as the splats are: y and z flipped) and where it looks
+  const c = [camera.position.x, -camera.position.y, -camera.position.z];
+  const f3 = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion), f = [f3.x, -f3.y, -f3.z];
+  const [u, v] = at(c), du = dot(f, b.right), dv = -dot(f, b.ahead), n = Math.hypot(du, dv) || 1, a = Math.atan2(dv / n, du / n);
+  g.fillStyle = 'rgba(74,163,255,.35)'; g.beginPath(); g.moveTo(u, v); g.arc(u, v, 28, a - 0.5, a + 0.5); g.closePath(); g.fill();
+  g.fillStyle = '#4aa3ff'; g.beginPath(); g.arc(u, v, 4, 0, 2 * Math.PI); g.fill();
+});
+
+async function showLabels(url, depth) {
+  const reply = await fetch(url, { cache: 'no-store' });
+  if (!reply.ok) return;
+  const text = await reply.text();
+  if (text === labelsSeen) return;
+  labelsSeen = text;
+  const found = JSON.parse(text);
+  bird.labels = found.objects || [];
+  if (labelGroup) scene.remove(labelGroup);
+  labelGroup = new THREE.Group();
+  for (const o of found.objects || []) {
+    const tag = labelSprite(o.name, 0.03);  // the name alone: how often it was seen is in labels.json
+    tag.position.set(o.position[0], -o.position[1], -o.position[2]);  // the splat's axes turned as the splats are
+    labelGroup.add(tag);
+  }
+  scene.add(labelGroup);
+}
+function half(h) {  // a float16 as a number
+  const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, f = h & 1023;
+  return e === 0 ? s * 2 ** -14 * (f / 1024) : e === 31 ? (f ? NaN : s * Infinity) : s * 2 ** (e - 15) * (1 + f / 1024);
+}
+function poseOf(E) {  // a world-to-camera matrix (OpenCV axes) as a three.js position and rotation, the scene turned as the splats are
+  const R = [0, 1, 2].map(i => E[i].slice(0, 3)), t = [E[0][3], E[1][3], E[2][3]];
+  const c = [0, 1, 2].map(k => -(R[0][k] * t[0] + R[1][k] * t[1] + R[2][k] * t[2]));
+  const turn = (v) => new THREE.Vector3(v[0], -v[1], -v[2]);
+  const x = turn(R[0]), y = turn(R[1]).negate(), z = turn(R[2]).negate();
+  return { pos: turn(c), quat: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z)) };
+}
+async function startPlayback(viewsUrl, splat) {
+  if (playing) return;
+  const key = q.get('k') || '';
+  const file = (name) => viewsUrl.split('?')[0].replace(/[^/]*$/, name) + `?k=${encodeURIComponent(key)}`;
+  const v = await (await fetch(viewsUrl, { cache: 'no-store' })).json();
+  const [W, H] = v.size, [w, h] = v.depth_size, S = v.files.length;
+  const raw = new Uint16Array(await (await fetch(file(v.depths), { cache: 'no-store' })).arrayBuffer());
+  const group = new THREE.Group();
+  group.quaternion.set(1, 0, 0, 0);
+  scene.add(group);
+  const textures = new THREE.TextureLoader();
+  const meshes = v.files.map((name, i) => {
+    const K = v.K[i], E = v.E[i], R = [0, 1, 2].map(r => E[r].slice(0, 3)), t = [E[0][3], E[1][3], E[2][3]];
+    const pos = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2), d = new Float32Array(w * h), index = [];
+    for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) {
+      const n = yy * w + xx, z = half(raw[i * w * h + n]);
+      d[n] = z > 0 ? z : 0;
+      const cam = [((xx + 0.5) * W / w - K[0][2]) / K[0][0] * d[n] - t[0], ((yy + 0.5) * H / h - K[1][2]) / K[1][1] * d[n] - t[1], d[n] - t[2]];
+      for (let k = 0; k < 3; k++) pos[3 * n + k] = R[0][k] * cam[0] + R[1][k] * cam[1] + R[2][k] * cam[2];
+      uv[2 * n] = (xx + 0.5) / w; uv[2 * n + 1] = 1 - (yy + 0.5) / h;
+    }
+    for (let yy = 0; yy < h - 1; yy++) for (let xx = 0; xx < w - 1; xx++) {
+      const a = yy * w + xx, b = a + 1, c = a + w, e = c + 1, four = [d[a], d[b], d[c], d[e]];
+      if (Math.min(...four) > 0 && Math.max(...four) < 1.06 * Math.min(...four)) index.push(a, c, b, b, c, e);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geometry.setIndex(index);
+    const map = textures.load(file(name));
+    map.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide, transparent: true, opacity: 0 }));
+    mesh.visible = false;
+    group.add(mesh);
+    return mesh;
+  });
+  const poses = v.E.map(poseOf);
+  const fy = v.K[0][1][1];
+  camera.fov = 2 * Math.atan(H / 2 / fy) * 180 / Math.PI;
+  camera.near = v.median_depth * 0.01; camera.far = v.median_depth * 200; camera.updateProjectionMatrix();
+  if (splat) splat.visible = false;
+  playing = { at: 0, run: true, last: null };
+  const $ = (id) => document.getElementById(id);
+  $('play').style.display = 'flex'; $('playStart').style.display = 'none';
+  $('playAt').max = String(S - 1);
+  $('key').textContent = 'playing the recording · pause to look around · each surface is a keyframe with its own photo';
+  const show = () => {
+    const at = Math.min(playing.at, S - 1), i = Math.floor(at), f = at - i, j = Math.min(i + 1, S - 1);
+    meshes.forEach((m, k) => {
+      const all = $('playAll').checked;
+      m.visible = all || k === i || k === j;
+      m.material.opacity = all ? 1 : k === i ? 1 - f : k === j ? f : 0;
+      m.renderOrder = k === i ? 0 : 1;
+    });
+    if (playing.run) {
+      camera.position.lerpVectors(poses[i].pos, poses[j].pos, f);
+      camera.quaternion.slerpQuaternions(poses[i].quat, poses[j].quat, f);
+    }
+    $('playAt').value = String(at);
+  };
+  const pause = (run) => {
+    playing.run = run;
+    $('playPause').textContent = run ? '⏸' : '▶';
+    controls.enabled = !run;
+    if (!run) {  // look around from here
+      const ahead = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      controls.target.copy(camera.position).addScaledVector(ahead, v.median_depth);
+      controls.update();
+    }
+  };
+  $('playPause').onclick = () => pause(!playing.run);
+  $('playAt').oninput = () => { playing.at = Number($('playAt').value); pause(true); show(); pause(false); show(); };
+  $('playAll').onchange = show;
+  $('playSplat').onchange = () => { if (splat) splat.visible = $('playSplat').checked; };
+  onFrame.push((now) => {
+    if (playing.last !== null && playing.run) {
+      playing.at += (now - playing.last) / 1000 * Number($('playSpeed').value);
+      if (playing.at >= S - 1) { playing.at = S - 1; pause(false); }
+    }
+    playing.last = now;
+    show();
+  });
+  pause(true);
+  note.textContent = `${S} keyframes as photo surfaces · ${v.size[0]}×${v.size[1]} photos`;
+}
 
 async function load(url) {  // one .splat file as a mesh in the scene, turned into three.js axes (see above)
   const bytes = new Uint8Array(await (await fetch(url, { cache: 'no-store' })).arrayBuffer());
@@ -67,10 +322,19 @@ async function load(url) {  // one .splat file as a mesh in the scene, turned in
 }
 
 const live = q.get('live');  // ?live=ZONE&k=KEY: follow the newest position fix of that room
-if (!live) {
+if (!live && q.get('views')) {  // ?views=...views.json[&src=...splat][&labels=...labels.json]: a result opened by its files
+  (async () => {
+    let splat = null;
+    if (q.get('src')) { splat = (await load(q.get('src'))).mesh; showBird(q.get('src')); }
+    if (q.get('labels')) showLabels(q.get('labels'), 1);
+    startPlayback(q.get('views'), splat);
+  })();
+} else if (!live) {
   try {
     const { mesh, count } = await load(q.get('src'));
-    note.textContent = `${count.toLocaleString('en-US')} Gaussians, built on a CPU with no training`;
+    showBird(q.get('src'));
+    if (q.get('labels')) showLabels(q.get('labels'), depth);  // ?labels=...labels.json: name tags, as in the playback
+    note.textContent = `${count.toLocaleString('en-US')} Gaussians` + (/trained/.test(q.get('src')) ? ', trained on Iridis' : ', built on a CPU with no training');
     window.__viewer = { mesh, camera, controls, count };
   } catch (err) {
     note.textContent = `Could not load the 3D view: ${err.message || err}`;
@@ -94,9 +358,46 @@ if (!live) {
   marker.visible = false;
   const trail = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x4aa3ff }));
   const places = new THREE.Group();
-  scene.add(marker, trail, places);
+  const way = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: 0x5ee0ff, dashSize: 0.3, gapSize: 0.18 }));
+  scene.add(marker, trail, places, way);
+  // A trained splat has its own axes; /care/space (care_space.py) gives the matrix that takes it into the room map's,
+  // where the fixes and the places are. Its inverse puts them on the splat. Without it they are not drawn there.
+  let space = null, spaceFor = '', target = '';
+  async function loadSpace(trained) {
+    if (spaceFor === trained) return;
+    spaceFor = trained;
+    space = null;
+    try {
+      const reply = await fetch(api(`/care/space?zone=${encodeURIComponent(live)}`), { cache: 'no-store' });
+      const got = reply.ok ? await reply.json() : null;
+      if (got && got.kind === 'trained' && got.matrix) {
+        const toMap = new THREE.Matrix4().set(...got.matrix.flat());
+        space = { toMap, toSplat: toMap.clone().invert(), metres: Math.cbrt(Math.abs(toMap.determinant())) };
+      }
+    } catch { /* no matrix: the trained splat alone */ }
+    birdSet.hidden = !space;
+  }
+  const splatOf = (p) => new THREE.Vector3(p[0], p[1], p[2] || 0).applyMatrix4(space.toSplat);  // map -> splat axes
+  const sceneOf = (v) => new THREE.Vector3(v.x, -v.y, -v.z);  // splat axes -> three.js, turned as the splats are
+  bird.onPick = async (at) => {  // a click on the map from above: a place there, at its map position
+    if (!space) return;
+    const name = (prompt('Name this place (the wearer is shown the way to it):') || '').trim();
+    if (!name) return;
+    const m = new THREE.Vector3(...at).applyMatrix4(space.toMap);
+    const q = `zone=${encodeURIComponent(live)}&name=${encodeURIComponent(name)}&east=${m.x.toFixed(3)}&north=${m.y.toFixed(3)}&up=${m.z.toFixed(3)}`;
+    try {
+      const reply = await fetch(api(`/waypoint?${q}`), { method: 'POST' });
+      const got = await reply.json();
+      if (!reply.ok || !got.ok) throw new Error(got.error || reply.status);
+      target = name;
+      room.places = [...(room.places || []).filter(p => p.name !== name), { name, position: [m.x, m.y, m.z], source: 'map' }];
+      note.textContent = `Place "${name}" set: the glasses point to it from their next photo.`;
+    } catch (err) {
+      note.textContent = `Could not set "${name}": ${err.message || err}`;
+    }
+  };
   const path = [];
-  let roomJob = '', roomMesh = null, room = null, asked = false, fixAt = 0, added = '', busy = false;
+  let roomJob = '', roomMesh = null, room = null, asked = false, fixAt = 0, added = '', busy = false, labelsAt = 0;
   let shown = '', current = null, placed = false;  // the fallback: each fix's own 3D file
 
   async function loadRoom() {
@@ -111,7 +412,43 @@ if (!live) {
     }
     const info = await reply.json();
     room = info;
+    const trained = info.trained && info.trained.splat;
+    if (trained) {  // a splat trained on Iridis from a recording: it looks like the pictures. Its axes are the recording's
+      // first camera (as each fix's own file), not the room map's, so the wearer's cone is not drawn on it.
+      if (trained === roomJob) {  // the same splat: its labels may have been made again (video_map.py --labels-only)
+        if (Date.now() - labelsAt > 10000) {
+          labelsAt = Date.now();
+          showLabels(info.trained.labels ? api(info.trained.labels) : besides(api(trained), 'labels.json'), info.trained.median_depth);
+        }
+        return true;
+      }
+      const { mesh } = await load(api(trained));
+      if (roomMesh) { scene.remove(roomMesh); roomMesh.dispose && roomMesh.dispose(); }
+      if (current) { scene.remove(current); current.dispose && current.dispose(); current = null; shown = ''; }
+      // Start exactly where the first keyframe was taken, with its field of view: a trained splat looks like the photos
+      // from where they were taken, and grows stray Gaussians a step away from them.
+      const d = info.trained.median_depth || 1;
+      camera.fov = info.trained.fov_deg || 58;
+      camera.position.set(0, 0, 0); controls.target.set(0, 0, -d);
+      camera.near = d * 0.005; camera.far = d * 200; camera.updateProjectionMatrix(); controls.update();
+      roomMesh = mesh; roomJob = trained; labelsSeen = ''; bird.labels = [];
+      showBird(api(trained));
+      loadSpace(trained);
+      // labels and the playback's views: as the room lists them, or else next to the splat (labelled afterwards:
+      // video_map.py --labels-only); a missing file just shows nothing
+      labelsAt = Date.now();
+      showLabels(info.trained.labels ? api(info.trained.labels) : besides(api(trained), 'labels.json'), info.trained.median_depth);
+      const views = info.trained.views ? api(info.trained.views) : besides(api(trained), 'views.json');
+      fetch(views, { cache: 'no-store' }).then((reply) => {
+        if (!reply.ok) return;
+        const start = document.getElementById('playStart');
+        start.style.display = 'block';
+        start.onclick = () => startPlayback(views, roomMesh);
+      }).catch(() => {});
+      return true;
+    }
     if (info.job === roomJob) return true;
+    hideBird();  // the room map has its own axes: the bird's-eye view belongs to a trained splat
     const { mesh } = await load(api(info.splat));
     mesh.quaternion.set(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);  // map axes -> three.js axes, as toThree
     if (roomMesh) { scene.remove(roomMesh); roomMesh.dispose && roomMesh.dispose(); }
@@ -129,24 +466,58 @@ if (!live) {
     return true;
   }
 
-  function showFix(fix) {  // the wearer's cone, trail and the places, in the room map's axes
-    const ok = fix.state !== 'lost' && fix.position && !fix.unusable;
+  function showFix(fix) {  // the wearer's cone, trail, the places and the way to the chosen one
+    // On a trained splat everything goes through the matrix into its axes (and its units: 1 / space.metres per metre).
+    const onTrained = !!(room && room.trained && room.trained.splat);
+    const scale = onTrained ? (space ? 1 / space.metres : 0) : 1;
+    const put = onTrained ? (p) => sceneOf(splatOf(p)) : toThree;
+    const ok = fix.state !== 'lost' && fix.position && !fix.unusable && scale > 0;
     marker.visible = !!ok;
+    marker.scale.setScalar(scale || 1);
     if (ok) {
-      marker.position.copy(toThree(fix.position));
-      marker.rotation.y = -(fix.heading_deg || 0) * Math.PI / 180;
+      const here = put(fix.position), h = (fix.heading_deg || 0) * Math.PI / 180;
+      marker.position.copy(here);
+      const ahead = put([fix.position[0] + Math.sin(h), fix.position[1] + Math.cos(h), fix.position[2] || 0]).sub(here);
+      marker.lookAt(here.clone().sub(ahead));  // the cone's tip is along -z: it faces where the wearer faces
       cone.material.color.setHex(colours[fix.state] || colours.found);
       if (fix.at !== fixAt) {
-        path.push(toThree(fix.position)); path.splice(0, Math.max(0, path.length - 40));
-        trail.geometry.dispose(); trail.geometry = new THREE.BufferGeometry().setFromPoints(path);
+        path.push(fix.position); path.splice(0, Math.max(0, path.length - 40));
       }
+      trail.geometry.dispose(); trail.geometry = new THREE.BufferGeometry().setFromPoints(path.map(put));
     }
     places.clear();
-    for (const p of (fix.waypoints || []).length ? fix.waypoints : (room && room.places) || []) {
-      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffd228 }));
-      ball.position.copy(toThree(p.position));
-      places.add(ball);
+    const named = (room && room.places && room.places.length ? room.places : fix.waypoints) || [];
+    const listed = [...named, ...(fix.waypoints || []).filter(w => !named.some(p => p.name === w.name))];
+    const shown = [];
+    if (scale > 0) {
+      for (const p of listed) {
+        if (!p.position) continue;
+        const at = put(p.position), mine = p.name === target;
+        const ball = new THREE.Mesh(new THREE.SphereGeometry(0.05 * scale, 16, 12), new THREE.MeshBasicMaterial({ color: mine ? 0x5ee0ff : 0xffd228 }));
+        ball.position.copy(at);
+        const tag = labelSprite(p.name, mine ? 0.042 : 0.036, mine ? '#5ee0ff' : '#ffd228');
+        tag.position.copy(at).add(new THREE.Vector3(0, 0.22 * scale, 0));
+        places.add(ball, tag);
+        shown.push({ name: p.name, at: onTrained ? splatOf(p.position).toArray() : null });
+      }
     }
+    // the way: to the place set on this page, else to the nearest; the fix's route around furniture when it has one
+    const ways = (fix.waypoints || []).filter(w => w.position);
+    const goal = ways.find(w => w.name === target) || ways.slice().sort((a, b) => a.distance_m - b.distance_m)[0];
+    const route = goal && fix.route && fix.route.to && fix.route.to[goal.name];
+    const floor = (fix.position && fix.position[2] || 0) - 1.2;  // under the wearer's eyes, about at the floor
+    const steps = ok && goal ? (route && route.points && route.points.length > 1 ? route.points : [fix.position, goal.position])
+      .map(q => [q[0], q[1], floor]) : [];
+    way.visible = steps.length > 1;
+    if (way.visible) {
+      way.geometry.dispose(); way.geometry = new THREE.BufferGeometry().setFromPoints(steps.map(put));
+      way.material.dashSize = 0.3 * scale; way.material.gapSize = 0.18 * scale; way.computeLineDistances();
+    }
+    bird.extra = onTrained && space ? {
+      places: shown, target: goal ? goal.name : target,
+      way: steps.map(q => splatOf(q).toArray()),
+      wearer: ok ? { at: splatOf(fix.position).toArray(), dir: splatOf([fix.position[0] + Math.sin((fix.heading_deg || 0) * Math.PI / 180), fix.position[1] + Math.cos((fix.heading_deg || 0) * Math.PI / 180), fix.position[2] || 0]).sub(splatOf(fix.position)).toArray() } : null,
+    } : null;
     fixAt = fix.at;
   }
 
@@ -160,7 +531,11 @@ if (!live) {
       const cover = fix && fix.coverage ? ` · ${Math.round(100 * fix.coverage.mapped_share)}% of this view mapped` : '';
       if (fix && fix.picture_added && fix.picture_added.name !== added) added = fix.picture_added.name;
       const growing = room && room.building ? ' · map growing…' : '';
-      const map = haveRoom ? `room map: ${room.frames} of ${room.of} pictures, ${(room.gaussians || 0).toLocaleString('en-US')} Gaussians` : '';
+      const map = !haveRoom ? '' : room.trained && room.trained.splat
+        ? `trained splat (Iridis): ${(room.trained.gaussians || 0).toLocaleString('en-US')} Gaussians from ${room.trained.keyframes} keyframes, `
+          + `${room.trained.psnr} dB on its pictures, ${new Date(room.trained.at * 1000).toLocaleTimeString()}`
+          + (space ? '' : ' (wearer not drawn: no matrix into the room map yet, /care/space)')
+        : `room map: ${room.frames} of ${room.of} pictures, ${(room.gaussians || 0).toLocaleString('en-US')} Gaussians`;
       if (!fix) { note.textContent = `Room "${live}": no position fix yet. Send photos from the phone.${map ? ' · ' + map : ''}`; return; }
       const when = new Date(fix.at * 1000).toLocaleTimeString();
       const words = `${fix.headline || fix.state} · ${fix.state} · photo at ${when}${fix.reused ? ' (same view)' : ''}${cover}`;

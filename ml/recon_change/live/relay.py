@@ -22,6 +22,14 @@ It prints the link to open. The link carries an access key, and every request ne
     GET  /waypoints?zone=kitchen  the zone's named places
     POST /waypoint?zone=kitchen&name=pill+box&frame=3&u=0.4&v=0.6   name a spot in baseline picture 3
     POST /waypoint?zone=kitchen&name=pill+box&delete=1
+    POST /waypoint?zone=kitchen&name=front+door&live=1&u=0.4&v=0.6   name a spot on a photo (the body; without
+                                  one, the newest photo, GET /frame): placed in 3D from that photo's own fix, no
+                                  picture added to the room
+    POST /waypoint?zone=kitchen&name=exit&east=1.2&north=3.4&up=0.9   a place at a map position (east, north, up in
+                                  map metres): picked on the 3D page's view from above
+    POST /places?zone=kitchen     place the named places in the room map's axes from its pictures as they are (no
+                                  new picture, no map built, a trained splat kept); also done after each place named
+                                  in a picture. GET /room lists them as "places"
     GET  /hud                     the glasses display page: arrow and distance to a place
     GET  /places                  name places by clicking in a baseline picture, and test a fix
     POST /ask?zone=kitchen        body = {"question": "Did I take my pills?"} -> the answer in words
@@ -32,6 +40,12 @@ It prints the link to open. The link carries an access key, and every request ne
     GET  /viewer?live=kitchen     the room in 3D with the wearer moving in it, live (needs the room map below)
     POST /map?zone=kitchen        build the room map: the baseline pictures in one pass, as one splat (10 to 20 s)
     POST /locate?...&quick=0      with --quick: ask the model (or the cheap gate), not the instant fix
+    POST /recording?zone=Z&session=S&seq=N&final=0|1   one chunk of a room recorded continuously by the phone or the
+                                  glasses: a zip of frames NNNNNN_<ms>.jpg (or a video). A chunk sent twice counts once.
+                                  Every REC_MAP_EVERY new frames the room map is built again from the recording's
+                                  keyframes; at final=1, and every REC_TRAIN_EVERY_S while it runs, a splat is trained
+                                  on Iridis (--train-host) and /viewer?live=Z shows it
+    GET  /recording?zone=Z        the newest session: chunks, frames, gaps, room map updates, training
     GET  /room?zone=kitchen       the room map: its splat (/evidence/.../room.splat), places and baseline cameras
     GET  /frame?zone=kitchen      the newest photo that reached /locate, as it came (the dashboard's camera view)
     GET  /worker_log?lines=60     the end of the worker's log: model load, timings and peak GPU memory per job
@@ -42,11 +56,23 @@ small part changed is reported under "view" with the place of the change; &fresh
     GET  /reminders               the reminders, each with its state today: later, due, done or missed
     POST /reminder                body = {"text": "Time to take your pills", "time": "14:00", "place": "pill box"}
     POST /reminder?id=ID&now=1    show it now (also &done=1: finished by hand, &delete=1)
+    GET  /navigate?zone=kitchen   the wearer's map: where they are and face, the places, the floor plan (no route);
+                                  with no fix since the newest room map, that map (cut from its splat) and no position
+    GET  /navigate?zone=kitchen&to=pill+box   the way from where the wearer is now to a named place (the name may be
+                                  loose: "Pill box", "pillbox", "the pill box"): the route around furniture, the
+                                  next turn in short words, whether they are there, and the floor plan to draw it on.
+                                  "stale": true when the newest fix is over NAV_STALE_S old or not sure. While it is
+                                  polled (NAV_GUIDE_S), /where carries "navigate": {"name", "active", "distance_m"};
+                                  &stop=1 ends it, arriving ends it
     POST /route                   body = {"position": [east, north], "heading_deg": 0, "map": {...}, "waypoints": [...]}
                                   -> the way around furniture from that standpoint (route.py). /locate and
                                   /where carry the same under "route", from the wearer's own position
     GET  /day?date=YYYY-MM-DD     what the wearer did that day (no date: today): timeline and two summaries
     GET  /dayview                 the carer's page for one day
+    GET  /care?zone=kitchen       the caretaker's page: the room as a Gaussian splat with the wearer moving in it,
+                                  the named places as labels in 3D, and what the wearer is doing (W A S D to move)
+    GET  /care/space?zone=kitchen the splat that page shows, and the matrix that puts a trained splat into the room
+                                  map's axes, where the fixes and places are (care_space.py)
 
 What the carer sets once, on /places (the gateway keeps it next to the baseline pictures):
 
@@ -112,6 +138,62 @@ LONG_SIDE = 518  # the model's input size: no point sending more pixels
 BIG_SIDE = 1280  # the wearer's newest photo is also sent at this size, for finding small items
 REMINDER_WINDOW = 2 * 3600  # a reminder nobody finished within two hours counts as missed
 NEAR_PLACE_M = 1.5  # an item this close to a named place is described as "near" it
+# GET /navigate: there within NAV_ARRIVED_M; a fix older than NAV_STALE_S, or not "found", is said to be stale; the
+# floor plan sent with it is cut to NAV_PLAN_POINTS points.
+NAV_ARRIVED_M = 0.7
+NAV_STALE_S = 10.0
+NAV_PLAN_POINTS = 600
+NAV_GUIDE_S = 15.0
+RESUME_POLL_S = 30.0  # how often a training left running by a restart is looked at; up to 10x this between tries when
+# the GPU machine does not answer (a refused SSH connection must not end the wait)  # a guidance (GET /navigate&to=) not polled for this long is over: /where stops saying where to
+
+
+def turn_words(bearing_deg, distance_m):
+    """The next move in a few words: bearing_deg from straight ahead (+ to the right)."""
+    if distance_m <= NAV_ARRIVED_M:
+        return "you're there"
+    b, side = abs(bearing_deg), "right" if bearing_deg > 0 else "left"
+    if b <= 15:
+        return "ahead"
+    if b <= 45:
+        return f"slightly {side}"
+    if b <= 135:
+        return f"turn {side}"
+    return "turn around"
+
+
+def match_place(asked, names):
+    """The place a loosely typed or spoken name means, or None: the same words ignoring case, spaces, "the", "my" and
+    punctuation; else one name starting with or containing it (or it containing a name); else the closest spelling."""
+    import difflib
+
+    def plain(text):
+        words = re.sub(r"[^\w ]+", " ", str(text).lower()).split()
+        return " ".join(w for w in words if w not in ("the", "my", "a", "an", "to"))
+
+    want = plain(asked)
+    if not want:
+        return None
+    by_plain = {plain(n): n for n in names}
+    squashed = {k.replace(" ", ""): n for k, n in by_plain.items()}
+    if want in by_plain:
+        return by_plain[want]
+    if want.replace(" ", "") in squashed:
+        return squashed[want.replace(" ", "")]
+    near = [n for k, n in by_plain.items() if k.startswith(want) or want in k or (k and k in want)]
+    if len(near) == 1:
+        return near[0]
+    close = difflib.get_close_matches(want, list(by_plain), n=1, cutoff=0.6)
+    return by_plain[close[0]] if close else None
+
+
+# Things every fix also looks for (the item finder on the worker) and names as a place by themselves once AUTO_VIEWS
+# fixes agree where one is: within AUTO_RADIUS_M of each other, each with the finder's score AUTO_SCORE or more. The
+# place is marked "auto" and moves with later sightings; a place someone named keeps its own position.
+AUTO_PLACES = [n.strip() for n in os.environ.get("BEACON_AUTO_PLACES", "pill box, front door").split(",") if n.strip()]
+AUTO_SCORE = 0.4
+AUTO_VIEWS = 2
+AUTO_RADIUS_M = {"pill box": 0.4, "front door": 1.0}  # others: 0.6 m
 FRESH_FIX_S = 60  # "to your left" is only said from a position fix this recent
 MISSED_LOOKS = 2  # clear looks at a remembered spot without the item before the sighting is doubted
 MOVED_M, MOVED_DEG = 0.3, 15  # a look only counts as another one from a different standpoint
@@ -150,6 +232,12 @@ try:
 except ImportError:  # route.py is missing: fixes go out without a route, the display points straight
     route_finder = None
 # --- end route finding --------------------------------------------------------------------------
+
+# ---- caretaker's page (/care): the trained splat put into the room map's axes (care_space.py, needs NumPy) ----
+try:
+    import care_space
+except ImportError:  # no NumPy here: the page shows the room map, where the wearer is drawn as before
+    care_space = None
 
 
 class Link:
@@ -486,6 +574,43 @@ def item_photo(photo):
 REPO = "TheTechJumbo/junction-2026"
 
 
+REC_MAP_EVERY = 60         # a recording's room map is built again after this many new frames
+REC_TRAIN_EVERY_S = 600    # and a splat trained on Iridis this often while it runs (and when it ends)
+REC_VIDEO_MAX = 4 << 30    # a whole video sent as one chunk (the glasses: about 110 MB a minute) may be this big
+REC_VIDEO_FPS = 15         # frames a second taken from such a video (?fps=1..30)
+REC_PART_FRAMES = 120      # and sent on to the gateway in parts of this many frames
+
+
+def video_parts(path, fps, start_ms):
+    """A video file as zips of frames NNNNNN_<ms>.jpg (upright, long side 960, like the app's), REC_PART_FRAMES each."""
+    cap = cv2.VideoCapture(str(path))
+    rate = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    step, n, kept, part = max(1, round(rate / fps)), 0, 0, None
+    parts = []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if n % step == 0:
+            scale = 960 / max(frame.shape[:2])
+            if scale < 1:
+                frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            if part is None:
+                buffer = io.BytesIO()
+                part = zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED)
+            part.writestr(f"{kept:06d}_{start_ms + int(1000 * n / rate)}.jpg", cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes())
+            kept += 1
+            if kept % REC_PART_FRAMES == 0:
+                part.close()
+                parts.append(buffer.getvalue())
+                part = None
+        n += 1
+    cap.release()
+    if part is not None:
+        part.close()
+        parts.append(buffer.getvalue())
+    return parts, n
+SESSION_NAME = r"[A-Za-z0-9_-]{1,64}"
 AUTO_SPLATS_KEPT = 12  # with --splat-every-fix, only the newest few of those 3D files stay on disk (each about 4 MB)
 
 # What the watch-only key may read (GET only): the glasses display page and the replies it polls.
@@ -493,7 +618,7 @@ VIEW_PATHS = {"/hud", "/where", "/reminders", "/status", "/waypoints"}
 
 
 def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if rc else None, api_token=None,
-                 splat_every_fix=False, quick=False, view_token=None):
+                 splat_every_fix=False, quick=False, train_host=None, bg_link=None, remote_root=None, view_token=None):
     # The event API's address without the /events at its end: where /ask and /speak live.
     api_base = re.sub(r"/events/?$", "", event_api).rstrip("/") if event_api and api_token else None
     history_file = evidence_dir / "history.json"
@@ -818,6 +943,74 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         return images, splat_url
 
     building = {}  # {zone: "running" or "again"}: one room map build at a time per zone, one more if asked meanwhile
+    placing = {}  # {zone: "running" or "again"}: the same for placing the named places (place_room)
+    auto_seen = {}  # {zone: {name: [sightings]}}: the AUTO_PLACES things the item finder saw, newest last
+    # ---- caretaker's page (/care) ----
+    space_made, space_lock = {}, threading.Lock()  # {zone: ((room map job, trained splat), the reply)}: worked out once
+
+    def care_view(zone):
+        """The splat the caretaker's page shows for a zone, and the matrix that takes it into the room map's axes,
+        where the wearer, the named places and the day's path are. The trained splat when its cameras line up with
+        the room map's (care_space.py), else the room map itself. Returns (HTTP status, reply)."""
+        got = rooms.get(zone)
+        if not got or not got.get("splat"):
+            return 404, {"ok": False, "error": f"No room map for '{zone}' yet: POST /map?zone={zone}."}
+        trained = dict(got.get("trained") or {})
+        match = re.fullmatch(r"/evidence/([\w-]+)/trained\.splat", trained.get("splat") or "")
+        # Labels made again after training (video_map.py --labels-only, same cameras) sit next to the splat.
+        if match and not trained.get("labels") and (evidence_dir / match[1] / "labels.json").exists():
+            trained["labels"] = f"/evidence/{match[1]}/labels.json"
+        plain = {"ok": True, "zone": zone, "kind": "map", "splat": got["splat"], "matrix": None, "fit": None,
+                 "room_splat": got["splat"], "trained": trained or None, "median_depth_m": got.get("median_depth_m"),
+                 "fov_deg": got.get("fov_deg"), "cameras": got.get("cameras") or [], "places": got.get("places") or []}
+        if not match:
+            return 200, {**plain, "why": "No trained splat for this room yet: the room map is shown."}
+        made_for = (got.get("job"), trained["splat"], trained.get("labels"))
+        with space_lock:
+            if zone in space_made and space_made[zone][0] == made_for:
+                return 200, space_made[zone][1]
+            fit, why = None, None
+            if care_space is None:
+                why = "NumPy is missing on this laptop: the room map is shown."
+            else:
+                hint = (got.get("median_depth_m") or 0) / trained["median_depth"] if trained.get("median_depth") else None
+                try:
+                    cameras_file = evidence_dir / match[1] / "cameras.npz"
+                    # One recording behind both (Record room, then its training): pair the very same frames.
+                    same = got.get("session") and got.get("session") == trained.get("session") and got.get("keyframe_numbers")
+                    numbers = (got["keyframe_numbers"], care_space.load_keyframes(cameras_file)) if same else None
+                    fit = care_space.space(care_space.load_cameras(cameras_file), got.get("cameras") or [], hint,
+                                           numbers if numbers and numbers[1] else None)
+                    why = fit.get("why")
+                except (OSError, KeyError, ValueError) as err:
+                    why = f"The trained splat's cameras could not be read ({type(err).__name__}): the room map is shown."
+            reply = {**plain, "kind": "trained", "splat": trained["splat"], "matrix": fit["matrix"], "fit": fit} \
+                if fit and fit.get("ok") else {**plain, "fit": fit, "why": why}
+            space_made[zone] = (made_for, reply)
+            return 200, reply
+
+    views_kept = {}  # {trained splat folder: (views.json's modification time, care_space.load_views)}
+
+    def care_named(zone, reply):
+        """The zone's named places (/waypoints) in map axes from the trained splat's depth (care_space.place_points),
+        so /care shows a place as soon as it is named, before a position fix or a new room map places it. Asked
+        every time: places can be named at any moment. [] when the room has no trained splat with exported views."""
+        paired = (reply.get("fit") or {}).get("paired")
+        if reply.get("kind") != "trained" or not paired or care_space is None:
+            return []
+        folder = evidence_dir / reply["splat"].split("/")[2]
+        try:
+            stamp = (folder / "views.json").stat().st_mtime
+            with space_lock:
+                if views_kept.get(folder, (None,))[0] != stamp:
+                    views_kept[folder] = (stamp, care_space.load_views(folder))
+                views = views_kept[folder][1]
+            header, _ = link.call({"op": "waypoints", "zone": zone})
+            return care_space.place_points(header.get("waypoints") or [], paired, views, reply["matrix"]) if header.get("ok") else []
+        except Exception as err:  # noqa: BLE001  the page still shows the places the fixes carry
+            sys.stderr.write(f"care places: {type(err).__name__}: {err}\n")
+            return []
+    # ---- end caretaker's page ----
     quick_keys, full_at = {}, {}  # --quick: {zone: the room pictures as small prints}, {zone: when the model last placed a photo}
     recent = {}  # --quick: {zone: {"model": (print, pose) of the newest model fix's photo, "quick": (print, pose) of the newest instant one}}
 
@@ -893,14 +1086,22 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         fix["headline"], fix["detail"] = where_in_plain_words(fix)
         return fix
 
-    def build_room(zone):
-        """Ask the worker for the zone's room map (see worker.room_map) and keep it. Returns the reply header."""
+    def build_room(zone, op="map", session=None):
+        """Ask the worker for the zone's room map (worker.room_map, or recording_map from a recording) and keep it.
+        The zone's trained splat (with its views and labels) stays with the room: it has its own axes, so a new map
+        does not move it. Only a map of another recording replaces it (that recording's own training follows).
+        Returns the reply header."""
         t0 = time.time()
-        header, blob = link.call({"op": "map", "zone": zone, "device": "gpu"})
+        # Its own connection to the gateway when there is one: a room map takes seconds to minutes, and photos for fixes
+        # and recording chunks must not wait behind it (one connection answers one request at a time).
+        header, blob = (bg_link or link).call({"op": op, "zone": zone, "device": "gpu", **({"session": session} if session else {})})
         if header.get("ok"):
             _, splat_url = keep_evidence(header["job"], blob)
             result = header["result"]
-            rooms[zone] = {**result, "zone": zone, "job": header["job"], "splat": splat_url, "at": time.time(),
+            trained = (rooms.get(zone) or {}).get("trained")
+            if trained and op == "recording_map" and trained.get("session") != result.get("session"):
+                trained = None
+            rooms[zone] = {**result, "zone": zone, "job": header["job"], "splat": splat_url, "at": time.time(), "trained": trained,
                            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                            "seconds": {**result.get("seconds", {}), "total": round(time.time() - t0, 2)}}
             try:
@@ -908,6 +1109,80 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             except OSError:
                 pass
         return header
+
+    def save_rooms():
+        try:
+            rooms_file.write_text(json.dumps(rooms))
+        except OSError:
+            pass
+
+    def set_place(zone, place):
+        """One named place with its map position into the zone's room (GET /room "places"), replacing its old one."""
+        if zone in rooms:
+            rooms[zone]["places"] = [q for q in rooms[zone].get("places") or [] if q["name"] != place["name"]] + [place]
+            save_rooms()
+
+    def place_spots(zone):
+        """The named places' map positions from the zone's pictures as they are (worker op "spots": one pass over the
+        pictures the room map uses, in its axes; nothing added, nothing built). Returns the reply header."""
+        header, _ = (bg_link or link).call({"op": "spots", "zone": zone, "device": "gpu"})
+        if header.get("ok") and zone in rooms:
+            rooms[zone]["places"] = header["result"].get("places") or []
+            rooms[zone]["places_at"] = time.time()
+            save_rooms()
+        return header
+
+    def place_room(zone):
+        """place_spots in the background (after a place is named in a picture), one at a time per zone."""
+        if placing.get(zone):
+            placing[zone] = "again"
+            return
+        placing[zone] = "running"
+
+        def run():
+            try:
+                while True:
+                    header = place_spots(zone)
+                    if not header.get("ok"):
+                        sys.stderr.write(f"places for {zone} not placed: {header.get('error')}" + chr(10))
+                    if placing.get(zone) != "again":
+                        break
+                    placing[zone] = "running"
+            finally:
+                placing.pop(zone, None)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def auto_places(zone, result, job):
+        """A thing of AUTO_PLACES this fix saw, with a position: kept. When AUTO_VIEWS fixes agree where it is, it is
+        named as a place ("auto", at the middle of the agreeing sightings), and moved when later sightings move it by
+        more than half its radius. Returns the places named or moved."""
+        named = []
+        for item in result.get("items") or []:
+            name = item.get("name")
+            if name not in AUTO_PLACES or not item.get("position") or (item.get("score") or 0) < AUTO_SCORE:
+                continue
+            mine = auto_seen.setdefault(zone, {}).setdefault(name, [])
+            mine.append({"position": item["position"], "score": item.get("score"), "job": job, "at": time.time()})
+            del mine[:-30]
+            radius = AUTO_RADIUS_M.get(name, 0.6)
+            best = max(([s for s in mine if math.dist(s["position"], c["position"]) <= radius] for c in mine), key=len)
+            if len({s["job"] for s in best}) < AUTO_VIEWS:
+                continue
+            position = [round(sorted(s["position"][k] for s in best)[len(best) // 2], 3) for k in range(3)]
+            listed, _ = link.call({"op": "waypoints", "zone": zone})
+            old = next((q for q in listed.get("waypoints") or [] if q["name"] == name), None)
+            if old and old.get("source") != "auto":
+                continue  # someone named this place: theirs stays
+            if old and old.get("position") and math.dist(old["position"], position) < radius / 2:
+                continue  # where it already is
+            place = {"name": name, "position": position, "source": "auto", "views": len({s["job"] for s in best}),
+                     "score": round(max(s["score"] or 0 for s in best), 3)}
+            header, _ = link.call({"op": "waypoint", "zone": zone, **place, "auto": True})
+            if header.get("ok"):
+                set_place(zone, place)
+                named.append(place)
+        return named
 
     def grow_room(zone):
         """A fix added a picture of a part of the room not sampled before: build the room map again, in the background."""
@@ -929,6 +1204,159 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 building.pop(zone, None)
 
         threading.Thread(target=run, daemon=True).start()
+
+    # ---- recordings (POST /recording): the room recorded continuously, mapped as it comes, trained on Iridis ----
+    recs_file = evidence_dir / "recordings.json"
+    try:
+        recs = json.loads(recs_file.read_text())  # {zone: the newest session's progress}
+    except (OSError, ValueError):
+        recs = {}
+    rec_lock = threading.Lock()
+
+    def save_recs():
+        try:
+            recs_file.write_text(json.dumps(recs))
+        except OSError:
+            pass
+
+    def rec_map(zone, session, frames):
+        """Build the room map from the recording so far (in the background)."""
+        try:
+            header = build_room(zone, "recording_map", session)
+        except Exception as err:  # noqa: BLE001
+            header = {"ok": False, "error": f"{type(err).__name__}: {err}"}
+        with rec_lock:
+            rec = recs.get(zone)
+            if rec and rec.get("session") == session:
+                rec["map_state"] = "done" if header.get("ok") else "failed"
+                if header.get("ok"):
+                    rec.update(map_frames=frames, map_updates=rec.get("map_updates", 0) + 1, map_at=time.time(),
+                               map_keyframes=(header.get("result") or {}).get("keyframes"))
+                rec["map_error"] = None if header.get("ok") else header.get("error")
+                again = rec["map_state"] == "done" and rec.get("frames", 0) - frames >= REC_MAP_EVERY
+                save_recs()
+            else:
+                again = False
+        if again:
+            start_map(zone, session)
+
+    def start_map(zone, session):
+        with rec_lock:
+            rec = recs.get(zone)
+            if not rec or rec.get("map_state") == "running":
+                return
+            rec["map_state"] = "running"
+            frames = rec.get("frames", 0)
+        threading.Thread(target=rec_map, args=(zone, session, frames), daemon=True).start()
+
+    def rec_train(zone, session):
+        """Train a splat of the recording so far on Iridis and make the room show it (in the background)."""
+        import remote_train
+        local = os.environ.get("BEACON_ROOT")  # --local: the frames are on this laptop; else the gateway keeps them remotely
+        root = Path(local or ".")
+        remote = None if local else f"{remote_root or remote_train.DEFAULT_ROOT}/recordings/{zone}/{session}/frames"
+        while True:
+            with rec_lock:
+                tr = recs[zone]["training"]
+                runs = tr.get("runs", 0) + 1
+                tr.update(state="running", started_at=time.time(), runs=runs, again=False, error=None)
+                save_recs()
+            out = evidence_dir / f"train-{zone}-{session}-{runs}"
+            try:
+                got = remote_train.train(root / "recordings" / zone / session / "frames", f"{zone}-{session}", out, host=train_host,
+                                         root=remote_root, remote_frames=remote,
+                                         log=lambda text: sys.stderr.write(f"training {zone}/{session}: {text}" + chr(10)))
+            except Exception as err:  # noqa: BLE001  Iridis unreachable, the job refused: say so on the page
+                got = {"state": "failed", "error": f"{type(err).__name__}: {err}"[:300]}
+            if not trained_result(zone, session, out, got):
+                return
+
+    def trained_result(zone, session, out, got):
+        """A training's result (remote_train: state, summary, job, error), its files in OUT: the recording's status,
+        and when it is done, the zone's trained splat (if the recording is still the zone's newest). Returns whether
+        it should run once more (the recording moved on while it trained)."""
+        summary = got.get("summary") or {}
+        with rec_lock:
+            current = recs.get(zone) or {}
+            # a newer session may have started meanwhile: then this result does not overwrite its status
+            tr = current["training"] if current.get("session") == session else {"again": False}
+            tr.update(state=got["state"], finished_at=time.time(), job=got.get("job"), error=got.get("error"),
+                      psnr=summary.get("psnr_median"), keyframes=summary.get("keyframes"), gaussians=summary.get("trained_gaussians"),
+                      frames=summary.get("frames"))
+            if got["state"] == "done":
+                room = rooms.setdefault(zone, {"zone": zone, "job": None, "at": time.time()})
+                room["trained"] = {"splat": f"/evidence/{out.name}/trained.splat", "session": session, "at": time.time(),
+                                   "psnr": summary.get("psnr_median"), "keyframes": summary.get("keyframes"),
+                                   "gaussians": summary.get("trained_gaussians"), "median_depth": summary.get("median_depth"),
+                                   "fov_deg": summary.get("fov_deg"),
+                                   "views": f"/evidence/{out.name}/views.json" if (out / "views.json").exists() else None,
+                                   "labels": f"/evidence/{out.name}/labels.json" if (out / "labels.json").exists() else None}
+                try:
+                    rooms_file.write_text(json.dumps(rooms))
+                except OSError:
+                    pass
+                tr["splat"] = room["trained"]["splat"]
+            repeat = tr.get("again")
+            if not repeat:
+                tr["state"] = got["state"]
+            save_recs()
+        return bool(repeat)
+
+    def complete(out):
+        """Are a training's files all here (a relay stopped while fetching leaves keyframes/ unrenamed)?"""
+        return (out / "trained.splat").exists() and (out / "summary.json").exists() and not (out / "keyframes").exists() \
+            and (not (out / "views.json").exists() or any(out.glob("kf*.jpg")))
+
+    def resume_trainings():
+        """At start: the trainings the relay was waiting on when it stopped (still "running" in recordings.json). Each
+        one's result is registered as it would have been: from its folder here when that is complete, else fetched
+        from the GPU machine once it has ended there (checked every 30 s for remote_train.WAIT_S). In the background."""
+        waiting = [(zone, rec["session"], (rec.get("training") or {}).get("runs", 1)) for zone, rec in list(recs.items())
+                   if (rec.get("training") or {}).get("state") == "running" and rec.get("session")]
+        if not waiting:
+            return
+
+        def run(zone, session, runs):
+            import remote_train
+            out = evidence_dir / f"train-{zone}-{session}-{runs}"
+            say = lambda text: sys.stderr.write(f"training {zone}/{session} (after a restart): {text}" + chr(10))  # noqa: E731
+            t0 = time.time()
+            try:
+                wait = RESUME_POLL_S
+                while not complete(out):
+                    try:
+                        if remote_train.finished(f"{zone}-{session}", host=train_host, root=remote_root):
+                            remote_train.fetch(f"{zone}-{session}", out, host=train_host, root=remote_root, log=say)
+                            break
+                        wait = RESUME_POLL_S
+                    except Exception as err:  # noqa: BLE001  the GPU machine did not answer: try again, less often
+                        say(f"no answer ({type(err).__name__}: {str(err)[:120]}); again in {wait:.0f} s")
+                        wait = min(2 * wait, 10 * RESUME_POLL_S)
+                    if time.time() - t0 > remote_train.WAIT_S:
+                        raise RuntimeError("it did not end in time")
+                    time.sleep(wait)
+                ok = (out / "trained.splat").exists()
+                try:
+                    summary = json.loads((out / "summary.json").read_text())
+                except (OSError, ValueError):
+                    summary = {}
+                got = {"state": "done" if ok else "failed", "summary": summary, "error": None if ok else "no trained splat"}
+            except Exception as err:  # noqa: BLE001  the GPU machine unreachable: say so on the page
+                got = {"state": "failed", "error": f"after a restart: {type(err).__name__}: {err}"[:300]}
+            say(got["state"])
+            trained_result(zone, session, out, got)
+
+        for zone, session, runs in waiting:
+            threading.Thread(target=run, args=(zone, session, runs), daemon=True).start()
+
+    def start_training(zone, session):
+        with rec_lock:
+            tr = recs[zone]["training"]
+            if tr.get("state") == "running":
+                tr["again"] = True  # once more when this one ends: the recording has moved on
+                return
+            tr["state"] = "running"
+        threading.Thread(target=rec_train, args=(zone, session), daemon=True).start()
 
     def pull_requests():
         """The repo's pull requests, for the dashboard's work panel. Asked from `gh` at most once a minute."""
@@ -962,6 +1390,133 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
         return {**fix, "route": route_cache[fix.get("zone")][1]}
     # --- end route finding ----------------------------------------------------------------------
 
+    plans = {}  # {room map job: its floor plan}: worked out once per map
+    guiding = {}  # {zone: {"name", "active", "distance_m", "at"}}: the place someone is being guided to (/navigate&to=)
+
+    def going_to(zone):
+        """The guidance active in a zone, as /where shows it ("navigate"), or None: over on arrival, on
+        /navigate&stop=1, or NAV_GUIDE_S after its last poll."""
+        going = guiding.get(zone)
+        if going and time.time() - going["at"] > NAV_GUIDE_S:
+            guiding.pop(zone, None)
+            going = None
+        return {k: going[k] for k in ("name", "active", "distance_m")} if going else None
+
+    def room_plan(got):
+        """A room map's floor plan, as a fix carries one: its splat's points seen from above (east, north in metres),
+        without the floor and the ceiling (40th to 90th percentile of height, as locate.py), at most NAV_PLAN_POINTS."""
+        job = got.get("job")
+        if job in plans:
+            return plans[job]
+        points = []
+        try:
+            raw = np.fromfile(evidence_dir / job / "room.splat", dtype=[("pos", "<f4", 3), ("rest", "u1", 20)])["pos"]
+            raw = raw[np.isfinite(raw).all(1)]
+            if len(raw):
+                low, high = np.percentile(raw[:, 2], [40, 90])
+                flat = raw[(raw[:, 2] >= low) & (raw[:, 2] <= high)][:, :2]
+                flat = flat[np.random.default_rng(0).permutation(len(flat))[:NAV_PLAN_POINTS]]
+                points = np.round(flat.astype(np.float64), 2).tolist()
+        except Exception:  # noqa: BLE001  no NumPy, no file: a map without a plan
+            points = []
+        plans[job] = {"points": points, "cameras": [c["position"][:2] for c in got.get("cameras") or []], "from": "room map"}
+        return plans[job]
+
+    def navigate(zone, asked):
+        """GET /navigate: (HTTP status, reply). The places are the newest fix's waypoints (placed in the same pass as
+        the wearer) and the room's named places; the start is the steady pose when there is one (as routed()).
+        Without `asked`: the wearer's map alone (position, heading, places, floor plan), no route."""
+        fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
+        zone = zone or (fix or {}).get("zone", "")
+        got = rooms.get(zone) or {}
+        if got.get("job") and (evidence_dir / got["job"] / "room.splat").exists() and (not fix or fix["at"] < got.get("at", 0)):
+            # No fix since the newest room map was made: an older fix's map may be another one (another recording, even
+            # another venue). The map is the room map's; where the wearer is waits for the next fix.
+            listing = sorted(({"name": q["name"], "position": [round(float(c), 2) for c in q["position"]]}
+                              for q in got.get("places") or [] if q.get("name") and q.get("position")), key=lambda q: q["name"])
+            made = home_time(got.get("at", time.time())).strftime("%H:%M")
+            why = f"no position fix since the room map was made at {made}"
+            if asked:
+                return 409, {"ok": False, "zone": zone, "stale": True, "stale_reason": why, "places": listing,
+                             "error": f"The glasses have not been placed in this room's map yet ({why}): look around for a moment."}
+            return 200, {"ok": True, "zone": zone, "position": None, "heading_deg": None, "places": listing, "plan": room_plan(got),
+                         "at": fix["at"] if fix else None, "age_s": round(time.time() - fix["at"], 1) if fix else None,
+                         "state": None, "stale": True, "stale_reason": why, "map_at": got.get("at")}
+        if not fix:
+            return 404, {"ok": False, "error": f"No position fix yet{f' in {zone}' if zone else ''}: the glasses have not sent a photo."}
+        zone = fix["zone"]
+        places = {}
+        for p in ((rooms.get(zone) or {}).get("places") or []) + list(fix.get("waypoints") or []):
+            if p.get("name") and p.get("position"):
+                places[p["name"]] = {"name": p["name"], "position": [round(float(c), 2) for c in p["position"]]}
+        listing = sorted(places.values(), key=lambda p: p["name"])
+        if not asked:  # the wearer's map: where they are now, the places, the floor plan
+            return 200, map_now(fix, listing)
+        if not places:
+            return 404, {"ok": False, "zone": zone, "error": f"No named places in {zone} yet: name one on /places or the dashboard.", "places": []}
+        name = match_place(asked, list(places))
+        if not name:
+            return 404, {"ok": False, "zone": zone, "places": listing,
+                         "error": f'No place called "{asked}" in {zone}. Places: {", ".join(p["name"] for p in listing)}.'}
+        # Where they stand: the steady pose when there is one (as routed()); which way they face: the newest fix when it
+        # is sure (the head turns faster than the steady pose follows), else the steady pose's.
+        start, age, why = pose_now(fix)
+        if fix.get("state") == "lost" or not start.get("position"):
+            return 409, {"ok": False, "zone": zone, "to": name, "stale": True, "places": listing,
+                         "error": "The glasses do not know where they are right now: look around the room for a moment."}
+        here, heading = [round(float(c), 2) for c in start["position"]], float(start.get("heading_deg") or 0)
+        goal = places[name]["position"]
+        straight = math.hypot(goal[0] - here[0], goal[1] - here[1])
+        plan = route_finder.plan(start, [places[name]]) if route_finder is not None else {"ok": False, "note": "no route finder", "to": {}}
+        way = (plan.get("to") or {}).get(name)
+        if way and len(way.get("points") or []) > 1:
+            route, distance, bearing = way["points"], way.get("length_m", straight), way["next"]["bearing_deg"]
+        else:  # a straight line where the map gives no route
+            route = [here[:2], goal[:2]]
+            distance = straight
+            bearing = int(round((math.degrees(math.atan2(goal[0] - here[0], goal[1] - here[1])) - heading + 180) % 360 - 180))
+        arrived = straight <= NAV_ARRIVED_M
+        if arrived:  # there: the guidance is over
+            guiding.pop(zone, None)
+        else:
+            guiding[zone] = {"name": name, "active": True, "distance_m": round(float(distance), 1), "at": time.time()}
+        return 200, {"ok": True, "zone": zone, "to": name, "asked": asked, "arrived": arrived,
+                     "distance_m": round(float(distance), 2), "straight_m": round(straight, 2), "bearing_deg": int(bearing),
+                     "instruction": turn_words(bearing, straight), "route": route, "position": here,
+                     "heading_deg": int(round(heading)), "at": fix["at"], "age_s": round(age, 1), "state": fix.get("state"),
+                     "stale": why is not None, **({"stale_reason": why} if why else {}), "places": listing,
+                     "plan": plan_of(fix), "route_note": plan.get("note") or ""}
+
+    def pose_now(fix):
+        """(start, age_s, stale reason or None): where the wearer stands, the steady pose when there is one (as
+        routed()), facing the way the newest fix does when it is sure (the head turns faster than the steady pose
+        follows), else the steady pose's way."""
+        stable = steady(fix["zone"])
+        start = fix
+        if stable and stable.get("position") and stable.get("state") != "lost":
+            facing = fix.get("heading_deg") if fix.get("state") == "found" else stable.get("heading_deg")
+            start = {**fix, "state": "found", "position": stable["position"], "heading_deg": facing or 0}
+        age = time.time() - fix["at"]
+        why = (f"the newest fix is {age:.0f} s old" if age > NAV_STALE_S else
+               f"the newest fix is {fix.get('state')}" if fix.get("state") != "found" else None)
+        return start, age, why
+
+    def plan_of(fix):
+        """The fix's floor plan to draw (cut to NAV_PLAN_POINTS points) and where the baseline camera stood."""
+        points = (fix.get("map") or {}).get("points") or []
+        step = max(1, math.ceil(len(points) / NAV_PLAN_POINTS))
+        return {"points": points[::step][:NAV_PLAN_POINTS], "cameras": (fix.get("map") or {}).get("cameras") or []}
+
+    def map_now(fix, listing):
+        """GET /navigate without a place: the wearer's map. A lost fix keeps the places and the plan, without a pose."""
+        start, age, why = pose_now(fix)
+        known = fix.get("state") != "lost" and start.get("position")
+        return {"ok": True, "zone": fix["zone"], "position": [round(float(c), 2) for c in start["position"]] if known else None,
+                "heading_deg": int(round(float(start.get("heading_deg") or 0))) if known else None, "places": listing,
+                "plan": plan_of(fix), "at": fix["at"], "age_s": round(age, 1), "state": fix.get("state"),
+                "stale": why is not None or not known, **({"stale_reason": why or "the glasses do not know where they are"}
+                                                          if why or not known else {})}
+
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, code, data, content_type):
             self.send_response(code)
@@ -992,7 +1547,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             if not self.allowed(parse_qs(url.query), url.path):
                 return
             pages = {"/": "phone.html", "/dashboard": "dashboard.html", "/viewer": "viewer.html",
-                     "/hud": "hud.html", "/places": "places.html"}
+                     "/hud": "hud.html", "/places": "places.html", "/care": "care.html"}
             if url.path in pages:
                 return self.send_bytes(200, (HERE / pages[url.path]).read_bytes(), "text/html; charset=utf-8")
             if url.path == "/history":
@@ -1021,11 +1576,23 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 return self.send_json(200, {"ok": True, **log.report(date or None)})
             # ---- end day log ----
             zone = parse_qs(url.query).get("zone", [""])[0]
+            if url.path == "/recording":  # the zone's newest recording session
+                with rec_lock:
+                    rec = recs.get(zone)
+                    if rec:
+                        return self.send_json(200, {"ok": True, "zone": zone, **rec, "viewer": f"/viewer?live={zone}",
+                                                    "age_s": round(time.time() - rec.get("last_chunk_at", time.time()))})
+                header, _ = link.call({"op": "recording_status", "zone": zone}) if re.fullmatch(ZONE_NAME, zone) else ({"ok": False}, b"")
+                return self.send_json(200 if header.get("ok") else 404, header if header.get("ok") else
+                                      {"ok": False, "error": f"No recording of '{zone}' yet."})
             if url.path == "/room":  # the room map of a zone (POST /map makes it), for the live 3D page
                 got = rooms.get(zone)
                 if not got or not got.get("splat") or not (evidence_dir / got["job"] / "room.splat").exists():
                     return self.send_json(404, {"ok": False, "error": f"No room map for '{zone}' yet: POST /map?zone={zone}."})
                 return self.send_json(200, {"ok": True, **got, "age_s": round(time.time() - got["at"]), "building": bool(building.get(zone))})
+            if url.path == "/care/space":  # the splat the caretaker's page shows, and the matrix into the room map's axes
+                code, reply = care_view(zone)
+                return self.send_json(code, {**reply, "named": care_named(zone, reply)} if code == 200 else reply)
             if url.path == "/where":
                 fix = where.get(zone) if zone else max(where.values(), key=lambda f: f["ts"], default=None)
                 if not fix:
@@ -1033,8 +1600,17 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 # --- route finding (route.py): adds "route" to the reply, from the pose the display stands on
                 stable = steady(fix["zone"])
                 fix = routed(fix, stable)
+                going = going_to(fix["zone"])  # where someone is being guided to now (GET /navigate&to=), for the pages
+                if going:
+                    fix = {**fix, "navigate": going}
+                    stable = {**stable, "navigate": going} if isinstance(stable, dict) else stable
                 return self.send_json(200, {**fix, "age_s": round(time.time() - fix["at"], 1), "seen": seen_list(fix["zone"], fix),
                                             "stable": stable})
+            if url.path == "/navigate":  # the way to a named place, from where the wearer is now
+                if parse_qs(url.query).get("stop", [""])[0]:  # the guidance is over (the wearer said stop)
+                    guiding.pop(zone, None)
+                    return self.send_json(200, {"ok": True, "zone": zone, "stopped": True})
+                return self.send_json(*navigate(zone, parse_qs(url.query).get("to", [""])[0]))
             if url.path == "/waypoints":
                 header, _ = link.call({"op": "waypoints", "zone": zone})
                 return self.send_json(200 if header.get("ok") else 404, header)
@@ -1075,9 +1651,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 header, _ = link.call({"op": "worker_log", "lines": lines,
                                        "device": "cpu" if parse_qs(url.query).get("device", [""])[0] == "cpu" else "gpu"})
                 return self.send_json(200 if header.get("ok") else 404, header)
-            match = re.fullmatch(r"/evidence/([\w-]+)/(\w+)\.(jpg|splat)", url.path)
+            match = re.fullmatch(r"/evidence/([\w-]+)/(\w+)\.(jpg|splat|mp4|webm|json|bin)", url.path)
             if match and (evidence_dir / match[1] / f"{match[2]}.{match[3]}").exists():
-                kind = "image/jpeg" if match[3] == "jpg" else "application/octet-stream"
+                kind = {"jpg": "image/jpeg", "mp4": "video/mp4", "webm": "video/webm", "json": "application/json"}.get(match[3], "application/octet-stream")
                 return self.send_bytes(200, (evidence_dir / match[1] / f"{match[2]}.{match[3]}").read_bytes(), kind)
             self.send_json(404, {"ok": False, "error": "not found"})
 
@@ -1269,20 +1845,143 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 except OSError:
                     pass
                 return self.send_json(200, {"ok": True, "zone": zone, "seen": seen_list(zone, where.get(zone))})
-            if op == "waypoint":  # name or remove a place; everything is in the query, the body is ignored
-                self.rfile.read(min(size, 65536))
+            if op == "waypoint":  # name or remove a place; everything is in the query (the body: a live=1 photo)
+                body = self.rfile.read(size) if 0 < size <= MAX_BODY else self.rfile.read(min(size, 65536)) and b""
                 req = {"op": "waypoint", "zone": zone, "name": query.get("name", [""])[0]}
+                live = bool(query.get("live", [""])[0])
                 try:
                     if query.get("delete", [""])[0]:
                         req["delete"] = True
+                    elif live:
+                        u, v = float(query["u"][0]), float(query["v"][0])
+                        if not (0 <= u <= 1 and 0 <= v <= 1):
+                            raise ValueError("u and v")
+                    elif "east" in query:  # a spot picked on a map of the room (the 3D page's view from above)
+                        at = [float(query[k][0]) for k in ("east", "north", "up")]
+                        if not all(math.isfinite(c) and abs(c) < 1000 for c in at):
+                            raise ValueError("east, north, up")
+                        req.update(position=[round(c, 3) for c in at], source="map")
                     else:
                         req.update(frame=int(query["frame"][0]), u=float(query["u"][0]), v=float(query["v"][0]))
                 except (KeyError, ValueError):
-                    return self.send_json(400, {"ok": False, "error": "POST /waypoint?zone=NAME&name=PLACE&frame=N&u=0..1&v=0..1"})
+                    return self.send_json(400, {"ok": False, "error": "POST /waypoint?zone=NAME&name=PLACE&frame=N&u=0..1&v=0..1 "
+                                                "(or &live=1&u=..&v=.. on the newest photo)"})
+                if live:  # a spot on a photo: the photo sent (the one the page showed), else the newest that reached
+                    # /locate; that photo's own fix places it (no picture added to the room)
+                    got = {"photo": body} if body and is_photo(body) else received.get(zone)
+                    if not got:
+                        return self.send_json(404, {"ok": False, "error": f"No photo of '{zone}' has reached /locate yet."})
+                    try:
+                        clip = one_photo(got["photo"])
+                    except ValueError:
+                        return self.send_json(400, {"ok": False, "error": "The newest photo could not be read."})
+                    fixed, _ = link.call({"op": "locate", "zone": zone, "device": "gpu", "view": False, "grow": False,
+                                          "point": {"u": u, "v": v}, "remembered": []}, clip)
+                    point = (fixed.get("result") or {}).get("point") if fixed.get("ok") else None
+                    if not point:
+                        why = fixed.get("error") or (fixed.get("result") or {}).get("point_note") \
+                            or f"the photo was {(fixed.get('result') or {}).get('state', 'not placed')} in the room"
+                        return self.send_json(422, {"ok": False, "error": f"Could not place it: {why}."})
+                    req.update(position=point)
                 header, _ = link.call(req)
-                return self.send_json(200 if header.get("ok") else 400, header)
+                if header.get("ok"):
+                    if live or req.get("position"):
+                        set_place(zone, {"name": " ".join(req["name"].split())[:40], "position": req["position"],
+                                         "source": req.get("source", "live")})
+                    elif req.get("delete") and zone in rooms:
+                        rooms[zone]["places"] = [q for q in rooms[zone].get("places") or [] if q["name"] != req["name"]]
+                        save_rooms()
+                    else:
+                        place_room(zone)  # its position, from the pictures as they are
+                return self.send_json(200 if header.get("ok") else 400, {**header, **({"position": point} if live else {})})
+            if op == "places":  # the named places' map positions from the zone's pictures as they are
+                self.rfile.read(min(size, 65536))
+                if not re.fullmatch(ZONE_NAME, zone):
+                    return self.send_json(400, {"ok": False, "error": "POST /places?zone=NAME"})
+                header = place_spots(zone)
+                if not header.get("ok"):
+                    return self.send_json(502, header)
+                return self.send_json(200, {"ok": True, "zone": zone, "places": header["result"].get("places") or []})
             if op in ("scale", "watch", "enroll"):  # what the carer sets once: see change_setup
                 return self.change_setup(op, query, zone, size)
+            if op == "recording":  # one chunk of a continuous recording
+                first = lambda name, default="": query.get(name, [default])[0]  # noqa: E731
+                session, final = first("session"), first("final", "0") == "1"
+                try:
+                    seq = int(first("seq"))
+                except ValueError:
+                    seq = -1
+                if not re.fullmatch(ZONE_NAME, zone) or not re.fullmatch(SESSION_NAME, session) or seq < 0 or not 0 <= size <= REC_VIDEO_MAX \
+                        or (size == 0 and not final):
+                    if size <= 65536:
+                        self.rfile.read(size)
+                    return self.send_json(400, {"ok": False, "error": "POST /recording?zone=ROOM&session=NAME&seq=N&final=0|1 "
+                                                f"with a zip of frames NNNNNN_<ms>.jpg (up to {MAX_BODY >> 20} MB) or a video "
+                                                f"(up to {REC_VIDEO_MAX >> 30} GB) as the body"})
+                head = self.rfile.read(min(size, 4)) if size else b""
+                if head[:2] == b"PK" or not size:  # a zip of frames, as the app streams them
+                    if size > MAX_BODY:
+                        return self.send_json(400, {"ok": False, "error": f"A zip of frames may be at most {MAX_BODY >> 20} MB: send smaller chunks."})
+                    header, _ = link.call({"op": "recording", "zone": zone, "session": session, "seq": seq, "final": final},
+                                          head + self.rfile.read(size - len(head)))
+                else:  # a whole video: to disk here, frames taken here, sent on as parts with the following seq numbers
+                    if cv2 is None:
+                        return self.send_json(400, {"ok": False, "error": "A video needs OpenCV next to the relay: send zips of frames."})
+                    try:
+                        rate = min(30.0, max(1.0, float(first("fps", str(REC_VIDEO_FPS)))))
+                    except ValueError:
+                        rate = float(REC_VIDEO_FPS)
+                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as video:
+                        video.write(head)
+                        left = size - len(head)
+                        while left > 0:
+                            piece = self.rfile.read(min(left, 1 << 20))
+                            if not piece:
+                                break
+                            video.write(piece)
+                            left -= len(piece)
+                    try:
+                        parts, read = video_parts(video.name, rate, int(time.time() * 1000))
+                    finally:
+                        os.unlink(video.name)
+                    if not parts:
+                        return self.send_json(400, {"ok": False, "error": "Could not read any frame from that video."})
+                    for k, part in enumerate(parts):
+                        header, _ = link.call({"op": "recording", "zone": zone, "session": session, "seq": seq + k,
+                                               "final": final and k == len(parts) - 1}, part)
+                        if not header.get("ok"):
+                            break
+                    header["video"] = {"frames_read": read, "frames_kept": header.get("frames_total"), "parts": len(parts), "fps": rate}
+                    seq += len(parts) - 1
+                if not header.get("ok"):
+                    return self.send_json(400, header)
+                now = time.time()
+                with rec_lock:
+                    rec = recs.get(zone)
+                    if not rec or rec.get("session") != session:
+                        rec = recs[zone] = {"session": session, "started_at": now, "map_frames": 0, "map_updates": 0, "map_state": "none",
+                                            "training": {"state": "none", "runs": 0}}
+                    rec.update(frames=header["frames_total"], chunks=header["chunks"], missing=header["missing"], final=header["final"],
+                               last_chunk_at=now, last_seq=seq)
+                    need_map = rec["frames"] >= 6 and rec["map_state"] != "running" and (
+                        rec["frames"] - rec["map_frames"] >= REC_MAP_EVERY or (header["final"] and rec["frames"] > rec["map_frames"]))
+                    tr = rec["training"]
+                    since = now - (tr.get("started_at") or rec["started_at"])
+                    need_train = bool(train_host) and rec["frames"] >= 20 and (
+                        (header["final"] and not tr.get("final_started")) or (not header["final"] and since >= REC_TRAIN_EVERY_S))
+                    if need_train and header["final"]:
+                        tr["final_started"] = True
+                    save_recs()
+                if need_map:
+                    start_map(zone, session)
+                if need_train:
+                    start_training(zone, session)
+                with rec_lock:
+                    state = {"map": rec["map_state"], "training": rec["training"]["state"]}
+                return self.send_json(200, {"ok": True, "session": session, "seq": seq, "frames_total": header["frames_total"],
+                                            "status": "final" if header["final"] else "receiving", "viewer": f"/viewer?live={zone}",
+                                            "duplicate": header.get("duplicate"), "missing": header.get("missing"),
+                                            **({"video": header["video"]} if header.get("video") else {}), **state})
             if op == "map":  # the room map: the zone's baseline pictures in one pass, as one splat in map axes
                 self.rfile.read(min(size, 65536))
                 if not re.fullmatch(ZONE_NAME, zone):
@@ -1344,8 +2043,13 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             # for the live 3D page (/viewer?live=ZONE). The cheap gate still answers an unchanged view without the model.
             auto_splat = op == "locate" and splat_every_fix and not flag("view")
             job = {"op": op, "zone": zone, "device": device, "view": flag("view") or auto_splat}
+            # A zone with a trained splat keeps its pictures as they are (its map was made for that splat) unless the
+            # photo asks to grow it (?grow=1); other zones grow with each part of the room not sampled before.
+            growing = flag("grow") or not (rooms.get(zone) or {}).get("trained")
             if op == "locate":  # the spots where items were seen, so the worker can look at them again
                 job["remembered"] = [{"name": s["name"], "position": s["position"]} for s in seen.get(zone, {}).values()]
+                job["grow"] = growing
+                job["look_for"] = AUTO_PLACES
             header, blob = link.call(job, clip)
             seconds["total"] = round(time.time() - t0, 2)
             if not header.get("ok"):
@@ -1398,7 +2102,9 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
                 except OSError:
                     pass
                 remember_items(zone, result, images)
-                if result.get("picture_added"):  # a part of the room not sampled before: the room map grows
+                if AUTO_PLACES and result.get("items"):
+                    fix["places_named"] = auto_places(zone, result, header["job"])
+                if result.get("picture_added") and growing:  # a part of the room not sampled before: the room map grows
                     grow_room(zone)
                 # t0: when the photo reached the relay. The steady position ages from the photo, not from the answer.
                 stable = steady(zone, result, t0)
@@ -1437,6 +2143,7 @@ def make_handler(link, evidence_dir, token, event_api=None, pick=pick_frames if 
             line = (fmt % args).replace(token, "KEY")  # keep the key out of the log
             sys.stderr.write(f"{time.strftime('%H:%M:%S')} {line}\n")
 
+    resume_trainings()  # trainings the relay was waiting on when it last stopped
     return Handler
 
 
@@ -1447,6 +2154,9 @@ def main():
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 lets a phone on the same network reach the relay")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--token", default=secrets.token_urlsafe(9), help="access key; a random one is made if not given")
+    ap.add_argument("--train-host", help="train splats of recordings (POST /recording) on this SSH host, e.g. iridis "
+                    "(live/remote_train.py: video_map.py deployed there with the workers; BEACON_TRAIN_LAUNCH=direct for a "
+                    "machine without Slurm)")
     ap.add_argument("--quick", action="store_true", help="place photos instantly by cosine similarity to the room map's "
                     "pictures (POST /map), with the model at least every 4 s")
     ap.add_argument("--splat-every-fix", action="store_true", help="every position fix also builds the room as a 3D file, "
@@ -1460,14 +2170,17 @@ def main():
         Path(args.local).mkdir(parents=True, exist_ok=True)
         os.environ["BEACON_ROOT"] = str(Path(args.local).resolve())
         link = Link([sys.executable, "-u", str(HERE / "gateway.py")], name="the local gateway")
+        bg_link = Link([sys.executable, "-u", str(HERE / "gateway.py")], name="the local gateway (room maps)")
     else:
         link = Link(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
                      "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", args.ssh_host, remote_command(args.remote_root)])
     evidence_dir = Path(tempfile.gettempdir()) / "beacon-evidence"
     evidence_dir.mkdir(exist_ok=True)
     event_api, api_token = os.environ.get("EVENT_API_URL"), os.environ.get("EVENT_API_TOKEN")
-    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, splat_every_fix=args.splat_every_fix,
-                           quick=args.quick, view_token=args.view_token)
+    if not args.local:
+        bg_link = Link(link.argv, name="Iridis (room maps)")
+    handler = make_handler(link, evidence_dir, args.token, event_api, api_token=api_token, splat_every_fix=args.splat_every_fix, bg_link=bg_link,
+                           quick=args.quick, train_host=args.train_host, remote_root=args.remote_root, view_token=args.view_token)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     addresses = ["127.0.0.1"]
     if args.host == "0.0.0.0":
@@ -1491,6 +2204,7 @@ def main():
         pass
     finally:
         link.close()
+        bg_link.close()
 
 
 if __name__ == "__main__":
