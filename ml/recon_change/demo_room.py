@@ -137,7 +137,7 @@ if __name__ == "__main__":
     m = make_map()
     import lowpoly
     v, n, c, t = lowpoly.build(m.splats["pos"], m.splats["rgba"][:, :3], up="z", cell=0.1)  # the family app shows it in blocks
-    smesh.write_mesh(v, n, c, t, out / "home.ply", comments=["up z", "example home, not a real recording", "low-poly"])
+    lowpoly.write(v, n, c, t, out / "home.ply", "z", ["example home, not a real recording"])
     summary = {"total": {"vertices": len(v), "triangles": len(t)}}
     found = hazards.find(m, PLACES, [tuple(w) for w in WALKS], up="z")
     found.update(generated_at="2026-11-15T07:30:00+02:00", places=PLACES, example=True)

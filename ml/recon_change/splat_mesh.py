@@ -242,19 +242,22 @@ def simplify(v, c, t, target=10_000, rounds=12):
     return pv[used], np.zeros((len(used), 3), np.float32), pc[used], remap[pt]
 
 
-def write_mesh(v, nrm, c, t, path, comments=()):
-    """Write a mesh as a binary PLY with vertex normals and colours (the format the dashboard reads).
+def write_mesh(v, nrm, c, t, path, comments=(), normals=True):
+    """Write a mesh as a binary PLY with vertex colours (the format the dashboard reads), and normals
+    unless normals=False (the dashboard works them out; leaving them out makes the file 40% smaller).
     comments go in the header; "up z" tells the dashboard's viewer which way is up (default -y, VGGT's)."""
-    vert = np.zeros(len(v), [("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4"),
-                             ("red", "u1"), ("green", "u1"), ("blue", "u1")])
+    fields = [("x", "<f4"), ("y", "<f4"), ("z", "<f4")] + ([("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4")] if normals else [])
+    vert = np.zeros(len(v), fields + [("red", "u1"), ("green", "u1"), ("blue", "u1")])
     vert["x"], vert["y"], vert["z"] = v.T
-    vert["nx"], vert["ny"], vert["nz"] = nrm.T
+    if normals:
+        vert["nx"], vert["ny"], vert["nz"] = nrm.T
     vert["red"], vert["green"], vert["blue"] = c.T
     face = np.zeros(len(t), [("n", "u1"), ("i", "<i4", 3)])
     face["n"], face["i"] = 3, t
     header = ("ply\nformat binary_little_endian 1.0\n" + "".join(f"comment {x}\n" for x in comments) + f"element vertex {len(v)}\n"
-              "property float x\nproperty float y\nproperty float z\nproperty float nx\nproperty float ny\nproperty float nz\n"
-              "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+              "property float x\nproperty float y\nproperty float z\n"
+              + ("property float nx\nproperty float ny\nproperty float nz\n" if normals else "")
+              + "property uchar red\nproperty uchar green\nproperty uchar blue\n"
               f"element face {len(t)}\nproperty list uchar int vertex_indices\nend_header\n")
     with open(path, "wb") as f:
         f.write(header.encode())
