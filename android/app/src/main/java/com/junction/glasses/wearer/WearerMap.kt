@@ -32,6 +32,8 @@ class WearerMap(context: Context) : View(context) {
     private var headingDeg: Double? = null
     private var route: List<FloorPoint> = emptyList()
     private var target: String? = null
+    /** A thing found by "find me X": drawn as an amber ring, not a place to be walked to yet. */
+    private var found: String? = null
     private var note: String = "No map yet"
 
     private val density = resources.displayMetrics.density
@@ -49,6 +51,7 @@ class WearerMap(context: Context) : View(context) {
     private val quiet = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WearerPanel.SOFT; textSize = 18 * scaled; textAlign = Paint.Align.CENTER }
     private val chip = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WearerPanel.AMBER }
     private val chipText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WearerPanel.NIGHT; textSize = 18 * scaled; isFakeBoldText = true; textAlign = Paint.Align.CENTER }
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WearerPanel.AMBER; style = Paint.Style.STROKE; strokeWidth = 4 * density }
     private val stopChip = RectF()
 
     /** Where everything is drawn: screen position of each place, for taps. */
@@ -60,13 +63,13 @@ class WearerMap(context: Context) : View(context) {
 
     fun show(
         plan: List<FloorPoint>, places: List<NavPlace>, wearer: FloorPoint?, headingDeg: Double?,
-        route: List<FloorPoint>, target: String?, note: String?,
+        route: List<FloorPoint>, target: String?, note: String?, found: String? = null,
     ) {
         this.plan = plan; this.places = places; this.wearer = wearer; this.headingDeg = headingDeg
-        this.route = route; this.target = target
+        this.route = route; this.target = target; this.found = found
         this.note = note ?: if (places.isEmpty() && wearer == null) "No map yet" else ""
         contentDescription = listOfNotNull(
-            "Map of the room", target?.let { "Going to $it" }, if (places.isNotEmpty()) "Places: " + places.joinToString { it.name } else null,
+            "Map of the room", target?.let { "Going to $it" }, found?.let { "Found: $it" }, if (places.isNotEmpty()) "Places: " + places.joinToString { it.name } else null,
         ).joinToString(". ")
         invalidate()
     }
@@ -104,8 +107,12 @@ class WearerMap(context: Context) : View(context) {
         for (place in places) {
             val px = x(place.at); val py = y(place.at)
             val isGoal = place.name.equals(target, ignoreCase = true)
-            canvas.drawCircle(px, py, (if (isGoal) 11f else 7f) * density, if (isGoal) goal else dot)
-            val text = if (isGoal) goalLabel else label
+            val isFound = !isGoal && place.name.equals(found, ignoreCase = true)
+            if (isFound) {
+                canvas.drawCircle(px, py, 13f * density, ring)
+                canvas.drawCircle(px, py, 5f * density, goal)
+            } else canvas.drawCircle(px, py, (if (isGoal) 11f else 7f) * density, if (isGoal) goal else dot)
+            val text = if (isGoal || isFound) goalLabel else label
             val tw = text.measureText(place.name)
             val tx = (px + 10 * density).coerceAtMost(w - tw - 8 * density).coerceAtLeast(8 * density)
             canvas.drawText(place.name, tx, py - 10 * density, text)

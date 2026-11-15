@@ -255,6 +255,24 @@ internal class RelayClient(baseUrl: String, private val key: String, private val
         } catch (_: Exception) { emptyList() }
     }
 
+    /** GET {relay}/find?zone=&what=: whether and where the thing was seen, and the words to say. */
+    fun findRequest(what: String): Request = Request.Builder()
+        .url(base.newBuilder().addPathSegment("find").addQueryParameter("zone", zone).addQueryParameter("what", what.take(60)).build())
+        .header("X-Key", key)
+        .header("Accept", "application/json")
+        .get()
+        .build()
+
+    suspend fun find(what: String): com.junction.glasses.core.FindReply =
+        com.junction.glasses.core.FindReply.parse(send(http, findRequest(what)) { body ->
+            val r = com.junction.glasses.core.FindReply.parse(body)
+            "zone $zone, $what: " + when {
+                r.found -> "found" + (r.place?.let { " by $it" } ?: "")
+                r.looking -> "looking"
+                else -> r.error ?: "not seen"
+            }
+        })
+
     suspend fun baseline(zip: ByteArray, zone: String): BaselineReply =
         BaselineReply.parse(send(slowHttp, baselineRequest(zip, zone)))
 
