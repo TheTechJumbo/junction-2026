@@ -1,9 +1,16 @@
-import {ApiClient, TIMEZONE, localDay, timeLabel, sortedEvents} from './client.js';
+import {ApiClient, ApiError, TIMEZONE, localDay, timeLabel, sortedEvents} from './client.js';
 import {DAYPARTS, dayFraction, dayState, daypart, mood, shiftDay, sunPosition, sunTimes} from './day.js';
 
 const $ = id => document.getElementById(id);
 const root = document.documentElement;
 const api = new ApiClient({origin: location.origin});
+// People see our own messages only. Anything unexpected (a script error, a reply in a shape we
+// don't know) gets a plain sentence on screen and the detail in the console.
+const plain = (error, fallback) => {
+  if (error instanceof ApiError || error.userFacing) return error.message;
+  console.error(error);
+  return `${fallback} Refresh to try again.`;
+};
 const params = new URLSearchParams(location.search);
 let demo = params.has('demo'), controller, generation = 0, evidenceController, evidenceObject, lastData = null, refreshedAt = null;
 
@@ -256,7 +263,7 @@ async function showEvidence(event) {
   $('evidence-status').textContent = `Loading the moment from ${timeLabel(event.ts)}…`;
   $('evidence-dialog').showModal();
   try { const blob = await api.evidence(event.evidence_url, active.signal); if (active.signal.aborted) return; evidenceObject = URL.createObjectURL(blob); $('evidence-image').src = evidenceObject; $('evidence-image').hidden = false; $('evidence-status').textContent = `${kindOf(event).title} · ${timeLabel(event.ts)} Helsinki`; }
-  catch (error) { if (error.name !== 'AbortError') $('evidence-status').textContent = error.message; }
+  catch (error) { if (error.name !== 'AbortError') $('evidence-status').textContent = plain(error, 'The photo could not be shown.'); }
 }
 
 // ---------- Loading ----------
@@ -280,7 +287,7 @@ async function load() {
       data = {timeline, summary}; $('day').value = timeline.day;
     } else {
       if (!api.token) { $('updated').textContent = ''; return; }
-      if (!navigator.onLine) throw new Error('You are offline. Reconnect, then refresh to load this day.');
+      if (!navigator.onLine) throw Object.assign(new Error('You are offline. Reconnect, then refresh to load this day.'), {userFacing: true});
       data = await api.day($('day').value, controller.signal);
     }
     if (active !== generation) return;
@@ -290,7 +297,7 @@ async function load() {
     refreshedAt = new Date();
     $('updated').textContent = demo ? 'Example data, not a real home' : 'Updated just now';
     tick();
-  } catch (error) { if (error.name !== 'AbortError' && active === generation) { status(error.message, true); $('updated').textContent = 'The day could not be loaded. Refresh to try again.'; } }
+  } catch (error) { if (error.name !== 'AbortError' && active === generation) { status(plain(error, 'This day could not be shown.'), true); $('updated').textContent = 'The day could not be loaded. Refresh to try again.'; } }
   finally { if (active === generation) { $('refresh').disabled = false; delete root.dataset.loading; } }
 }
 function goTo(day) { $('day').value = day; $('day-name').textContent = dayName(day); load(); }
@@ -327,7 +334,11 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) tick
 if ('serviceWorker' in navigator && !params.has('nosw')) navigator.serviceWorker.register('./sw.js').catch(() => {});
 let installPrompt;
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; $('install').hidden = false; });
-$('install').addEventListener('click', async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice.catch(() => {}); installPrompt = null; $('install').hidden = true; });
+$('install').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  try { await installPrompt.prompt(); await installPrompt.userChoice; } catch (error) { console.warn('Install prompt unavailable', error); }
+  installPrompt = null; $('install').hidden = true;
+});
 window.addEventListener('appinstalled', () => { installPrompt = null; $('install').hidden = true; });
 
 // ---------- Start ----------
