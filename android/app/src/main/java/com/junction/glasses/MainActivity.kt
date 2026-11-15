@@ -71,6 +71,8 @@ import com.junction.glasses.live.FailoverRelay
 import com.junction.glasses.live.ChunkDrain
 import com.junction.glasses.live.ChunkQueue
 import com.junction.glasses.live.RelayFailure
+import com.junction.glasses.live.RelayPageProxy
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import com.junction.glasses.core.RelayClient as WearerRelayClient
@@ -229,6 +231,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var takeMeThere: Button
     /** The whole screen (wearer panel, map, then the setup section), for scrolling to setup. */
     private lateinit var page: ScrollView
+    // The wearer's 3D view: the relay's page with the room as a Gaussian splat, in a WebView next to the
+    // flat map ("Map / 3D"). The key is added by RelayPageProxy, never put in a page address.
+    private lateinit var roomSlot: android.widget.FrameLayout
+    private lateinit var mapToggle: Button
+    private lateinit var roomToggle: Button
+    private var room3d: android.webkit.WebView? = null
+    private var room3dUrl: String? = null
+    private var show3d = false
+    private val pageProxy = RelayPageProxy({ pageTarget() })
     /**
      * The venue the map and guidance use (debug extra venue_zone, remembered), apart from the zone field
      * that recordings go to, so recordings can go to a test zone while the wearer is guided in the venue.
@@ -502,6 +513,12 @@ class MainActivity : ComponentActivity() {
             onPlaceTap = { name -> startNavigation(name) }
             onStop = { stopNavigation("Stopped.") }
         }
+        mapToggle = Button(this).apply { text = "Map"; isAllCaps = false; textSize = 20f; setOnClickListener { setRoomView(false) } }
+        roomToggle = Button(this).apply { text = "3D"; isAllCaps = false; textSize = 20f; setOnClickListener { setRoomView(true) } }
+        stylePill(mapToggle, true); stylePill(roomToggle, false)
+        roomSlot = android.widget.FrameLayout(this).apply {
+            addView(navMap, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
+        }
         takeMeThere = Button(this).apply {
             isAllCaps = false; textSize = 20f; visibility = android.view.View.GONE
             stylePill(this, true)
@@ -513,7 +530,12 @@ class MainActivity : ComponentActivity() {
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL; setBackgroundColor(WearerPanel.NIGHT)
                 addView(wearer)
-                addView(navMap, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(320)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(mapToggle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(0, 0, dp(6), 0) })
+                    addView(roomToggle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(6), 0, 0, 0) })
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), 0, dp(20), dp(8)) })
+                addView(roomSlot, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(380)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
                 addView(takeMeThere, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), dp(4), dp(20), dp(4)) })
                 // Small and dim, and it opens only on a long press, so the wearer does not open it by accident.
                 addView(TextView(this@MainActivity).apply {
@@ -584,6 +606,7 @@ class MainActivity : ComponentActivity() {
             getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).edit().putString(VENUE_ZONE, zone).apply()
             navRelayFor = null
             refreshMap()
+            if (show3d) setRoomView(true)
         }
         extras.alwaysOn?.let { on ->
             RecordingService.setWanted(this, on)
@@ -1651,6 +1674,83 @@ class MainActivity : ComponentActivity() {
         main.postDelayed(ticker, 2_000)
     }
 
+    // ---- The wearer's 3D view ----
+
+    /** Where the 3D page's requests go: the relay's USB address, then its Wi-Fi one, with the key. */
+    private fun pageTarget(): RelayPageProxy.Target? {
+        val key = relayKey?.takeIf { it.isNotBlank() } ?: return null
+        val addresses = listOfNotNull(relayUrl, relayLanUrl).distinct().mapNotNull { raw ->
+            raw.trim().toHttpUrlOrNull()?.takeIf { it.isHttps || LocalHosts.cleartextAllowed(it.host, BuildConfig.DEBUG) }
+        }
+        return if (addresses.isEmpty()) null else RelayPageProxy.Target(addresses, key)
+    }
+
+    /** Map (the flat map, the default) or 3D (the relay's page: the wearer in the venue's splat). */
+    private fun setRoomView(threeD: Boolean) {
+        if (threeD && pageTarget() == null) {
+            if (::wearer.isInitialized) wearer.setStatus("Set up the relay first")
+            return
+        }
+        show3d = threeD
+        stylePill(mapToggle, !threeD); stylePill(roomToggle, threeD)
+        if (!threeD) {
+            room3d?.let { it.onPause(); it.visibility = android.view.View.GONE }
+            navMap.visibility = android.view.View.VISIBLE
+            return
+        }
+        val zone = venueZone?.takeIf { RelayClient.isZone(it) } ?: cardZone().takeIf { RelayClient.isZone(it) } ?: relayZone
+        val web = room3d ?: createRoomView().also {
+            room3d = it
+            roomSlot.addView(it, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+        val url = RelayPageProxy.startUrl(zone)
+        if (url != room3dUrl) { room3dUrl = url; web.loadUrl(url) }
+        web.onResume()
+        web.visibility = android.view.View.VISIBLE
+        navMap.visibility = android.view.View.INVISIBLE
+    }
+
+    @android.annotation.SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+    private fun createRoomView() = android.webkit.WebView(this).apply {
+        setBackgroundColor(WearerMap.MAP_BACK)
+        contentDescription = "The room in 3D"
+        settings.apply {
+            javaScriptEnabled = true // the 3D room is a JavaScript page (three.js and Spark)
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+            javaScriptCanOpenWindowsAutomatically = false
+            setSupportMultipleWindows(false)
+            setSupportZoom(false)
+            builtInZoomControls = false
+            mediaPlaybackRequiresUserGesture = true
+        }
+        // Dragging turns the 3D view; the page's scrolling would otherwise take the gesture.
+        setOnTouchListener { v, _ -> v.parent?.requestDisallowInterceptTouchEvent(true); false }
+        webViewClient = object : android.webkit.WebViewClient() {
+            override fun shouldInterceptRequest(view: android.webkit.WebView, request: android.webkit.WebResourceRequest): android.webkit.WebResourceResponse? {
+                val url = request.url
+                // Only the app's own origin is answered here (/relay/... goes to the laptop with the key);
+                // the page's libraries (three.js, Spark) load from their CDN as in a browser.
+                if (url.scheme != "https" || url.host != android.net.Uri.parse(RelayPageProxy.ORIGIN).host) return null
+                val result = pageProxy.handle(request.method, url.encodedPath.orEmpty(), url.encodedQuery)
+                return android.webkit.WebResourceResponse(result.mimeType, result.encoding, result.status, result.reason, result.headers, result.body)
+            }
+
+            override fun shouldOverrideUrlLoading(view: android.webkit.WebView, request: android.webkit.WebResourceRequest): Boolean =
+                request.url.host != android.net.Uri.parse(RelayPageProxy.ORIGIN).host // stay on the page
+
+            override fun onRenderProcessGone(view: android.webkit.WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                // The 3D page is heavy: on a renderer crash, drop it and go back to the flat map.
+                roomSlot.removeView(view); view.destroy()
+                room3d = null; room3dUrl = null
+                setRoomView(false)
+                if (::wearer.isInitialized) wearer.setStatus("3D view closed; the map is shown")
+                return true
+            }
+        }
+    }
+
     /** Shows the setup section (every setup card) and scrolls to it. */
     private fun openSetup() {
         setup.visibility = android.view.View.VISIBLE
@@ -1723,6 +1823,7 @@ class MainActivity : ComponentActivity() {
             getSharedPreferences(VENUE_PREFS, MODE_PRIVATE).edit().apply { if (mapZone.isEmpty()) remove(VENUE_ZONE) else putString(VENUE_ZONE, mapZone) }.apply()
             navRelayFor = null
             refreshMap()
+            if (show3d) setRoomView(true)
         }
         // The backend: a new token, or a new address with the remembered token, reconnects it.
         val origin = configuredOrigin
@@ -1920,6 +2021,7 @@ class MainActivity : ComponentActivity() {
         cancelConnectionCheck(); cancelDiagnostic()
         cancelEvidence(); stopRecognition(); displayJob?.cancel(); controller?.cancel(); audio.stop()
         screen.pause(); main.removeCallbacks(mapRefresher)
+        room3d?.onPause()
         cancelAutomaticRetry()
         stopLiveCamera("Live camera stopped because the app left the screen.")
         stopRecording("Recording stopped because the app left the screen. Nothing was uploaded; record again when ready.")
@@ -1933,6 +2035,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         screen.resume(); main.removeCallbacks(mapRefresher); main.post(mapRefresher)
+        if (show3d) room3d?.onResume()
         if (::glasses.isInitialized) glasses.onResume()
         updatePermissionStatus()
         // Leaving the foreground disconnects the glasses (onStop); automatic setup reconnects once per return.
@@ -1955,6 +2058,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         debugDialog?.dismiss(); debugDialog = null
+        room3d?.destroy(); room3d = null
         navJob?.cancel(); navGuide = null
         findJob?.cancel(); findJob = null
         stopLiveCamera("Live camera is off.")

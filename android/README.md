@@ -201,6 +201,20 @@ The map and guidance use the **venue zone**, apart from the zone field that reco
 so recordings can go to a test zone while the wearer is guided in the venue. Debug builds set it
 with `--es venue_zone kitchen` (remembered); without it they use the zone field.
 
+### Map / 3D
+
+Above the map, a big **Map / 3D** toggle (Map is the default) swaps the flat map for the relay's 3D page
+(`/care?zone=<venue zone>&view=wearer`): the venue as a Gaussian splat with the wearer in it, following
+them, with the route while guided. The page shows guidance and finds itself, from the relay.
+
+How the page is loaded:
+- A WebView loads it from the app's own origin (`https://appassets.androidplatform.net/relay/...`, never
+  fetched from the network).
+- The app answers those requests natively (`live/RelayPageProxy.kt`, as in the family app): it removes
+  `/relay` and asks the relay with the key in an `X-Key` header, the USB address first, then the Wi-Fi one.
+- Only the page's read-only routes are passed on, and the key never appears in an address.
+- If the page's renderer crashes, the app goes back to the map.
+
 ### "Find me X"
 
 "Find me the orange box", "where is / where did I put / have you seen the orange box" (glasses or phone
