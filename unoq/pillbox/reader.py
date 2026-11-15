@@ -62,8 +62,10 @@ def deliver(queue, endpoint, token):
             receipt = json.loads(response.read(65537))
             if response.status != 200 or receipt.get('durability') not in ('local', 'replicated') or not any(event.get('id') == event_id for event in receipt.get('events', [])):
                 raise ValueError('unexpected acceptance receipt')
+        observed_at = datetime.fromisoformat(json.loads(body)['ts']).timestamp()
         queue.accepted(event_id)
-        LOG.info('accepted event=%s http_ms=%.1f', event_id, (time.monotonic() - started) * 1000)
+        LOG.info('accepted event=%s sensor_to_api_ack_ms=%.1f http_ms=%.1f', event_id,
+                 (time.time() - observed_at) * 1000, (time.monotonic() - started) * 1000)
         return True
     except HTTPError as exc:
         LOG.error('delivery HTTP %s; event retained', exc.code)
@@ -129,7 +131,7 @@ def main():
                     if state == 1:
                         event_id = queue.record(session, sequence, age)
                         LOG.info('persisted event=%s sensor_to_queue_ms=%s', event_id, age)
-                    bridge.call('pillbox_ack', sequence, timeout=3)
+                    bridge.call('pillbox_ack', str(sequence), timeout=3)
                 stop.wait(0.1)
             except Exception as exc:
                 LOG.warning('Bridge/queue %s; retrying', type(exc).__name__)

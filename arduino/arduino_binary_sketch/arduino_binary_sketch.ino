@@ -1,24 +1,31 @@
 #include <Arduino_RouterBridge.h>
 
-struct Opening { unsigned long sequence; unsigned long at; };
+struct Opening {
+  unsigned long sequence;
+  unsigned long at;
+};
 Opening pending[32];
 int head = 0, count = 0;
 unsigned long sequence = 0, lost = 0;
 String session;
 
 String pillboxSession(String candidate) {
-  if (session.length() == 0) session = candidate;
+  if (session.length() == 0) {
+    session = candidate;
+  }
   return session;
 }
 
 String pillboxPeek() {
-  if (count == 0) return String("0,0,0,") + String(lost);
+  if (count == 0) {
+    return String("0,0,0,") + String(lost);
+  }
   Opening event = pending[head];
   return String(event.sequence) + ",1," + String((unsigned long)(millis() - event.at)) + "," + String(lost);
 }
 
-bool pillboxAck(unsigned long acknowledged) {
-  if (count && pending[head].sequence == acknowledged) {
+bool pillboxAck(String acknowledged) {
+  if (count && String(pending[head].sequence) == acknowledged) {
     head = (head + 1) % 32;
     count--;
   }
@@ -27,7 +34,10 @@ bool pillboxAck(unsigned long acknowledged) {
 
 void rememberOpening() {
   sequence++;
-  if (count == 32) { lost++; return; }
+  if (count == 32) {
+    lost++;
+    return;
+  }
   pending[(head + count) % 32] = {sequence, millis()};
   count++;
 }
