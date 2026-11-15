@@ -533,7 +533,9 @@ class PoseFilter:
 
 
 # ------------------------------------------------------------------ the relay's side
-FOCAL_TRIES = (1.0, 0.8, 0.9, 1.12, 1.25)  # the live camera's focal length against the recording's, until one is settled
+# The live camera's focal length against the recording's, tried until one is settled. The glasses stream 9:16 (504 x 896)
+# while their recordings are 3:4: a 9:16 crop of a 3:4 sensor keeps 3/4 of its width, so x1.33 is the likely one.
+FOCAL_TRIES = (1.0, 0.8, 0.9, 1.12, 1.25, 1.33, 1.45)
 FOCAL_PHOTOS = 4  # placed photos looked at before the focal length is settled
 PRIOR_S = 3.0  # a fix this recent guides the choice of keyframes for the next photo
 
