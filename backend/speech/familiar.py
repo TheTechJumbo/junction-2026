@@ -34,6 +34,7 @@ class FamiliarVoice:
         self.client = client
         self.lock = asyncio.Lock()
         self.clone = None
+        self.preview_clone = None
         # An interrupted creation has an unknown provider outcome; do not duplicate it.
         if self.state().get('status') == 'creating':
             self.save({**self.state(), 'status': 'creation_unknown'})
@@ -122,18 +123,23 @@ class FamiliarVoice:
                 raise
             return self.public()
 
-    def service(self, state):
-        if self.clone is None:
-            self.clone = ElevenLabsSpeechService(api_key=self.standard.api_key, voice_id=state['voice_id'],
-                model_id=self.standard.model_id, timeout_seconds=self.standard.timeout_seconds)
-        return self.clone
+    def service(self, state, *, preview=False):
+        # Setup previews tolerate cold synthesis; interactive speech keeps its deadline.
+        attribute = 'preview_clone' if preview else 'clone'
+        service = getattr(self, attribute)
+        if service is None:
+            service = ElevenLabsSpeechService(api_key=self.standard.api_key, voice_id=state['voice_id'],
+                model_id=self.standard.model_id,
+                timeout_seconds=20 if preview else self.standard.timeout_seconds)
+            setattr(self, attribute, service)
+        return service
 
     async def preview(self):
         async with self.lock:
             state = self.state()
             if state.get('status') != 'ready':
                 raise VoiceError('Voice is not ready. If verification is required, complete it in ElevenLabs and add a new voice here.')
-            audio = await self.service(state).synthesize(PREVIEW)
+            audio = await self.service(state, preview=True).synthesize(PREVIEW)
             self.save({**state, 'previewed': True})
             return audio
 
@@ -152,9 +158,11 @@ class FamiliarVoice:
             if not state:
                 return self.public()
             self.save({**state, 'active': False, 'status': 'deletion_pending'})
-            if self.clone:
-                await self.clone.aclose()
-                self.clone = None
+            for attribute in ('clone', 'preview_clone'):
+                service = getattr(self, attribute)
+                if service:
+                    await service.aclose()
+                    setattr(self, attribute, None)
             if not state.get('voice_id'):
                 raise VoiceError('Creation outcome is unknown. Check and remove any Tuttu voice in ElevenLabs; local reset requires administrator reconciliation.', 409)
             await self.provider('DELETE', 'voices/' + state['voice_id'])
@@ -184,8 +192,9 @@ class FamiliarVoice:
             return await self.standard.synthesize(text)
 
     async def aclose(self):
-        if self.clone:
-            await self.clone.aclose()
+        for service in (self.clone, self.preview_clone):
+            if service:
+                await service.aclose()
         if self.client:
             await self.client.aclose()
         self.db.close()

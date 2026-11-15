@@ -49,6 +49,7 @@ def test_lifecycle_restart_preview_activation_and_delete(tmp_path):
         with pytest.raises(VoiceError):
             await manager.select(True)
         manager.clone = Clone()
+        manager.preview_clone = Clone()
         await manager.preview()
         await manager.select(True)
         assert await manager.synthesize('Keys last seen.') == b'clone-audio'
@@ -136,6 +137,7 @@ def test_http_lifecycle_and_deleted_voice_never_used(tmp_path):
         assert result.json()['active'] is False
         assert client.post('/family/voice/activate').status_code == 409
         app.state.familiar_voice.clone = Clone()
+        app.state.familiar_voice.preview_clone = Clone()
         assert client.post('/family/voice/preview').content == b'clone-audio'
         assert client.post('/family/voice/activate').json()['active'] is True
         assert client.post('/speak', json={'text':'Keys.'}).content == b'clone-audio'
@@ -182,5 +184,16 @@ def test_provider_errors_are_actionable_without_leaking_messages(tmp_path, code,
         assert expected in error.value.message
         assert 'private-upstream-secret' not in error.value.message
         assert manager.state() == {}
+        await manager.aclose()
+    asyncio.run(run())
+
+
+def test_preview_has_separate_cold_start_budget(tmp_path):
+    async def run():
+        manager = FamiliarVoice(tmp_path / 'voice.db', Standard())
+        state = {'voice_id': 'synthetic'}
+        assert manager.service(state).timeout_seconds == .8
+        assert manager.service(state, preview=True).timeout_seconds == 20
+        assert manager.clone is not manager.preview_clone
         await manager.aclose()
     asyncio.run(run())
