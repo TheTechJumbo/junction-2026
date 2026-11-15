@@ -52,48 +52,152 @@
   .state { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
   .state.OPEN { color: var(--green); } .state.MERGED { color: var(--violet); } .state.CLOSED { color: var(--red); }
   .empty { color: var(--dim); }
+  /* the live section: every stage of the vision demo as it happens */
+  #live { padding: 14px 16px 0; display: flex; flex-direction: column; gap: 10px; }
+  .livebar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .livebar label { flex-direction: row; align-items: center; gap: 6px; }
+  .livegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; align-items: start; }
+  .livegrid .wide { grid-column: 1 / -1; }
+  .frame { position: relative; line-height: 0; }
+  .frame img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); background: #000; min-height: 120px; }
+  .box { position: absolute; border: 2px solid var(--violet); border-radius: 3px; pointer-events: none; }
+  .box.weak { border-style: dashed; border-color: var(--dim); }
+  .box span { position: absolute; left: -2px; top: -20px; font: 11px/18px ui-sans-serif, system-ui, sans-serif; background: var(--violet); color: #000; padding: 0 5px; border-radius: 3px; white-space: nowrap; }
+  .box.weak span { background: var(--dim); }
+  .strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+  .strip figure { flex: 0 0 auto; width: 104px; position: relative; }
+  .strip img { width: 104px; }
+  .dot { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--amber); border: 2px solid #000; }
+  .fixrow { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 10px; align-items: center; }
+  canvas#fixMap { width: 100%; aspect-ratio: 6 / 5; border: 1px solid var(--line); border-radius: 8px; background: #000; display: block; }
+  .arrow { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; font-size: 13px; }
+  .arrow svg { width: 96px; height: 96px; transition: transform .4s; }
+  .state.found { color: var(--green); } .state.unsure { color: var(--amber); } .state.lost { color: var(--red); }
+  #gateList li { display: flex; gap: 8px; align-items: center; }
+  #gateList img { height: 70px; border-radius: 6px; border: 1px solid var(--line); }
+  #workerLog { max-height: 260px; overflow-y: auto; }
+  #workerLog b { color: var(--green); font-weight: 400; } #workerLog i { color: var(--red); font-style: normal; }
+  .bar.mem { background: var(--violet); }
+  /* readable at a glance (JUN-26): larger type, the 3D view and the position first, the rest folded away */
+  html, body { font-size: 15px; }
+  h1 { font-size: 18px; letter-spacing: .12em; }
+  h2 { font-size: 13px; }
+  header nav { margin-left: auto; display: flex; gap: 16px; }
+  .meta { font-size: 13px; }
+  .room { font-size: 14px; color: var(--ink); flex-direction: row; align-items: center; gap: 8px; }
+  .hero { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 900px) { .hero { grid-template-columns: minmax(0, 1fr); } }
+  .hero iframe { height: min(62vh, 620px); }
+  .hero .headline { font-size: 26px; }
+  #fixPlaces li { font-size: 15px; color: var(--ink); }
+  .facts { gap: 8px; }
+  .facts li { font-size: 14px; color: var(--ink); }
+  .facts b { font-weight: 600; }
+  details.more { border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  details.more > summary { cursor: pointer; padding: 12px 14px; font-weight: 600; color: var(--dim); letter-spacing: .04em; }
+  details.more[open] > summary { border-bottom: 1px solid var(--line); }
+  details.more > .livegrid, details.more > main { padding: 14px; }
+  details.more main { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 14px; }
+  @media (max-width: 720px) { details.more main { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
 <body>
 <header>
-  <h1>BEACON <span style="font-weight:400;color:var(--dim)">vision dashboard</span></h1>
+  <h1>BEACON</h1>
   <span class="pill" id="gpu">GPU worker: checking…</span>
   <span class="pill" id="cpu">CPU worker: checking…</span>
   <span class="pill" id="places"></span>
-  <span style="margin-left:auto;display:flex;gap:14px"><a id="daylog">Day log</a><a id="places">Places and position</a><a id="hud">Glasses display</a><a id="phone">Phone page</a></span>
+  <nav><a id="daylog">Day log</a><a id="placesLink">Places</a><a id="hud">Glasses display</a><a id="phone">Phone page</a></nav>
 </header>
-<main>
-  <div class="col">
+<section id="live" aria-label="Every stage, live">
+  <div class="livebar">
+    <label class="room">Room <select id="liveZone"><option value="">newest</option></select></label>
+    <span class="meta" id="liveNote" role="status"></span>
+  </div>
+  <div class="hero">
     <div class="card">
-      <h2>Run a check</h2>
-      <div class="row">
-        <label>Place <input type="text" id="zone" value="kitchen" size="10" autocomplete="off"></label>
-        <label>Run on <select id="device"><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
+      <h2 id="splatTitle">3D view</h2>
+      <iframe id="splatFrame" title="3D view of the room" loading="lazy" hidden></iframe>
+      <div class="empty" id="splatNote">No 3D view of this room yet. Record the room, or send photos from the phone.</div>
+    </div>
+    <div class="card">
+      <h2>Where the wearer is</h2>
+      <div class="headline" id="fixHead">No position yet</div>
+      <div class="fixrow">
+        <canvas id="fixMap" width="360" height="300" aria-label="Floor plan seen from above: the wearer in blue, the places in amber"></canvas>
+        <div class="arrow"><svg id="arrow" viewBox="-50 -50 100 100" aria-hidden="true"><path d="M0,-44 L30,4 L11,4 L11,40 L-11,40 L-11,4 L-30,4 Z" fill="var(--amber)"/></svg><div id="arrowText"></div></div>
       </div>
-      <label>Video <input type="file" id="file" accept="video/*,.zip"></label>
-      <div class="row">
-        <button id="runBaseline">Set as baseline</button>
-        <button id="runCheck">Check for changes</button>
+      <ul id="fixPlaces"></ul>
+      <div class="meta" id="fixNote"></div>
+    </div>
+  </div>
+  <div class="livegrid">
+    <div class="card">
+      <h2>Camera</h2>
+      <div class="frame" id="frameBox"><img id="frameImg" alt="The newest photo that reached the relay"></div>
+      <div class="meta" id="frameNote">No photo yet.</div>
+      <div class="strip" id="frameStrip" aria-label="Earlier photos"></div>
+    </div>
+    <div class="card">
+      <h2>Recording</h2>
+      <div class="meta" id="recNote">No recording of this room yet.</div>
+      <ul id="recFacts" class="facts"></ul>
+    </div>
+    <div class="card">
+      <h2>Room pictures and places</h2>
+      <div class="strip" id="baseStrip"><span class="empty">No pictures of this room yet.</span></div>
+    </div>
+  </div>
+  <details class="more">
+    <summary>Changes noticed</summary>
+    <div class="livegrid">
+      <div class="card">
+        <h2>Moved while the camera stood still</h2>
+        <ul id="gateList"><li class="empty">Nothing yet.</li></ul>
+        <div class="meta" id="gateCounts"></div>
       </div>
-      <div class="meta" id="runNote" role="status"></div>
     </div>
-    <div class="card">
-      <h2>Checks</h2>
-      <ul id="checks"><li class="empty" style="cursor:default">No checks yet. Run one here or from the phone page.</li></ul>
+    <main>
+      <div class="col">
+        <div class="card">
+          <h2>Run a change check</h2>
+          <div class="row">
+            <label>Room <input type="text" id="zone" value="kitchen" size="10" autocomplete="off"></label>
+            <label>Run on <select id="device"><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
+          </div>
+          <label>Video <input type="file" id="file" accept="video/*,.zip"></label>
+          <div class="row">
+            <button id="runBaseline">Set as baseline</button>
+            <button id="runCheck">Check for changes</button>
+          </div>
+          <div class="meta" id="runNote" role="status"></div>
+        </div>
+        <div class="card">
+          <h2>Checks</h2>
+          <ul id="checks"><li class="empty" style="cursor:default">No checks yet.</li></ul>
+        </div>
+      </div>
+      <div class="col" id="detail">
+        <div class="card"><div class="empty">Pick a check to see what was found.</div></div>
+      </div>
+    </main>
+  </details>
+  <details class="more">
+    <summary>System: worker, timings, pull requests</summary>
+    <div class="livegrid">
+      <div class="card wide">
+        <h2>Worker: time and GPU memory per job</h2>
+        <div class="meta" id="workerHead"></div>
+        <div class="bars" id="jobBars"></div>
+        <pre id="workerLog">Loading…</pre>
+      </div>
+      <div class="card wide" id="work">
+        <h2>Pull requests</h2>
+        <ul id="prs"><li class="empty">Loading…</li></ul>
+      </div>
     </div>
-  </div>
-
-  <div class="col" id="detail">
-    <div class="card"><div class="empty">Pick a check on the left to see what the vision stage found.</div></div>
-  </div>
-
-  <div class="col" id="work">
-    <div class="card">
-      <h2>Work: pull requests</h2>
-      <ul id="prs"><li class="empty">Loading…</li></ul>
-    </div>
-  </div>
-</main>
+  </details>
+</section>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -103,7 +207,7 @@ const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.crea
 const get = async (path) => (await fetch(withKey(path), { cache: 'no-store' })).json();
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 $('phone').href = withKey('/');
-$('places').href = withKey('/places');
+$('placesLink').href = withKey('/places');
 $('hud').href = withKey('/hud');
 $('daylog').href = withKey('/dayview');
 
@@ -112,15 +216,22 @@ let checks = [], selected = null, busy = false;
 async function refreshStatus() {
   try {
     const s = await get('/status');
+    const local = s.worker_at === 'the local gateway';
     for (const d of ['gpu', 'cpu']) {
       const w = (s.workers || {})[d] || {};
       const st = w.info ? w.info.settings : null;
       $(d).textContent = `${d.toUpperCase()} worker: ` + (w.running
-        ? `${w.info ? w.info.device : 'running'}` + (st ? ` · ${st.baseline_frames}+${st.new_frames} frames at ${st.long_side}px` : '')
-        : s.ok ? 'offline' : 'Iridis unreachable');
-      $(d).className = 'pill ' + (w.running ? 'on' : 'off');
+        ? `${w.info ? w.info.device : 'running'}` + (local ? ' (this laptop)' : '') + (st ? ` · ${st.baseline_frames}+${st.new_frames} frames at ${st.long_side}px` : '')
+        : !s.ok ? `${s.worker_at || 'Iridis'} unreachable` : local && d === 'cpu' ? 'not used on this laptop' : 'offline');
+      $(d).className = 'pill ' + (w.running ? 'on' : local && d === 'cpu' ? '' : 'off');
     }
     $('places').textContent = (s.zones || []).length ? `baselines: ${s.zones.join(', ')}` : 'no baselines yet';
+    const pick = $('liveZone'), had = pick.value;  // the live section's room list follows the baselines
+    const names = ['', ...(s.zones || [])];
+    if ([...pick.options].map(o => o.value).join() !== names.join()) {
+      pick.replaceChildren(...names.map(z => el('option', { value: z, textContent: z || "the newest fix's" })));
+      pick.value = names.includes(had) ? had : '';
+    }
   } catch {
     for (const d of ['gpu', 'cpu']) { $(d).textContent = `${d.toUpperCase()} worker: relay unreachable`; $(d).className = 'pill off'; }
   }
@@ -187,7 +298,8 @@ function select(job) {
     el('h2', { textContent: `Where the ${s.total.toFixed(1)} s went` }),
     bars,
     el('div', { className: 'meta', textContent: `Ran on ${c.device || 'unknown'}${c.host ? ` (${c.host})` : ''}` +
-      (st.long_side ? ` · ${st.baseline_frames} baseline + ${st.new_frames} new frames at ${st.long_side}px` : '') }),
+      (st.long_side ? ` · ${st.baseline_frames} baseline + ${st.new_frames} new frames at ${st.long_side}px` : '') +
+      (c.gpu_peak_gb != null ? ` · peak GPU memory ${c.gpu_peak_gb.toFixed(2)} GB` : '') }),
     el('details', {}, el('summary', { textContent: `Events sent (${c.events.length})` }), el('pre', { textContent: JSON.stringify(c.events, null, 2) }))));
   $('detail').replaceChildren(...cards);
 }
@@ -236,7 +348,208 @@ async function run(op) {
 $('runBaseline').onclick = () => run('baseline');
 $('runCheck').onclick = () => run('check');
 
-refreshStatus(); refreshHistory(); refreshWork();
+// ---------------------------------------------------------------- the live section
+// Polls the relay: /where (the newest fix), /frame (its photo), /waypoints and /baseline/... (the room),
+// /changes (the cheap gate), /history (the newest check's 3D file) and /worker_log (timings, GPU memory).
+const live = { zone: '', fixAt: 0, frames: [], splat: '', strip: '', stripAt: 0 };
+const getOr = async (path) => { try { const r = await fetch(withKey(path), { cache: 'no-store' }); return r.ok ? r.json() : null; } catch { return null; } };
+const sideOf = (b) => Math.abs(b) <= 20 ? 'ahead' : Math.abs(b) >= 150 ? 'behind you' : b > 0 ? 'to your right' : 'to your left';
+const ago = (sec) => sec < 60 ? `${Math.round(sec)} s ago` : `${Math.round(sec / 60)} min ago`;
+
+function drawBoxes(fix) {  // the item finder's boxes on the newest photo: accepted (solid) and weak candidates (dashed)
+  $('frameBox').querySelectorAll('.box').forEach(b => b.remove());
+  const shown = (fix.items || []).map(i => [i, false]).concat((fix.items_candidates || [])
+    .filter(c => !(fix.items || []).some(i => i.name === c.name)).map(c => [c, true]));
+  for (const [item, weak] of shown) {
+    if (!item.box) continue;
+    const [u0, v0, u1, v1] = item.box;
+    $('frameBox').append(el('div', { className: 'box' + (weak ? ' weak' : ''),
+      style: `left:${100 * u0}%;top:${100 * v0}%;width:${100 * (u1 - u0)}%;height:${100 * (v1 - v0)}%` },
+      el('span', { textContent: `${item.name}${item.score != null ? ' ' + Math.round(100 * item.score) + '%' : ''}` })));
+  }
+}
+
+function drawMap(fix) {  // the floor plan from above: room points, baseline cameras, places, the wearer and where they face
+  const cv = $('fixMap'), dpr = devicePixelRatio || 1, w = cv.clientWidth || 360, h = cv.clientHeight || 300;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const map = fix.map || {}, pts = map.points || [], cams = map.cameras || [], places = fix.waypoints || [];
+  const all = [...pts, ...cams, ...places.map(p => p.position), ...(fix.position ? [fix.position] : [])];
+  if (!all.length) { g.fillStyle = css('--dim'); g.font = '13px system-ui'; g.fillText('No map in this fix.', 12, 22); return; }
+  const xs = all.map(p => p[0]), ys = all.map(p => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const s = 0.86 * Math.min(w / Math.max(x1 - x0, 0.5), h / Math.max(y1 - y0, 0.5));
+  const P = (p) => [w / 2 + (p[0] - (x0 + x1) / 2) * s, h / 2 - (p[1] - (y0 + y1) / 2) * s];  // north is up
+  g.fillStyle = 'rgba(147,161,178,.45)';
+  for (const p of pts) { const [x, y] = P(p); g.fillRect(x - 1, y - 1, 2, 2); }
+  g.fillStyle = css('--violet');
+  for (const p of cams) { const [x, y] = P(p); g.fillRect(x - 2.5, y - 2.5, 5, 5); }
+  const me = fix.position ? P(fix.position) : null;
+  for (const p of places) {
+    const [x, y] = P(p.position);
+    if (me && fix.state !== 'lost') { g.strokeStyle = css('--amber'); g.setLineDash([4, 4]); g.beginPath(); g.moveTo(...me); g.lineTo(x, y); g.stroke(); g.setLineDash([]); }
+    g.fillStyle = css('--amber'); g.beginPath(); g.arc(x, y, 5, 0, 7); g.fill();
+    g.fillStyle = css('--ink'); g.font = '12px system-ui'; g.fillText(`${p.name} ${p.distance_m} m`, x + 7, y - 6);
+  }
+  if (me) {
+    const a = (fix.heading_deg || 0) * Math.PI / 180;
+    g.save(); g.translate(...me); g.rotate(a);
+    g.fillStyle = fix.state === 'lost' ? css('--red') : css('--blue');
+    g.beginPath(); g.moveTo(0, -12); g.lineTo(8, 8); g.lineTo(0, 4); g.lineTo(-8, 8); g.closePath(); g.fill();
+    g.restore();
+  }
+  g.fillStyle = css('--dim'); g.font = '11px system-ui';
+  g.fillText(`N ↑  · ${(fix.metres_from || '').replace('assumed viewing distance', 'metres assumed').replace('known distance', 'metres from a known distance')}`, 8, h - 8);
+}
+
+function showFix(fix) {
+  if (!fix) {
+    $('fixHead').textContent = 'No position fix yet'; $('fixNote').textContent = 'Send a photo to /locate (the /hud page, simulate.py or verify_demo.sh).';
+    $('fixPlaces').replaceChildren(); $('arrowText').textContent = ''; return;
+  }
+  $('fixHead').textContent = fix.headline || fix.state;
+  const v = fix.view || {}, sec = fix.seconds || {};
+  $('fixNote').replaceChildren(el('span', { className: 'state ' + fix.state, textContent: fix.state }),
+    ` · room "${fix.zone}" · ${ago(fix.age_s || 0)} · match ${fix.confidence ?? '–'}` +
+    (fix.reused ? ' · same view: answered again without the model' : sec.reconstruct != null ? ` · model ${sec.reconstruct} s of ${sec.total} s` : '') +
+    (fix.gpu_peak_gb != null ? ` · peak GPU ${fix.gpu_peak_gb.toFixed(2)} GB` : '') +
+    (fix.stable && fix.stable.confidence_pct != null ? ` · steady position ${fix.stable.confidence_pct}% sure` : '') +
+    (v.kind ? ` · gate: ${v.kind}${v.model_asked === false ? ' (model not asked)' : ''}` : ''));
+  const places = [...(fix.waypoints || [])].sort((a, b) => a.distance_m - b.distance_m);
+  $('fixPlaces').replaceChildren(...places.map(p => el('li', { className: 'meta',
+    textContent: `${p.name}: ${p.distance_m} m ${sideOf(p.bearing_deg)} (${p.bearing_deg > 0 ? '+' : ''}${p.bearing_deg}°)` })));
+  const near = places[0];
+  $('arrow').style.transform = near && fix.state !== 'lost' ? `rotate(${near.bearing_deg}deg)` : 'none';
+  $('arrow').style.opacity = near && fix.state !== 'lost' ? 1 : 0.15;
+  $('arrowText').textContent = near && fix.state !== 'lost' ? `${near.name}\n${near.distance_m} m ${sideOf(near.bearing_deg)}` : fix.hint || 'no arrow';
+  drawMap(fix);
+  drawBoxes(fix);
+}
+
+async function newFrame(fix) {  // the photo behind the newest fix, and a strip of the ones before it (kept in this page)
+  try {
+    const r = await fetch(withKey(`/frame?zone=${encodeURIComponent(fix.zone)}`), { cache: 'no-store' });
+    if (!r.ok) return;
+    const url = URL.createObjectURL(await r.blob());
+    const old = $('frameImg').src;
+    $('frameImg').src = url;
+    if (old && old.startsWith('blob:')) {
+      live.frames.unshift({ url: old, note: $('frameNote').dataset.short || '' });
+      for (const f of live.frames.splice(8)) URL.revokeObjectURL(f.url);
+      $('frameStrip').replaceChildren(...live.frames.map(f => el('figure', {}, el('img', { src: f.url, alt: 'An earlier photo' }), el('figcaption', { textContent: f.note }))));
+    }
+    const items = fix.items || [], looked = fix.items_looked_for || [];
+    const when = clock(fix.ts);
+    $('frameNote').dataset.short = `${when} ${fix.state}`;
+    $('frameNote').textContent = `Received ${when} for room "${fix.zone}" · ` + (fix.reused ? 'same view as before: the model was not asked' : 'the model was asked') +
+      ' · item finder: ' + (!looked.length ? (fix.items_note || 'off on this worker') : items.length ? `found ${items.map(i => i.name).join(', ')}` : `looked for ${looked.join(', ')}, none seen`);
+  } catch { /* keep what is on screen */ }
+}
+
+async function refreshBaseline(zone) {  // the baseline pictures, with the named places on them, every 30 s or on a new room
+  if (live.strip === zone && Date.now() - live.stripAt < 30000) return;
+  live.strip = zone; live.stripAt = Date.now();
+  const w = await getOr(`/waypoints?zone=${encodeURIComponent(zone)}`);
+  if (!w || !w.frames) { $('baseStrip').replaceChildren(el('span', { className: 'empty', textContent: `No baseline for "${zone}" yet.` })); return; }
+  $('baseStrip').replaceChildren(...Array.from({ length: w.frames }, (_, n) => {
+    const fig = el('figure', {}, el('img', { src: withKey(`/baseline/${zone}/${n}.jpg`), alt: `Baseline picture ${n}`, loading: 'lazy' }));
+    for (const p of (w.waypoints || []).filter(p => p.frame === n)) fig.append(el('span', { className: 'dot', title: p.name, style: `left:${100 * p.u}%;top:${100 * p.v}%` }));
+    fig.append(el('figcaption', { textContent: `${n}${(w.waypoints || []).filter(p => p.frame === n).map(p => ' · ' + p.name).join('')}` }));
+    return fig;
+  }));
+}
+
+function showSplat(url, title, depth) {  // only reload the viewer when the file changes
+  if (!url || url === live.splat) return;
+  live.splat = url;
+  $('splatTitle').textContent = title;
+  $('splatFrame').hidden = false; $('splatNote').hidden = true;
+  $('splatFrame').src = withKey(`/viewer?src=${encodeURIComponent(withKey(url))}&d=${depth || 1}`);
+}
+
+async function refreshLive() {
+  const chosen = $('liveZone').value;
+  const fix = await getOr('/where' + (chosen ? `?zone=${encodeURIComponent(chosen)}` : ''));
+  const zone = chosen || (fix && fix.zone) || '';
+  if (zone !== live.zone) { live.zone = zone; live.splat = ''; live.fixAt = 0; }
+  $('liveNote').textContent = zone ? `showing room "${zone}" · updated ${new Date().toLocaleTimeString()}` : 'no fix in any room yet';
+  showFix(fix);
+  if (fix && fix.at !== live.fixAt) { live.fixAt = fix.at; newFrame(fix); }
+  if (zone) refreshBaseline(zone);
+  if (fix && live.splat !== 'live:' + zone) {  // the live 3D page: the room map, and the wearer moving in it
+    live.splat = 'live:' + zone;
+    $('splatTitle').replaceChildren(`3D view of "${zone}" · `,
+      el('a', { href: withKey(`/viewer?live=${encodeURIComponent(zone)}`), target: '_blank', rel: 'noopener', textContent: 'full screen' }));
+    $('splatFrame').hidden = false; $('splatNote').hidden = true;
+    $('splatFrame').src = withKey(`/viewer?live=${encodeURIComponent(zone)}`);
+  } else if (!fix) {
+    const c = checks.find(c => c.zone === zone && c.splat);
+    if (c) showSplat(c.splat, `3D view from the change check at ${clock(c.ts)} (${(c.gaussians || 0).toLocaleString('en-US')} Gaussians)`, c.median_depth);
+  }
+}
+
+async function refreshGate() {
+  const g = await getOr('/changes' + (live.zone ? `?zone=${encodeURIComponent(live.zone)}` : ''));
+  if (!g) return;
+  const n = g.counts || {};
+  $('gateCounts').textContent = `Photos answered without the model: ${n.model_not_asked || 0} · something moved: ${n.something_moved || 0} · camera moved: ${n.camera_moved || 0} · first or asked fresh: ${n.first_or_refresh || 0}`;
+  $('gateList').replaceChildren(...(g.changes.length ? g.changes.slice(0, 5).map(c => el('li', {},
+    ...['before', 'now'].map(k => c.images && c.images[k] ? el('img', { src: withKey(c.images[k]), alt: k === 'before' ? 'Before' : 'Now' }) : ''),
+    el('div', { className: 'meta', textContent: `${c.time} · ${c.zone} · ${Math.round(100 * c.share)}% of the view changed, ${c.since_s} s after the photo before` })))
+    : [el('li', { className: 'empty', textContent: 'Nothing moved in view while the camera stood still.' })]));
+}
+
+async function refreshLog() {
+  const log = await getOr('/worker_log?lines=120');
+  if (!log) { $('workerLog').textContent = 'No worker log (is the worker running on this laptop?).'; return; }
+  const lines = log.lines || [];
+  const loaded = [...lines].reverse().find(l => l.startsWith('VGGT loaded'));
+  $('workerHead').textContent = `${log.file}${log.local ? ' on this laptop' : ' on the cluster'}` + (loaded ? ` · ${loaded}` : '');
+  const jobs = lines.map(l => l.match(/^(\S+) (\w+) (\S+) done in ([\d.]+) s(?:, peak GPU memory ([\d.]+) GB)?/)).filter(Boolean).slice(-8);
+  const most = Math.max(1, ...jobs.map(j => +j[4]));
+  $('jobBars').replaceChildren(...jobs.flatMap(j => [
+    el('span', { textContent: `${j[2]} · ${j[3]}` }),
+    el('div', { style: 'display:flex;flex-direction:column;gap:2px' },
+      el('div', { className: 'bar model', style: `width:${Math.max(1, 100 * j[4] / most)}%` }),
+      j[5] ? el('div', { className: 'bar mem', style: `width:${Math.max(1, 100 * j[5] / 6.44)}%` }) : ''),
+    el('span', { textContent: `${(+j[4]).toFixed(1)} s` + (j[5] ? ` · ${j[5]} GB` : '') })]));
+  const tail = lines.slice(-40);
+  $('workerLog').replaceChildren(...tail.flatMap(l => [/FAILED|Error|Traceback/.test(l) ? el('i', { textContent: l })
+    : /peak GPU memory|loaded|ready/.test(l) ? el('b', { textContent: l }) : l, '\n']));
+  $('workerLog').scrollTop = $('workerLog').scrollHeight;
+}
+async function refreshRecording() {  // the room's newest recording: chunks, frames, room map updates, Iridis training
+  if (!live.zone) return;
+  const r = await getOr(`/recording?zone=${encodeURIComponent(live.zone)}`);
+  if (!r || !r.ok) { $('recNote').textContent = `No recording of "${live.zone}" yet.`; $('recFacts').replaceChildren(); return; }
+  const tr = r.training || {}, t = (s) => s ? new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '–';
+  const words = { running: 'working…', done: 'done', failed: 'failed', none: 'not yet' };
+  $('recNote').textContent = r.final ? `Finished at ${t(r.last_chunk_at)}` : `Recording now · last frames ${r.age_s} s ago`;
+  const fact = (label, ...rest) => el('li', {}, el('b', { textContent: label + ': ' }), ...rest);
+  const items = [
+    fact('Frames', `${(r.frames || 0).toLocaleString('en-US')}` + ((r.missing || []).length ? ` (missing parts ${r.missing.join(', ')})` : '')),
+    fact('Quick 3D map', `${words[r.map_state] || r.map_state}` + (r.map_updates ? `, updated ${r.map_updates}×` : '') + (r.map_error ? ` (${r.map_error})` : '')),
+    fact('Trained 3D (Iridis)', `${words[tr.state] || tr.state || 'not yet'}` + (tr.state === 'done' ? ` · ${tr.psnr} dB from ${tr.keyframes} pictures` : '')
+      + (tr.state === 'running' && tr.started_at ? ` since ${t(tr.started_at)}` : '') + (tr.error ? ` (${tr.error})` : '')),
+  ];
+  if (tr.state === 'done' && tr.splat) {
+    items.push(fact('Watch', el('a', { href: withKey(tr.splat.replace('trained.splat', 'flythrough.webm')), target: '_blank', rel: 'noopener', textContent: 'fly-through video' }),
+      ' · ', el('a', { href: withKey(`/viewer?live=${encodeURIComponent(live.zone)}`), target: '_blank', rel: 'noopener', textContent: '3D full screen' })));
+  }
+  $('recFacts').replaceChildren(...items);
+}
+$('liveZone').onchange = () => { refreshLive(); refreshGate(); refreshRecording(); };
+// ---------------------------------------------------------------- end of the live section
+
+refreshStatus(); refreshHistory(); refreshWork(); refreshLive(); refreshGate(); refreshLog();
+setInterval(refreshLive, 3000);
+setInterval(refreshGate, 5000);
+setInterval(refreshLog, 4000);
+setInterval(refreshRecording, 4000);
+refreshRecording();
 setInterval(refreshStatus, 8000);
 setInterval(refreshHistory, 5000);
 setInterval(refreshWork, 60000);

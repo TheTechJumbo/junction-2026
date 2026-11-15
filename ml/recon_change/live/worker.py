@@ -46,6 +46,54 @@ import watch  # noqa: E402
 # Settings come from the environment, so this one script is both the GPU worker and the CPU worker.
 DEVICE = os.environ.get("RECON_DEVICE") or None  # "cuda", "cpu", or unset to use a GPU when there is one
 N_BASELINE, N_AFTER = (int(n) for n in os.environ.get("RECON_FRAMES", "24,12").split(","))
+# Baseline pictures kept when a baseline is recorded (default: as many as a check uses). A laptop keeps more than
+# its check can hold (run_local.sh: 16), so that the room map below has enough overlap between neighbouring pictures.
+N_KEEP = int(os.environ.get("RECON_BASELINE_KEEP") or N_BASELINE)
+# The room map (op "map"): the zone's baseline pictures in one pass, as one Gaussian splat in the map's own axes
+# (east, north, up, in metres), built once per baseline. The live 3D page shows it and moves the wearer in it.
+MAP_FRAMES = int(os.environ.get("RECON_MAP_FRAMES", "16"))
+MAP_GAUSSIANS = 800_000
+MAP_CONF_PCT = 35.0  # the least confident share of pixels left out of the map (locate itself uses 25)
+# Has the room's map seen this view? Every picture of the zone (baseline, and views added since) is kept as its DINOv2
+# patch tokens (rc.patch_tokens), centred on their own mean and normalised. A patch of a new photo is "mapped" when its
+# best cosine similarity to any patch of those pictures reaches PATCH_SIM; the mapped share is the share of such patches.
+# RECON_PICK=similar: a fix uses the first baseline picture (the map's origin) and the pictures with the largest mapped
+# share of this view, instead of pictures spread evenly over the clip. RECON_NEW_VIEW: a found or unsure fix whose
+# mapped share is below this is a part of the room not sampled yet, and the photo is added to the zone's pictures
+# (0 = never). Both off by default (the cluster's behaviour); run_local.sh turns them on with measured values.
+PATCH_SIM = float(os.environ.get("RECON_PATCH_SIM", "0.6"))
+PICK = os.environ.get("RECON_PICK", "spread")
+NEW_VIEW = float(os.environ.get("RECON_NEW_VIEW", "0"))
+MAX_PICTURES = 120  # the most pictures a zone grows to (the hall: 74 from its baseline and the app's photos)
+TOKENS = {}  # {zone: {"names": [file names], "keys": (N, P, C) centred unit tokens, "centre": (C,)}}
+
+
+def zone_tokens(model, zone, files):
+    """The patch tokens of the zone's pictures (see PATCH_SIM), worked out again only when the pictures changed."""
+    names = [f.name for f in files]
+    got = TOKENS.get(zone)
+    if got and got["names"] == names:
+        return got
+    import torch
+    tokens = torch.cat([rc.patch_tokens(model, [cv2.imread(str(f)) for f in files[i:i + 8]], LONG_SIDE)
+                        for i in range(0, len(files), 8)]).float()
+    centre = tokens.reshape(-1, tokens.shape[-1]).mean(0)
+    keys = torch.nn.functional.normalize(tokens - centre, dim=-1)
+    TOKENS[zone] = got = {"names": names, "keys": keys.half() if keys.is_cuda else keys, "centre": centre}
+    return got
+
+
+def mapped_share(model, zone, files, frame):
+    """How much of `frame` (a picture, already cropped like the baseline) the zone's pictures show. Returns
+    (the mapped share of its patches, the share per picture (N,), the median best similarity of its patches)."""
+    import torch
+    got = zone_tokens(model, zone, files)
+    keys = got["keys"]
+    new = torch.nn.functional.normalize(rc.patch_tokens(model, [frame], LONG_SIDE)[0].float() - got["centre"], dim=-1)
+    best = torch.einsum("pc,nqc->pnq", new.to(keys.dtype), keys).amax(-1).float()  # (patches, pictures): best per picture
+    share = (best >= PATCH_SIM).float().mean(0)
+    overall = best.amax(1)
+    return float((overall >= PATCH_SIM).float().mean()), share.cpu().numpy(), float(overall.median())
 LONG_SIDE = int(os.environ.get("RECON_LONG_SIDE", "518"))  # model input size: smaller is faster and coarser
 N_LOCATE = int(os.environ.get("RECON_LOCATE_FRAMES", "3"))  # frames of the wearer's view used for one position fix
 # Baseline photos used for a position fix. With the appearance check, 12 reject every wrong room on
@@ -62,9 +110,15 @@ TYPICAL_M = float(os.environ.get("RECON_TYPICAL_M", locate.TYPICAL_M))
 # look into another room, takes about 5 s longer.
 N_LOCATE_RETRY = int(os.environ.get("RECON_LOCATE_RETRY", "0"))
 LANE = "-cpu" if DEVICE == "cpu" else ""  # the CPU worker has its own queue and heartbeat
-QUEUE, BASELINES = ROOT / f"queue{LANE}", ROOT / "baselines"
+# Where the queue, the baselines and the heartbeat live: next to the code on the cluster, or the folder in
+# BEACON_ROOT when the worker and the gateway run on a laptop (the gateway reads the same setting).
+DATA = Path(os.environ.get("BEACON_ROOT") or ROOT)
+QUEUE, BASELINES = DATA / f"queue{LANE}", DATA / "baselines"
 ITEMS = items.wanted()  # RECON_ITEMS: small things to look for in every position fix; empty = off
 ITEM_DETECTOR = {}  # {"model": the loaded detector} or {"error": why it could not be loaded}
+# Where the item finder runs: unset = where VGGT runs. "cpu" keeps it off a small graphics card altogether.
+ITEMS_DEVICE = os.environ.get("RECON_ITEMS_DEVICE") or None
+GPU = {}  # {"torch": the module, "small": a card under 10 GB}, filled in at start when VGGT is on a graphics card
 INFO = {}  # what this worker is, filled in at start and attached to every result
 
 
@@ -86,7 +140,7 @@ def clip_frames(job, req, n):
 
 
 def set_baseline(job, req):
-    frames = clip_frames(job, req, N_BASELINE)
+    frames = clip_frames(job, req, N_KEEP)
     if len(frames) < 6:
         raise RuntimeError(f"The baseline clip gave only {len(frames)} frames. Record a longer one.")
     zone = BASELINES / req["zone"]
@@ -96,8 +150,187 @@ def set_baseline(job, req):
     for chosen in ("waypoints.json", "watch.json", "scale.json"):  # places, watched spots and the scale
         (zone / chosen).unlink(missing_ok=True)  # were all picked in the old pictures
     for i, frame in enumerate(frames):
-        cv2.imwrite(str(zone / f"{i:02d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        cv2.imwrite(str(zone / f"{i:02d}.jpg"), square_up(frame), [cv2.IMWRITE_JPEG_QUALITY, 92])
     return {"frames": len(frames)}
+
+
+def square_up(frame):
+    """A portrait picture as its middle square. VGGT takes pictures 518 wide (its own preprocessing crops a tall one to
+    its middle 518 rows); a phone held upright gives 294 x 518, which it reads far worse: on a hall, 7% of the pixels
+    kept instead of 64% for the same pictures cropped. Landscape pictures are kept as they are. Every later picture of
+    the zone and every photo of a fix is cropped like the first picture (crop_like), so all of them become square."""
+    h, w = frame.shape[:2]
+    if h <= 1.05 * w:
+        return frame
+    top = (h - w) // 2
+    return frame[top:top + w]
+
+
+def agreeing(recon, valid, tol=0.03):
+    """Per pixel: in how many other pictures of the pass the same point lands at the same depth (within tol of it).
+    The room map keeps points that two others confirm, instead of trusting VGGT's confidence (see rc.valid_mask)."""
+    import torch
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    depth = torch.as_tensor(recon.depth, dtype=torch.float32, device=dev)
+    K = torch.as_tensor(recon.K, dtype=torch.float32, device=dev)
+    E = torch.as_tensor(recon.E, dtype=torch.float32, device=dev)
+    S, H, W = depth.shape
+    v, u = torch.meshgrid(torch.arange(H, device=dev, dtype=torch.float32), torch.arange(W, device=dev, dtype=torch.float32), indexing="ij")
+    mask = torch.as_tensor(valid, device=dev)
+    count = torch.zeros((S, H, W), dtype=torch.int16, device=dev)
+    for q in range(S):
+        sel = mask[q]
+        d = depth[q][sel]
+        cam = torch.stack([(u[sel] - K[q, 0, 2]) / K[q, 0, 0] * d, (v[sel] - K[q, 1, 2]) / K[q, 1, 1] * d, d], 1)
+        world = (cam - E[q, :, 3]) @ E[q, :, :3]
+        hits = torch.zeros(len(d), dtype=torch.int16, device=dev)
+        for o in range(S):
+            if o == q:
+                continue
+            c = world @ E[o, :, :3].T + E[o, :, 3]
+            z = c[:, 2]
+            uu = K[o, 0, 0] * c[:, 0] / z.clamp(min=1e-6) + K[o, 0, 2]
+            vv = K[o, 1, 1] * c[:, 1] / z.clamp(min=1e-6) + K[o, 1, 2]
+            inside = (z > 0) & (uu >= 0) & (uu <= W - 1) & (vv >= 0) & (vv <= H - 1)
+            seen = depth[o][vv.round().long().clamp(0, H - 1), uu.round().long().clamp(0, W - 1)]
+            hits += (inside & ((seen - z).abs() < tol * z)).to(torch.int16)
+        count[q][sel] = hits
+    return count.cpu().numpy()
+
+
+def qmul(a, b):
+    """Quaternion products a * b, (w, x, y, z), a single one or rows of them."""
+    w1, x1, y1, z1 = np.moveaxis(np.asarray(a, np.float64), -1, 0)
+    w2, x2, y2, z2 = np.moveaxis(np.asarray(b, np.float64), -1, 0)
+    return np.stack([w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2, w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                     w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2], -1)
+
+
+REC_PICTURES = int(os.environ.get("RECON_REC_PICTURES") or 48)  # the room's pictures taken from a recording, at most
+
+
+def pick_keyframes(frames, most, change=0.9):
+    """[(number, picture)] from an iterable of (number, picture) in time order: the sharpest picture since the last
+    keyframe, taken once the view has moved on (cosine similarity of small grey copies of the middle squares under
+    `change`), so neighbouring keyframes overlap a lot. At most `most`, spread over the whole run. video_map.py and
+    recordings (recording_map) both pick with this."""
+    def small(frame):
+        g = cv2.cvtColor(cv2.resize(square_up(frame), (48, 48), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY).astype(np.float32)
+        g -= g.mean()
+        return (g / (np.linalg.norm(g) + 1e-6)).ravel()
+
+    picked, since, last = [], [], None
+    for number, frame in frames:
+        if frame is None:
+            continue
+        since.append((rc.sharpness(frame), number, frame))
+        if last is None or float(small(frame) @ last) < change:
+            _, best_number, best = max(since, key=lambda s: s[0])
+            picked.append((best_number, best))
+            last = small(best)
+            since = []
+        elif len(since) > 90:  # a long stretch with nothing new: only the newest frames stay candidates
+            since = since[-30:]
+    if len(picked) > most:
+        keep = np.linspace(0, len(picked) - 1, most).round().astype(int)
+        picked = [picked[i] for i in sorted(set(keep))]
+    return picked
+
+
+def recording_map(model, job, req):
+    """A room recorded as a stream of frames (relay POST /recording, stored under recordings/<zone>/<session>/frames):
+    the keyframes of everything so far become the zone's pictures (square, see square_up), then its room map is built
+    (room_map). Called again as the recording grows. Places named in the zone's old pictures no longer apply."""
+    folder = DATA / "recordings" / req["zone"] / req["session"] / "frames"
+    paths = sorted(folder.glob("*.jpg"))
+    if len(paths) < 6:
+        raise RuntimeError(f"Only {len(paths)} frames recorded so far: the room map needs a few more.")
+    t0 = time.time()
+    picked = pick_keyframes(((i, cv2.imread(str(p))) for i, p in enumerate(paths)), REC_PICTURES)
+    zone = BASELINES / req["zone"]
+    zone.mkdir(parents=True, exist_ok=True)
+    for old in zone.glob("*.jpg"):
+        old.unlink()
+    for chosen in ("waypoints.json", "watch.json", "scale.json"):
+        (zone / chosen).unlink(missing_ok=True)
+    for k, (_, frame) in enumerate(picked):
+        square = square_up(frame)
+        side = min(518, square.shape[1])
+        cv2.imwrite(str(zone / f"{k:02d}.jpg"), cv2.resize(square, (side, side * square.shape[0] // square.shape[1]),
+                                                           interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    chosen_s = round(time.time() - t0, 2)
+    result = room_map(model, job, req)
+    result.update(session=req["session"], recorded_frames=len(paths), keyframes=len(picked),
+                  keyframe_numbers=[n for n, _ in picked])
+    result["seconds"]["keyframes"] = chosen_s
+    return result
+
+
+def room_map(model, job, req):
+    """The zone's baseline pictures in one pass (up to MAP_FRAMES, plus every picture a place was named in), as one
+    splat in map axes: x east, y north, z up, in metres from the first baseline camera, the same axes the position
+    fixes report in (locate.build_frame). Written to out/room.splat. Returns the map's facts for the page."""
+    zone = BASELINES / req["zone"]
+    files = sorted(zone.glob("*.jpg"))
+    if len(files) < 3:
+        raise RuntimeError(f"No baseline for '{req['zone']}' yet. Record the baseline clip first.")
+    try:
+        places = [p for p in json.loads((zone / "waypoints.json").read_text()) if p["frame"] < len(files)]
+    except (OSError, ValueError):
+        places = []
+    try:
+        known = json.loads((zone / "scale.json").read_text())
+    except (OSError, ValueError):
+        known = None
+    seconds = {}
+    spread = np.linspace(0, len(files) - 1, min(MAP_FRAMES, len(files))).round().astype(int)
+    pick = sorted({int(i) for i in spread} | {p["frame"] for p in places})
+    frames = [cv2.imread(str(files[i])) for i in pick]
+    t0 = time.time()
+    recon = rc.reconstruct(model, frames, long_side=LONG_SIDE)
+    seconds["reconstruct"] = round(time.time() - t0, 2)
+    t0 = time.time()
+    base = list(range(len(frames)))
+    valid = rc.valid_mask(recon, MAP_CONF_PCT)
+    # Points two other pictures confirm (same point, same depth within 3%): on the hall's 74 views this kept 20% of the
+    # pixels, 640,000 Gaussians, where confidence kept 1%. One confirmation when two leave too little.
+    agree = agreeing(recon, valid)
+    shown = valid & (agree >= 2)
+    if shown.mean() < 0.03:
+        shown = valid & (agree >= 1)
+    seconds["agree"] = round(time.time() - t0, 2)
+    slot = {f: i for i, f in enumerate(pick)}
+    spots = {p["name"]: locate.spot(recon, {**p, "frame": slot[p["frame"]]}) for p in places}
+    spots = {name: x for name, x in spots.items() if x is not None}
+    room = locate.build_frame(recon, base, valid, TYPICAL_M, "surface", known, spots)
+    if not (np.isfinite(room["metres"]) and np.all(np.isfinite(room["origin"]))):
+        raise RuntimeError("The room could not be rebuilt from these pictures: record the baseline again, slower and "
+                           "with more of the same things in neighbouring pictures.")
+    nothing = {"points": np.zeros((0, 3)), "frames": np.zeros(0, int), "pixels": np.zeros(0, int), "member": np.zeros(0, int)}
+    detail = {"after": base, "valid": shown, "appeared": nothing, "gone": nothing}
+    pos, scale, rgba, quat = splat.gaussians(recon, detail, MAP_GAUSSIANS, max_frames=len(base))
+    turn = np.stack([room["east"], room["north"], room["up"]])  # the pass's axes -> map axes (a proper rotation)
+    pos = (pos - room["origin"]) @ turn.T * room["metres"]
+    scale = scale * room["metres"]
+    quat = qmul(splat.quaternion(turn), quat)
+    keep = np.isfinite(pos).all(1) & np.isfinite(scale).all(1)
+    record = np.zeros(int(keep.sum()), dtype=[("pos", "<f4", 3), ("scale", "<f4", 3), ("rgba", "u1", 4), ("rot", "u1", 4)])
+    record["pos"], record["scale"], record["rgba"] = pos[keep], scale[keep], rgba[keep]
+    record["rot"] = np.clip(quat[keep] * 128 + 128, 0, 255).astype(np.uint8)
+    out = job / "out"
+    out.mkdir(exist_ok=True)
+    (out / "room.splat").write_bytes(record.tobytes())
+    seconds["splat"] = round(time.time() - t0, 2)
+    cameras = [locate.to_map(room, camera_position(recon.E[q]))[0] for q in base]
+    looks = [(recon.E[q][2, :3] @ room["east"], recon.E[q][2, :3] @ room["north"]) for q in base]
+    return {"frames": len(frames), "of": len(files), "gaussians": int(keep.sum()), "metres_from": room["metres_from"],
+            "metres_note": room["metres_note"], "up_from": room["up_how"]["from"],
+            "places": [{"name": n, "position": [round(float(v), 2) for v in locate.to_map(room, x)[0]]} for n, x in spots.items()],
+            "cameras": [{"frame": int(f), "position": [round(float(v), 2) for v in c],
+                         "heading_deg": round(float(np.degrees(np.arctan2(*l))), 1)} for f, c, l in zip(pick, cameras, looks)],
+            "fov_deg": round(float(np.degrees(2 * np.arctan(recon.depth.shape[2] / 2 / np.median(recon.K[:, 0, 0])))), 1),
+            "median_depth_m": round(float(np.median(recon.depth[shown])) * room["metres"], 2) if shown.any() else None,
+            "kept_share": round(float(shown.mean()), 3), "seconds": seconds, **INFO}
 
 
 def crop_like(frame, like):
@@ -245,11 +478,23 @@ def where(model, job, req):
     if not seen:
         raise RuntimeError("No picture of what the wearer sees.")
     read = time.time() - t0
+    coverage, per_picture = None, None
+    if PICK == "similar" or NEW_VIEW > 0:  # how much of this view the zone's pictures show (see PATCH_SIM)
+        t0 = time.time()
+        first = cv2.imread(str(files[0]))
+        view = crop_like(seen[-1], first)
+        share, per_picture, median = mapped_share(model, req["zone"], files, view)
+        top = np.argsort(-per_picture)[:3]
+        coverage = {"mapped_share": round(share, 2), "median_similarity": round(median, 2), "patch_sim": PATCH_SIM,
+                    "best_pictures": [{"frame": int(i), "share": round(float(per_picture[i]), 2)} for i in top],
+                    "seconds": round(time.time() - t0, 2)}
 
     def fix(n):
         """One pass with n baseline photos: the photos, the wearer's frames, the reconstruction and locate's answer."""
         t0 = time.time()
         spread = np.linspace(0, len(files) - 1, min(n, len(files))).round().astype(int)
+        if PICK == "similar" and per_picture is not None:  # the origin, and the pictures that show most of this view
+            spread = [0] + [int(i) for i in np.argsort(-per_picture) if i != 0][:max(0, n - 1)]
         # a place or a watched spot needs the picture it was picked in
         pick = sorted({int(i) for i in spread} | {p["frame"] for p in places} | {s["frame"] for s in spots})
         base = [cv2.imread(str(files[i])) for i in pick]
@@ -286,6 +531,8 @@ def where(model, job, req):
     result.update({"items": [], "items_looked_for": ITEMS, "items_checked": [], "items_candidates": []})
     if ITEMS:  # lost items: found in the newest picture, placed with this fix's depth (items.py)
         t0 = time.time()
+        if GPU.get("small"):  # hand VGGT's spare working memory back first: the detector needs its own on a 6 GB card
+            GPU["torch"].cuda.empty_cache()
         try:
             if "model" not in ITEM_DETECTOR:
                 raise RuntimeError(ITEM_DETECTOR.get("error", "not loaded"))
@@ -310,6 +557,26 @@ def where(model, job, req):
         detail = {"after": list(range(len(base))), "valid": valid, "appeared": nothing, "gone": nothing}
         result["gaussians"] = splat.write_splat(recon, detail, out / "map.splat", marks=marks)
         seconds["splat"] = round(time.time() - t0, 2)
+    if coverage is not None:
+        coverage["used"] = [int(i) for i in pick]
+        result["coverage"] = coverage
+        seconds["coverage"] = coverage.pop("seconds")
+        grey = cv2.cvtColor(view, cv2.COLOR_BGR2GRAY)
+        usable = grey.mean() > 30 and cv2.Laplacian(grey, cv2.CV_64F).var() > 40  # not dark, not a blur
+        # Inside one room, a view its pictures do not show is a part not sampled yet. So is a view the fix could not
+        # place although it looks like the room: in a hall full of look-alike tables the pictures can match by
+        # appearance and still not overlap enough to be put together (measured: 8 portrait pictures round a turn).
+        # Unless one picture already shows nearly all of this view, the photo becomes a picture of the zone, the next
+        # room map includes it (the relay asks for one), and the next fix can pick it.
+        unplaced = result["state"] == "lost" and float(per_picture.max()) < 0.9
+        coverage["unplaced"] = bool(unplaced)
+        if NEW_VIEW > 0 and (coverage["mapped_share"] < NEW_VIEW or unplaced) and usable and len(files) < MAX_PICTURES:
+            name = f"{len(files):02d}.jpg"
+            h, w = first.shape[:2]
+            cv2.imwrite(str(zone / name), cv2.resize(view, (w, h), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 92])
+            result["picture_added"] = {"name": name, "frame": len(files), "pictures": len(files) + 1}
+        elif NEW_VIEW > 0 and (coverage["mapped_share"] < NEW_VIEW or unplaced):
+            result["picture_not_added"] = "too dark or blurred" if not usable else f"the zone has {MAX_PICTURES} pictures"
     result["seconds"] = seconds
     result["frames"] = {"baseline": len(base), "new": len(new)}
     result["median_depth"] = round(float(np.median(recon.depth)), 4)
@@ -320,13 +587,15 @@ def where(model, job, req):
 def main():
     QUEUE.mkdir(exist_ok=True)
     BASELINES.mkdir(exist_ok=True)
-    stop, alive = ROOT / f"STOP{LANE}", ROOT / f"worker{LANE}.alive"
+    stop, alive = DATA / f"STOP{LANE}", DATA / f"worker{LANE}.alive"
     stop.unlink(missing_ok=True)
     import torch
     if DEVICE == "cpu":
         torch.set_num_threads(int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)))
     model = rc.load_model(device=DEVICE)
     on_gpu = next(model.parameters()).is_cuda
+    if on_gpu:
+        GPU.update(torch=torch, small=torch.cuda.get_device_properties(0).total_memory < 10e9)
     try:
         revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
         dirty = bool(subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no", "--", "."], text=True))
@@ -344,27 +613,42 @@ def main():
     })
     if ITEMS:
         try:
-            ITEM_DETECTOR["model"] = items.load(device="cuda" if on_gpu else "cpu")
+            ITEM_DETECTOR["model"] = items.load(device=ITEMS_DEVICE or ("cuda" if on_gpu else "cpu"))
             INFO["settings"]["items"] = ITEM_DETECTOR["model"].settings(ITEMS)
         except Exception as error:  # the worker still serves checks and position fixes
             ITEM_DETECTOR["error"] = f"{type(error).__name__}: {error}"[:300]
             INFO["settings"]["items"] = {"model": items.MODEL_ID, "names": ITEMS, "error": ITEM_DETECTOR["error"]}
             print(f"Item detector NOT loaded: {traceback.format_exc()}", flush=True)
-    (ROOT / f"worker{LANE}.json").write_text(json.dumps(INFO))
+    (DATA / f"worker{LANE}.json").write_text(json.dumps(INFO))
     print("worker ready", flush=True)
+
+    def beat():  # the heartbeat also while a long job runs (a room map on a hot laptop card took minutes)
+        while not stop.exists():
+            alive.touch()
+            time.sleep(5)
+
+    import threading
+    threading.Thread(target=beat, daemon=True).start()
     while not stop.exists():
         alive.touch()  # heartbeat: the gateway reads this file's age, and reports "offline" when it goes stale
         for ready in sorted(QUEUE.glob("*/READY")):
             job = ready.parent
             ready.rename(job / "RUNNING")
             t0 = time.time()
+            if on_gpu:
+                torch.cuda.reset_peak_memory_stats()
             try:
                 req = json.loads((job / "request.json").read_text())
-                run = {"baseline": lambda: set_baseline(job, req), "locate": lambda: where(model, job, req)}
+                run = {"baseline": lambda: set_baseline(job, req), "locate": lambda: where(model, job, req),
+                       "map": lambda: room_map(model, job, req), "recording_map": lambda: recording_map(model, job, req)}
                 result = run.get(req["op"], lambda: check(model, job, req))()
+                memory = ""
+                if on_gpu:  # the most this job held at once (the model's weights included), for the dashboard
+                    result["gpu_peak_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2)
+                    memory = f", peak GPU memory {result['gpu_peak_gb']:.2f} GB"
                 (job / "result.json").write_text(json.dumps(result))
                 (job / "RUNNING").rename(job / "DONE")
-                print(f"{job.name} {req['op']} {req['zone']} done in {time.time() - t0:.1f} s", flush=True)
+                print(f"{job.name} {req['op']} {req['zone']} done in {time.time() - t0:.1f} s{memory}", flush=True)
             except (Exception, SystemExit):  # one bad request must never stop the worker
                 (job / "error.txt").write_text(traceback.format_exc())
                 (job / "RUNNING").rename(job / "FAILED")
