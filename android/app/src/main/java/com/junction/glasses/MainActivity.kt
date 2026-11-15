@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
         recognitionGeneration++
         pendingPhoneListen = false
         recognizer?.cancel()
+        listening(false)
     }
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) glasses.initialize()
@@ -427,6 +428,8 @@ class MainActivity : ComponentActivity() {
         diagnosticJob?.cancel(); diagnosticJob = null
     }
     private fun stopTurn() { cancelDiagnostic(); cancelEvidence(); stopRecognition(); displayJob?.cancel(); glasses.stopListening(); controller?.cancel(); audio.stop() }
+    /** The wearer screen's microphone rings: on while the phone's speech service is listening. */
+    private fun listening(on: Boolean) { if (::wearer.isInitialized) wearer.setListening(on) }
     private fun startPhoneListening() {
         if (controller == null) { status.text = "Connect the backend first."; return }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -437,14 +440,15 @@ class MainActivity : ComponentActivity() {
         val recognitionId = recognitionGeneration
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { speech ->
             speech.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { if (recognitionId == recognitionGeneration) status.text = "Listening through phone speech service…" }
+                override fun onReadyForSpeech(params: Bundle?) { if (recognitionId == recognitionGeneration) { status.text = "Listening through phone speech service…"; listening(true) } }
                 override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onRmsChanged(rmsdB: Float) { if (recognitionId == recognitionGeneration && ::wearer.isInitialized) wearer.setMicLevel(rmsdB) }
                 override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { if (recognitionId == recognitionGeneration) status.text = "Transcribing…" }
-                override fun onError(error: Int) { if (recognitionId == recognitionGeneration) status.text = "Speech not recognized. Retry or type your question." }
+                override fun onEndOfSpeech() { if (recognitionId == recognitionGeneration) { status.text = "Transcribing…"; listening(false) } }
+                override fun onError(error: Int) { if (recognitionId == recognitionGeneration) { status.text = "Speech not recognized. Retry or type your question."; listening(false) } }
                 override fun onResults(results: Bundle?) {
                     if (recognitionId != recognitionGeneration) return
+                    listening(false)
                     val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                     if (!text.isNullOrBlank()) { question.setText(text); submit(text) }
                 }
