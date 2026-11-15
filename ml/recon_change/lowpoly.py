@@ -96,7 +96,7 @@ def _boxes(grid, merge_dc):
     return boxes
 
 
-def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hide=True, floor=None):
+def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hide=True, floor=None, min_points=None):
     """Gaussians (positions, 0-255 colours) -> (vertices, normals, colours, triangles) on the given up
     axis. `cell` overrides the quality's square size; hide=False keeps hidden faces (for comparison).
     `floor` is the floor's height on the up axis when known: in a room full of desks the busiest low
@@ -104,6 +104,9 @@ def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hi
     q = dict(QUALITY[quality])
     if cell is not None:
         q["cell"] = cell
+    if min_points is not None:  # a known sparse splat (a synthetic one) needs fewer Gaussians per square
+        q["min_points"] = min_points
+    need = q["min_points"]
     cell = q["cell"]
     flat, height = hz.split_up(np.asarray(positions, float), up)
     rgb = np.asarray(colours, float)
@@ -133,10 +136,6 @@ def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hi
         keys, starts = np.unique(ij[order], axis=0, return_index=True)
         bounds = list(starts[1:]) + [len(order)]
         hs, cs = h[inside][order], rgb[inside][order]
-        # How many Gaussians a square needs: the quality's number, or a quarter of what a typical filled
-        # square holds when the splat is sparser than that (else flat tops of a sparse splat fall through).
-        counts = np.array(bounds) - starts
-        need = max(2, min(q["min_points"], int(0.25 * np.median(counts))))
         for key, s, e in zip(map(tuple, keys), starts, bounds):
             if e - s >= need:
                 top = stack_top(hs[s:e])
@@ -154,7 +153,6 @@ def build(positions, colours, up="z", quality="high", cell=None, wall=WALL_M, hi
             top = max(set(tops), key=tops.count)  # the most common neighbouring height
             grid[k] = (top, np.mean([g[1] for g in around if g[0] == top], 0), 2 * q["min_points"])
     # Lone specks (no neighbour, few Gaussians) are noise.
-    need = need if len(ij) else q["min_points"]
     grid = {k: g for k, g in grid.items() if g[2] >= 2 * need or any((k[0] + di, k[1] + dj) in grid for di, dj in near)}
 
     boxes = _boxes(grid, q["merge_dc"])
@@ -212,7 +210,7 @@ def _normals(verts, tris):
     return (n / (np.linalg.norm(n, axis=1, keepdims=True) + 1e-9)).astype(np.float32)
 
 
-def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M, floor=None):
+def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M, floor=None, min_points=None):
     """A trained .splat file -> the room as blocks (faint and huge Gaussians left out, as splat_mesh.from_splat)."""
     rec = np.frombuffer(bytes(data), sr.RECORD)
     keep = rec["rgba"][:, 3] >= 64
@@ -223,7 +221,7 @@ def from_splat(data, frame=None, up="-y", quality="high", cell=None, wall=WALL_M
     pos = rec["pos"].astype(np.float64)
     if frame is not None:
         pos, up = room_frame.to_room(pos, frame), "z"
-    return build(pos, rec["rgba"][:, :3], up, quality, cell, wall, floor=floor), up
+    return build(pos, rec["rgba"][:, :3], up, quality, cell, wall, floor=floor, min_points=min_points), up
 
 
 def write(v, n, c, t, path, up, extra=()):

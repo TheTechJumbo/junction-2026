@@ -64,7 +64,8 @@ print(f"home.splat: {len(rec)} Gaussians, {len(rec) * 32 / 1e6:.1f} MB")
 # 3. The block mesh, made from that .splat file exactly as from a trained one.
 data = (OUT / "home.splat").read_bytes()
 for quality in ("high", "medium", "low"):
-    (bv, bn, bc, bt), up = lowpoly.from_splat(data, up="z", quality=quality, floor=0.0)
+    # A Gaussian every 2.5 cm is sparse next to a trained splat: a square needs only a few.
+    (bv, bn, bc, bt), up = lowpoly.from_splat(data, up="z", quality=quality, floor=0.0, min_points=3)
     lowpoly.write(bv, bn, bc, bt, OUT / f"blocks_{quality}.ply", up, ["from home.splat"])
     print(f"blocks_{quality}.ply: {len(bt)} triangles")
 
