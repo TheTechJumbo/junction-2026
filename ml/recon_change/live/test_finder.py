@@ -129,17 +129,12 @@ def test_answers():
     clock = lambda t: finds.clock(t)  # noqa: E731
     got = f.answer(ZONE, "orange box", None, PLACES)
     assert got["answer"].startswith("I have not seen the orange box yet") and got["target"] is None, got
-    # the phone app's GET /find reply: not seen is found false, and still looking (the app asks again)
-    got = f.found_reply(ZONE, "orange box", None, PLACES)
-    assert not got["found"] and got["looking"] and got["position"] is None and got["answer"].startswith("I have not seen"), got
     got = f.answer(ZONE, "red cup", None, PLACES, looking=True)
     assert "looking for it now" in got["answer"], got
     f.observe(ZONE, [box(TABLE)], PLACES, "a1", at=now[0])
     got = f.answer(ZONE, "orange box", None, PLACES)
     assert got["answer"].startswith(f"I may have seen the orange box on our table at {clock(now[0])}, but only once."), got
     assert got["target"] == "orange box" and not got["confirmed"]
-    got = f.found_reply(ZONE, "orange box", None, PLACES)
-    assert got["found"] and not got["confirmed"] and got["looking"] and got["place"] == "our table", got
     f.observe(ZONE, [box(TABLE)], PLACES, "a2", at=now[0] + 4)
     # a fresh fix at the origin facing north: the table is 2.2 m ahead, a little right
     fix = {"state": "found", "position": [0.0, 0.0, 0.0], "heading_deg": 0, "at": now[0]}
@@ -147,15 +142,6 @@ def test_answers():
     assert got["answer"] == (f"The orange box is on our table, about 2 metres ahead on your right. I last saw it at "
                              f"{clock(now[0] + 4)}. Say take me there and I will guide you."), got["answer"]
     assert got["confirmed"] and got["target"] == "orange box" and got["near"] == "our table" and got["point"]["position"]
-    got = f.found_reply(ZONE, "orange box", fix, PLACES)
-    assert got["found"] and got["confirmed"] and not got["looking"] and got["place"] == "our table" and not got["stale"], got
-    assert got["position"] == TABLE and got["at"] == now[0] + 4 and got["distance_m"] == 2.2 and got["bearing_deg"] == 27, got
-    assert got["size_m"] == 0.3 and "box2d" not in got and got["moved_from"] is None, got
-    # seen again where it was, with its photo: the photo and the outline in it come with the reply
-    f.observe(ZONE, [{**box(TABLE), "image_url": "/evidence/find-a3/item.jpg"}], PLACES, "a3", at=now[0] + 5)
-    got = f.found_reply(ZONE, "orange box", None, PLACES)
-    assert got["image"] == "/evidence/find-a3/item.jpg" and got["box2d"] == [0.4, 0.4, 0.5, 0.5] and got["at"] == now[0] + 5, got
-    assert got["distance_m"] is None and got["bearing_deg"] is None, got
     # facing east: on the left; an old fix: no direction
     assert "on your left" in f.answer(ZONE, "orange box", {**fix, "heading_deg": 90}, PLACES)["answer"]
     now[0] += 120
@@ -186,6 +172,8 @@ class Gateway:
 
     def call(self, header, blob=b""):
         self.jobs.append(header)
+        if header["op"] == "locate" and header.get("grow") is False:  # a search of an older photo: nothing in it
+            return {"ok": True, "job": f"old{len(self.jobs)}", "result": {**json.loads(json.dumps(self.next)), "items_candidates": []}}, b""
         if header["op"] == "locate":
             return {"ok": True, "job": f"fix{len(self.jobs)}", "result": json.loads(json.dumps(self.next))}, b""
         if header["op"] == "waypoints":
@@ -288,10 +276,26 @@ def test_relay():
     assert status == 200 and way["to"] == "orange box" and way["distance_m"] > 1.5, (status, way)
     assert {"name": "orange box", "position": [1.05, 2.05, 0.8], "kind": "object"} in way["places"] or \
         any(p["name"] == "orange box" and p.get("kind") == "object" for p in way["places"]), way["places"]
+    assert way["instruction"].startswith("The orange box is on our table, about 2 metres "), way["instruction"]
+    # GET /find?what= (the app and the caretaker's page): always 200, with the outline of the newest photo
+    status, got = call(f"/find?zone={ZONE}&what={urllib.parse.quote('the orange box')}")
+    assert status == 200 and got["ok"] and got["found"] and got["confirmed"] and not got["looking"] and got["what"] == "orange box", got
+    assert got["place"] == "our table" and got["moved_from"] is None and got["distance_m"] > 1.5 and isinstance(got["bearing_deg"], int), got
+    assert got["answer"].startswith("The orange box is on our table") and not got["stale"] and got["at"] >= put_down, got
+    assert got["box2d"] == [0.4, 0.4, 0.5, 0.5] and got["image"].endswith("/seen.jpg") and len(got["size_m"]) == 3, got
+    assert all(0 < v < 1 for v in got["size_m"]) and len(got["position"]) == 3, got["size_m"]
+    request = urllib.request.Request(url + got["image"], headers={"X-Key": KEY})
+    assert urllib.request.urlopen(request, timeout=20).read()[:2] == b"\xff\xd8"  # the very photo the box is in
+    status, got = call(f"/find?zone={ZONE}&what={urllib.parse.quote('green bottle')}")
+    assert status == 200 and got["ok"] and not got["found"] and got["looking"] and got["position"] is None, got
+    status, got = call(f"/waypoints?zone={ZONE}")
+    assert any(w["name"] == "orange box" and w.get("kind") == "object" for w in got["waypoints"]), got
     # moved to the snack table
     send(fix([box(SNACKS)]))
     reply = send(fix([box([-2.0, 1.2, 0.8])]))
     assert [e["kind"] for e in reply["found"]] == ["moved"], reply.get("found")
+    status, got = call(f"/find?zone={ZONE}&what=orange+box")
+    assert got["found"] and got["place"] == "snack table" and got["moved_from"] == "our table", got
     got = ask("where did I put my orange box")
     assert got["answer"].startswith("The orange box is on the snack table") and "It was moved there from our table." in got["answer"], got
     # a place keeps the way to it; the five items keep their own answer
@@ -329,8 +333,6 @@ def test_relay():
     assert box_seen[0]["kind"] == "object" and not box_seen[0]["doubt"] and len(box_seen[0]["position"]) == 3, box_seen
     status, got = call(f"/find?zone={ZONE}&what=green+kettle")
     assert status == 200 and got["ok"] and not got["found"] and got["looking"] and got["position"] is None, (status, got)
-    assert "green kettle" in call(f"/find?zone={ZONE}")[1]["watching"]
-    assert call(f"/find?zone={ZONE}&what=%3Cb%3E")[0] == 400
     # POST /find: watch for a name without asking; forget it
     status, got = call(f"/find?zone={ZONE}&name=blue+mug", {})
     assert status == 200 and "blue mug" in got["watching"], got
