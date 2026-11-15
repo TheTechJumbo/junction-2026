@@ -58,6 +58,6 @@ The venue's block meshes, example night and camera are committed (`venue/`). To 
   the lowest band, not the desk tops) and writes the block meshes at high and medium quality.
 - `night_demo.py` makes up a night walk on the mesh's open floor (a grid path round the blocks) and
   runs `night.py` on it. It is an example, not a recording.
-- `?scene=room` shows the public Mip-NeRF 360 "room" instead: run `python room_fetch.py` (or put `room.splat`
-  (huggingface.co/cakewalk/splat-data) in `room/`, run `python room_convert.py room/room.splat room`
+- `?scene=room` shows the public Mip-NeRF 360 "room" instead: `python room_fetch.py` (the splat from
+  huggingface.co/cakewalk/splat-data and 12 of its photos), then `python room_convert.py room/room.splat room`
   and `python night_demo.py room`.
