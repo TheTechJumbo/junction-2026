@@ -51,6 +51,14 @@ class RelayPageProxyTest {
             assertTrue(RelayPageProxy.isAllowed("/navigate", "zone=kitchen"))
             assertTrue(RelayPageProxy.isAllowed("/find", "zone=kitchen&what=orange%20box"))
             assertTrue(RelayPageProxy.isAllowed("/me", "zone=kitchen"))
+            // Every route the wearer page uses (caretaker session's page, beb9a06).
+            assertTrue(RelayPageProxy.isAllowed("/care", "zone=kitchen&view=wearer"))
+            assertTrue(RelayPageProxy.isAllowed("/care/space", "zone=kitchen&lite=1"))
+            assertTrue(RelayPageProxy.isAllowed("/care/space", "zone=kitchen"))
+            assertTrue(RelayPageProxy.isAllowed("/where", "zone=kitchen"))
+            assertTrue(RelayPageProxy.isAllowed("/evidence/train-kitchen-20261115_025911_0a9dfa62-1/lite.splat", null))
+            assertTrue(RelayPageProxy.isAllowed("/evidence/train-kitchen-20261115_025911_0a9dfa62-1/trained.splat", null))
+            assertFalse(RelayPageProxy.isAllowed("/care/space", "zone=kitchen&lite=1&k=x"))
         }
     }
 

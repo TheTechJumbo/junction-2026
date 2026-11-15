@@ -78,11 +78,12 @@ internal class RelayPageProxy(
         private const val ZONE = "zone=[a-z0-9_-]{1,32}"
         private val PAGE_QUERY = Regex("$ZONE(&view=[a-z]{1,16})?")
         private val ZONE_QUERY = Regex(ZONE)
+        private val SPACE_QUERY = Regex("$ZONE(&lite=1)?")  // /care/space: lite=1 points at the small splat
         private val DAY_QUERY = Regex("date=\\d{4}-\\d{2}-\\d{2}")
         private val FIND_QUERY = Regex("$ZONE&what=[A-Za-z0-9%+._-]{1,64}")
         private val EVIDENCE = Regex("/evidence/[A-Za-z0-9_-]{1,96}/\\w{1,64}\\.(splat|json|jpg)")
         private val PAGES = setOf("/care", "/me")
-        private val BY_ZONE = setOf("/care/space", "/where", "/waypoints", "/frame", "/changes")
+        private val BY_ZONE = setOf("/where", "/waypoints", "/frame", "/changes")
         private val DEFAULT_CLIENT: OkHttpClient by lazy {
             OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
                 .connectTimeout(4, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
@@ -95,6 +96,7 @@ internal class RelayPageProxy(
          */
         fun isAllowed(path: String, query: String?): Boolean = when {
             path in PAGES -> query != null && PAGE_QUERY.matches(query)
+            path == "/care/space" -> query != null && SPACE_QUERY.matches(query)
             path in BY_ZONE -> query != null && ZONE_QUERY.matches(query)
             path == "/navigate" -> query != null && ZONE_QUERY.matches(query)
             path == "/day" -> query == null || DAY_QUERY.matches(query)
